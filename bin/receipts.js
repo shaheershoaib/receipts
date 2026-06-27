@@ -141,6 +141,7 @@ function buildConfig(d, a) {
   // the enforcer config (build/verify) belongs in the code repos.
   if (!(a.test_command || d.test_command) && d.platform === "none") {
     delete cfg.build; delete cfg.verify; delete cfg.degrade;
+    delete cfg.agent.repo_name; // no single repo at the agent home; each append names its repo
   }
   return cfg;
 }
