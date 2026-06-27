@@ -1,6 +1,6 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
-  "$id": "https://github.com/OWNER/receipts/receipts.config.schema.json",
+  "$id": "https://github.com/shaheershoaib/receipts/receipts.config.schema.json",
   "title": "receipts project config",
   "description": "Project-specific plumbing for the receipts gates. Produced by `receipts init` (detect -> confirm -> write); rarely hand-authored. The gate LOGIC ships generic; this file only tells receipts how to build/test/reach THIS project and what marks a fix-claim.",
   "type": "object",

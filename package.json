@@ -11,7 +11,7 @@
   "keywords": ["verification", "ai-agents", "code-review", "ci", "gates", "claude-code"],
   "author": "Shaheer Shoaib <shaheershoaib11@gmail.com>",
   "license": "MIT",
-  "repository": "https://github.com/OWNER/receipts",
+  "repository": "https://github.com/shaheershoaib/receipts",
   "engines": {
     "node": ">=18"
   }

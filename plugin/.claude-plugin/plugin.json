@@ -7,8 +7,8 @@
     "name": "Shaheer Shoaib",
     "email": "shaheershoaib11@gmail.com"
   },
-  "homepage": "https://github.com/OWNER/receipts",
-  "repository": "https://github.com/OWNER/receipts",
+  "homepage": "https://github.com/shaheershoaib/receipts",
+  "repository": "https://github.com/shaheershoaib/receipts",
   "license": "MIT",
   "keywords": ["verification", "ai-agents", "code-review", "ci", "gates"],
   "skills": "./skills/",

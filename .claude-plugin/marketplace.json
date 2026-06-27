@@ -2,7 +2,7 @@
   "name": "receipts",
   "version": "0.1.0",
   "description": "Agents need receipts: a verification layer that re-proves an AI fix before you trust it. The Seven Gates standard + a Claude Code adapter + verification memory.",
-  "repository": "https://github.com/OWNER/receipts",
+  "repository": "https://github.com/shaheershoaib/receipts",
   "owner": {
     "name": "Shaheer Shoaib"
   },
