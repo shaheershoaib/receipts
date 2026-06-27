@@ -5,7 +5,7 @@ The recurring failure: a ticket is moved to Fixed / Pending-Retest (or Verified)
 on the strength of a PROXY (green CI, a passing unit test, a DB row read early,
 a confident code read) WITHOUT observing the reporter's symptom gone on the
 DEPLOYED build. The tester then catches it and resubmits. The verification gate
-(feedback-fix-loop G0/G1/G3) is the one step with no external referee, so it
+(the Seven Gates G0/G1/G3) is the one step with no external referee, so it
 gets skipped under the pull-to-finish. This hook is that referee.
 
 Fires (decision:block, at most once per stop-cycle) when, this session:
@@ -250,7 +250,7 @@ def main():
         )
     reason = (
         "A ticket was moved to Fixed - Pending Retest / Verified, but " + gap + " "
-        "(feedback-fix-loop G0/G1/G3). Before stopping, either: (a) BEHAVIOR/UI ticket -> "
+        "(the Seven Gates G0/G1/G3). Before stopping, either: (a) BEHAVIOR/UI ticket -> "
         "drive the reporter's exact flow on the deployed app (a real browser on your "
         "staging / production URL), then SCREENSHOT it and read the rendered value; "
         "or (b) DATA/seed ticket -> run a by-value staging query (DB proxy / API) and a "

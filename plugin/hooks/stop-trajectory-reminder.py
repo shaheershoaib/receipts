@@ -2,8 +2,8 @@
 """Stop hook: nudge the agent to append a trajectory-kb entry at loop close-out.
 
 Fires (decision:block, at most once per stop-cycle) ONLY when this session
-actually ran a fix/build loop AND reached an EXIT - a clean close-out (PR merge /
-deploy-verify / Pending-Retest|Verified) OR an honest downgrade / Won't-Fix - but
+actually ran a fix/build loop (the seven-gates skill) AND reached an EXIT - a clean
+close-out (PR merge / ticket moved to Fixed|Verified) OR an honest downgrade / Won't-Fix - but
 recorded no trajectory afterward. Failure exits are the entries most worth
 capturing (a success-only store is survivorship bias that blinds retrieval), so a
 downgraded / blocked / reverted exit needs a trajectory too, not just a clean fix.
@@ -21,7 +21,7 @@ Output: {"decision":"block","reason":...} when it fires; nothing otherwise.
 """
 import sys, json, re
 
-LOOP_SKILLS = ("feedback-fix-loop", "parity-builder")  # add your project's loop skills here
+LOOP_SKILLS = ("seven-gates",)  # the skill this plugin ships; add your own fix/build loop skills here
 # `gh pr merge` only at a command boundary (start / ; / && / | / newline) - so a
 # printf/echo/grep that merely CONTAINS the string as data does not match.
 GH_MERGE = re.compile(r"(?:^|[;&|]|\n)\s*gh\s+pr\s+merge\b")
@@ -63,8 +63,6 @@ def is_closeout(name, inp):
     if "notion-update-page" in n:
         s = inp if isinstance(inp, str) else json.dumps(inp)
         return ("Pending Retest" in s) or ("Verified" in s) or bool(EXIT_DISPOSITION.search(s))
-    if name == "Skill" and sget(inp, "skill") == "deploy-verify":
-        return True
     return False
 
 
@@ -111,9 +109,9 @@ def main():
         return
 
     reason = (
-        "A fix/build loop ran and reached an exit (close-out: PR merge / deploy-verify "
-        "/ ticket moved to Pending Retest / Verified, OR a downgrade / Won't-Fix), but no "
-        "trajectory-kb entry was recorded afterward. Per feedback-fix-loop step 10, call "
+        "A fix/build loop ran and reached an exit (close-out: PR merge / ticket moved to "
+        "Fixed / Verified, OR a downgrade / Won't-Fix), but no "
+        "trajectory-kb entry was recorded afterward. Per the seven-gates skill, at close-out call "
         "mcp__trajectory-kb__append_trajectory({repo, surface, symptom, root_cause, "
         "outcome, what_worked, what_failed, files}) now with the HONEST outcome - 'fixed' "
         "for a clean fix, or 'unverified-reasoned' / 'speculative' / 'reverted' for a "
