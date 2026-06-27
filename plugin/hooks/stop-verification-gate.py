@@ -9,14 +9,14 @@ DEPLOYED build. The tester then catches it and resubmits. The verification gate
 gets skipped under the pull-to-finish. This hook is that referee.
 
 Fires (decision:block, at most once per stop-cycle) when, this session:
-  * a ticket was moved to Fixed-Pending-Retest / Verified (the "claiming fixed"
-    action: a notion-update-page setting that Status), AND
+  * a ticket was moved to a "fixed" status (the "claiming fixed" action: a
+    notion-update-page setting that Status), AND
   * that close-out is NOT honestly downgraded (no unverified-reasoned /
     unverified / speculative tag in the update), AND
   * the session does NOT show, AFTER the last merge, BOTH of:
       (1) DEPLOY-BINDING - you are pointed at the deployed build: a navigate to
-          *.vercel.app / *.up.railway.app / the staging domain, a get_deployment
-          sha-confirm, a Preview tool, or a staging DB query; AND
+          a deploy host / the staging domain, a get_deployment sha-confirm, a
+          Preview tool, or a staging DB query; AND
       (2) an OBSERVATION - you actually saw the rendered value/state, not just
           arrived: a screenshot, a by-value DOM read (read_page / get_page_text /
           javascript_tool / *snapshot / evaluate), or a by-value staging query.
@@ -28,31 +28,42 @@ So the bar is now binding AND observation: a UI close needs navigate-to-host PLU
 a screenshot or a DOM value-read; a data close needs a by-value staging query
 (which is itself both) PLUS the get_deployment sha-confirm.
 
+Project specifics (which hosts are the deployed build, which DB-query patterns
+count, which tracker statuses mean "fixed", which tags are honest downgrades)
+come from receipts.config.json - written by `receipts init`, found by walking up
+from the session cwd, and MERGED OVER the generic defaults below. With no config
+the hook uses the generic defaults, so it still works zero-config.
+
 Detection is STRUCTURAL + ORDERED (real tool_use events + their fields, command
 boundaries), mirroring stop-trajectory-reminder.py. Fails SAFE on any parse
 problem (a missed nudge beats a spurious block). The by-type bar (which exact
 observation each symptom class needs) lives in the skill; this hook is the FLOOR:
 binding + SOME observation, or an explicit downgrade, must exist.
 
-Input: Stop-hook JSON on stdin ({transcript_path, stop_hook_active, ...}).
+Input: Stop-hook JSON on stdin ({transcript_path, cwd, stop_hook_active, ...}).
 Output: {"decision":"block","reason":...} when it fires; nothing otherwise.
 """
-import sys, json, re
+import sys, json, re, os
 
 # `gh pr merge` only at a command boundary (so a printf/grep containing the
 # string as data does not match) - same guard as the trajectory hook.
 GH_MERGE = re.compile(r"(?:^|[;&|]|\n)\s*gh\s+pr\s+merge\b")
-# Deployed-app hosts: a navigate here = pointed at the deployed build. Generic
-# platform defaults (TODO: load project overrides from receipts.config.json).
-DEPLOYED_HOST = re.compile(
-    r"(?:\.vercel\.app|\.railway\.app|\.up\.railway\.app|\.netlify\.app|\.fly\.dev|"
-    r"\.onrender\.com|\.pages\.dev|stg\.|staging|\.preview\.)",
-    re.I,
+
+# Generic default matcher SOURCES (inner alternations). receipts.config.json
+# extends these per project; `_extend` ORs the config patterns onto the default.
+DEFAULT_DEPLOYED_HOST_SRC = (
+    r"\.vercel\.app|\.railway\.app|\.up\.railway\.app|\.netlify\.app|\.fly\.dev|"
+    r"\.onrender\.com|\.pages\.dev|stg\.|staging|\.preview\."
 )
-# A staging by-value DB check in Bash (a DB proxy host or a staging DB env var).
-# Generic defaults (TODO: load project overrides from receipts.config.json).
-STAGING_QUERY = re.compile(r"(?:STAGING_DB_URL|DATABASE_URL|db[_-]?proxy|mysql_query|psql)", re.I)
-DOWNGRADE = re.compile(r"unverified[- ]?reasoned|unverified|speculative", re.I)
+DEFAULT_STAGING_QUERY_SRC = r"STAGING_DB_URL|DATABASE_URL|db[_-]?proxy|mysql_query|psql"
+DEFAULT_DOWNGRADE_SRC = r"unverified[- ]?reasoned|unverified|speculative"
+DEFAULT_FIXED_STATUSES = ("Pending Retest", "Verified")
+
+# Compiled defaults; main() reassigns these from receipts.config.json when present.
+DEPLOYED_HOST = re.compile("(?:%s)" % DEFAULT_DEPLOYED_HOST_SRC, re.I)
+STAGING_QUERY = re.compile("(?:%s)" % DEFAULT_STAGING_QUERY_SRC, re.I)
+DOWNGRADE = re.compile("(?:%s)" % DEFAULT_DOWNGRADE_SRC, re.I)
+FIXED_STATUSES = DEFAULT_FIXED_STATUSES
 
 # A SCREENSHOT of the rendered build (visual proof you looked at it): the Preview
 # screenshot tool, chrome-devtools / Playwright / Firefox screenshot tools, the
@@ -65,6 +76,42 @@ DOM_READ_TOOL = re.compile(
     r"preview_inspect|evaluate_script|browser_snapshot|browser_evaluate|take_snapshot",
     re.I,
 )
+# A (Bug) Status property set to a closeout value. Covers boards that label a fix
+# 'Fixed' / 'Closed' / 'Verified'. Anchored on the status KEY + value so a
+# "1. Fixed the..." Resolution Note does not false-match (that is a different key).
+CLOSEOUT_STATUS = re.compile(r'"(?:bug\s+)?status"\s*:\s*"\s*(?:fixed|closed|verified)\b', re.I)
+
+
+def load_receipts_config(start):
+    """Walk up from `start` (the session cwd) for receipts.config.json. Returns the
+    parsed dict, or {} if none found / unreadable - fail-safe to generic defaults."""
+    d = os.path.abspath(start or ".")
+    for _ in range(40):
+        try:
+            with open(os.path.join(d, "receipts.config.json")) as f:
+                return json.load(f)
+        except FileNotFoundError:
+            pass
+        except Exception:
+            return {}
+        parent = os.path.dirname(d)
+        if parent == d:
+            break
+        d = parent
+    return {}
+
+
+def _glob_to_substr(g):
+    # "*.vercel.app" -> "\.vercel\.app"; "reliablepremium.com" -> "reliablepremium\.com".
+    g = (g or "").strip()
+    if g.startswith("*"):
+        g = g[1:]
+    return re.escape(g)
+
+
+def _extend(default_src, extra):
+    parts = [default_src] + [_glob_to_substr(p) for p in (extra or []) if (p or "").strip()]
+    return re.compile("(?:%s)" % "|".join(parts), re.I)
 
 
 def walk_tool_uses(obj, out):
@@ -86,21 +133,14 @@ def _txt(inp):
     return inp if isinstance(inp, str) else json.dumps(inp)
 
 
-# A (Bug) Status property set to a closeout value. Covers the internal board's
-# "Fixed - Pending Retest" / "Verified" AND the UAT board's "Fixed" / "Closed".
-# Anchored on the status KEY + value so a "1. Fixed the..." Resolution Note does
-# not false-match (that is a different key).
-CLOSEOUT_STATUS = re.compile(r'"(?:bug\s+)?status"\s*:\s*"\s*(?:fixed|closed|verified)\b', re.I)
-
-
 def is_fixed_closeout(name, inp):
     """A notion-update-page that sets a Status / Bug Status to a 'this is fixed'
-    value: the internal board ('Fixed - Pending Retest' / 'Verified') or the UAT
-    board ('Fixed' / 'Closed')."""
+    value (the project's configured fixed-statuses, or the generic Fixed/Closed/
+    Verified)."""
     if "notion-update-page" not in name.lower():
         return False
     s = _txt(inp)
-    if ("Pending Retest" in s) or ("Verified" in s):
+    if any(st in s for st in FIXED_STATUSES):
         return True
     return bool(CLOSEOUT_STATUS.search(s))
 
@@ -179,6 +219,19 @@ def main():
     tp = data.get("transcript_path")
     if not tp:
         return
+
+    # Per-project overrides (or generic defaults). Reassign the module matchers the
+    # detection functions read, extended with the config patterns.
+    global DEPLOYED_HOST, STAGING_QUERY, DOWNGRADE, FIXED_STATUSES
+    cfg = load_receipts_config(data.get("cwd"))
+    agent = cfg.get("agent") or {}
+    build = cfg.get("build") or {}
+    claim = cfg.get("claim") or {}
+    DEPLOYED_HOST = _extend(DEFAULT_DEPLOYED_HOST_SRC, build.get("deploy_host_patterns"))
+    STAGING_QUERY = _extend(DEFAULT_STAGING_QUERY_SRC, agent.get("staging_query_patterns"))
+    DOWNGRADE = _extend(DEFAULT_DOWNGRADE_SRC, claim.get("downgrade_tags"))
+    FIXED_STATUSES = tuple(agent.get("closeout_fixed_statuses") or DEFAULT_FIXED_STATUSES)
+
     try:
         with open(tp, "r", errors="replace") as f:
             lines = f.readlines()
@@ -249,7 +302,7 @@ def main():
             "result, do not stop at CI-green / a passing test / a code or DB read."
         )
     reason = (
-        "A ticket was moved to Fixed - Pending Retest / Verified, but " + gap + " "
+        "A ticket was moved to a fixed status, but " + gap + " "
         "(the Seven Gates G0/G1/G3). Before stopping, either: (a) BEHAVIOR/UI ticket -> "
         "drive the reporter's exact flow on the deployed app (a real browser on your "
         "staging / production URL), then SCREENSHOT it and read the rendered value; "

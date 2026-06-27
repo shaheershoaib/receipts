@@ -8,7 +8,7 @@
   "build": {
     "sha_source": "github-deployments",
     "platform": "vercel",
-    "deploy_host_patterns": ["*.vercel.app"],
+    "deploy_host_patterns": ["*.vercel.app", "myapp.com"],
     "environments": {
       "staging": "https://myapp-staging.vercel.app",
       "production": "https://myapp.com"
@@ -23,5 +23,11 @@
   "degrade": {
     "on_no_receipt": "require-downgrade-tag",
     "on_unreachable_build": "sha-bind-only"
+  },
+  "agent": {
+    "loop_skills": ["seven-gates", "myapp-fix-loop"],
+    "staging_query_patterns": ["proxy.rlwy.net"],
+    "closeout_fixed_statuses": ["Fixed - Pending Retest", "Verified"],
+    "repo_name": "myapp"
   }
 }

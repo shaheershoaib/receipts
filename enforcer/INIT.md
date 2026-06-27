@@ -35,24 +35,46 @@ project.
 | `build.verify_against` | one environment found -> use it; staging + prod found -> default staging | ask |
 | `claim.issue_link` | scan recent merged PRs for `closes/fixes/resolves #N` | default `closes #(\d+)` |
 | `claim.downgrade_tags` | - | default `unverified-reasoned`, `speculative`, `reverted` |
+| `agent.loop_skills` | `.claude/skills/*/SKILL.md` whose name/body reads like a fix/build loop (loop / fix / retest / feedback / build / parity / ...) | the shipped `seven-gates`; if no project loop exists, scaffold one from the template |
+| `agent.staging_query_patterns` / `agent.closeout_fixed_statuses` | - | generic defaults (DB-proxy / query tools; `Pending Retest` / `Verified`) |
+| `agent.repo_name` | `package.json` name, else the directory name | directory name |
+
+## Loop-skill harnesses (driving the trajectory-kb)
+
+The trajectory-kb only earns its keep if something queries it at the start of a fix
+and appends at close-out. That lives in a **loop skill**. `init` makes the kb work out
+of the box two ways:
+
+- **Register** the project's existing fix/build loop skills into `agent.loop_skills`
+  (the Stop hooks watch these for the append-on-exit nudge).
+- **Scaffold** one from `plugin/templates/loop-skill/SKILL.md.tmpl` when the project
+  has none - a thin loop that rides on `seven-gates`, carries the `query_trajectory` /
+  `append_trajectory` touchpoints, and is filled with the project's facts (repo name,
+  test command, deploy host), then registered in `agent.loop_skills` automatically.
+
+Either way a clean install + `receipts init` leaves the kb driven and watched, no
+hand-editing.
 
 ## The confirm flow (example)
 
 ```
 $ receipts init
-Scanning repo + GitHub deployments...
+receipts init - scanning .
 
-I found:
-  tests        npm test                    (package.json)
-  deploy       Vercel                       (vercel.json + GitHub deployments)
-  staging      https://myapp-staging.vercel.app
-  production   https://myapp.com
-  claim        a PR fixes an issue via "closes #N"   (seen in 8 recent PRs)
+  detected:
+    stack       node
+    tests       npm test -- {test}          (package.json)
+    deploy      vercel                       (vercel.json)
+    loop skills myapp-fix-loop               (.claude/skills)
 
-Two things I need from you:
-  > Which environment should receipts re-verify on?  [staging]/production
-  > Does reaching staging require login?              y/[n]
+  > Which environment should receipts re-verify on?   [staging]
+  > Which skills are your fix/build loops?             [seven-gates, myapp-fix-loop]
+  > Extra deploy/prod hosts beyond detected?          (blank to skip)
+  > By-value query hosts/tools (e.g. a DB proxy)?     (blank to skip)
 Write receipts.config.json with the above?  [Y]/n
+
+# (when NO project loop skill is found, init also offers:)
+  > No project loop skill found. Scaffold one (myapp-fix-loop) from the template? [Y]
 ```
 
 ## What it has to ASK (the residue)

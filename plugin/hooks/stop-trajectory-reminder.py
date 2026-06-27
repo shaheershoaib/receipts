@@ -2,11 +2,17 @@
 """Stop hook: nudge the agent to append a trajectory-kb entry at loop close-out.
 
 Fires (decision:block, at most once per stop-cycle) ONLY when this session
-actually ran a fix/build loop (the seven-gates skill) AND reached an EXIT - a clean
-close-out (PR merge / ticket moved to Fixed|Verified) OR an honest downgrade / Won't-Fix - but
-recorded no trajectory afterward. Failure exits are the entries most worth
-capturing (a success-only store is survivorship bias that blinds retrieval), so a
-downgraded / blocked / reverted exit needs a trajectory too, not just a clean fix.
+actually ran a fix/build loop (a configured loop skill - default the shipped
+seven-gates) AND reached an EXIT - a clean close-out (PR merge / ticket moved to
+Fixed|Verified) OR an honest downgrade / Won't-Fix - but recorded no trajectory
+afterward. Failure exits are the entries most worth capturing (a success-only
+store is survivorship bias that blinds retrieval), so a downgraded / blocked /
+reverted exit needs a trajectory too, not just a clean fix.
+
+Project specifics (which skills are loops, what tracker statuses mean "fixed",
+which tags mark an honest downgrade) come from receipts.config.json - written by
+`receipts init`, found by walking up from the session cwd. With no config the
+hook falls back to the generic defaults below, so it still works zero-config.
 
 Detection is tool-based, ORDERED, and STRUCTURAL - it inspects real tool_use
 events and their FIELDS (the Skill `skill` field; an actual `gh pr merge` at a
@@ -16,20 +22,47 @@ merge" as data in a printf/grep, must NOT count (that false-fired once during
 the hook's own build). Fails SAFE (no nudge) on any parse problem: a missed
 reminder beats a spurious block.
 
-Input: Stop-hook JSON on stdin ({transcript_path, stop_hook_active, ...}).
+Input: Stop-hook JSON on stdin ({transcript_path, cwd, stop_hook_active, ...}).
 Output: {"decision":"block","reason":...} when it fires; nothing otherwise.
 """
-import sys, json, re
+import sys, json, re, os
 
-LOOP_SKILLS = ("seven-gates",)  # the skill this plugin ships; add your own fix/build loop skills here
+# Generic defaults; receipts.config.json (agent.loop_skills,
+# agent.closeout_fixed_statuses, claim.downgrade_tags) overrides them per project.
+DEFAULT_LOOP_SKILLS = ("seven-gates",)  # the loop skill this plugin ships
+DEFAULT_FIXED_STATUSES = ("Pending Retest", "Verified")
+DEFAULT_DOWNGRADE_TAGS = ("unverified-reasoned", "speculative", "reverted")
+
 # `gh pr merge` only at a command boundary (start / ; / && / | / newline) - so a
 # printf/echo/grep that merely CONTAINS the string as data does not match.
 GH_MERGE = re.compile(r"(?:^|[;&|]|\n)\s*gh\s+pr\s+merge\b")
-# A loop EXIT that is not a clean fix but still must leave a trajectory: an honest
-# downgrade (unverified-reasoned / speculative) or a Won't-Fix close. The store was
-# ~100% 'fixed' (survivorship bias) because only clean closes got recorded; a
-# downgraded / blocked exit is the entry most worth keeping, so it needs one too.
-EXIT_DISPOSITION = re.compile(r"unverified[- ]?reasoned|speculative|won'?t fix", re.I)
+
+
+def load_receipts_config(start):
+    """Walk up from `start` (the session cwd) for receipts.config.json. Returns the
+    parsed dict, or {} if none found / unreadable - fail-safe to the generic
+    defaults, never crash the hook."""
+    d = os.path.abspath(start or ".")
+    for _ in range(40):
+        try:
+            with open(os.path.join(d, "receipts.config.json")) as f:
+                return json.load(f)
+        except FileNotFoundError:
+            pass
+        except Exception:
+            return {}  # malformed config -> generics
+        parent = os.path.dirname(d)
+        if parent == d:
+            break
+        d = parent
+    return {}
+
+
+def exit_disposition_re(tags):
+    """A regex matching any honest-downgrade / Won't-Fix tag (hyphen/space
+    insensitive). A close-out carrying one of these still needs a trajectory."""
+    alts = [re.escape(t).replace(r"\-", "[- ]?").replace(r"\ ", r"\s+") for t in tags if t]
+    return re.compile("|".join(alts), re.I) if alts else re.compile(r"(?!x)x")
 
 
 def walk_tool_uses(obj, out):
@@ -48,13 +81,13 @@ def sget(inp, key):
     return inp.get(key) if isinstance(inp, dict) else None
 
 
-def is_loop(name, inp):
+def is_loop(name, inp, loops):
     # Real Skill invocation of a loop skill - match the `skill` FIELD, not a
     # substring of the whole input.
-    return name == "Skill" and sget(inp, "skill") in LOOP_SKILLS
+    return name == "Skill" and sget(inp, "skill") in loops
 
 
-def is_closeout(name, inp):
+def is_closeout(name, inp, fixed_statuses, exit_re):
     n = name.lower()
     if "merge_pull_request" in n:
         return True
@@ -62,7 +95,7 @@ def is_closeout(name, inp):
         return True
     if "notion-update-page" in n:
         s = inp if isinstance(inp, str) else json.dumps(inp)
-        return ("Pending Retest" in s) or ("Verified" in s) or bool(EXIT_DISPOSITION.search(s))
+        return any(st in s for st in fixed_statuses) or bool(exit_re.search(s))
     return False
 
 
@@ -76,6 +109,17 @@ def main():
     tp = data.get("transcript_path")
     if not tp:
         return
+
+    # Per-project config (or generic defaults).
+    cfg = load_receipts_config(data.get("cwd"))
+    agent = cfg.get("agent") or {}
+    claim = cfg.get("claim") or {}
+    loops = tuple(agent.get("loop_skills") or DEFAULT_LOOP_SKILLS)
+    fixed_statuses = tuple(agent.get("closeout_fixed_statuses") or DEFAULT_FIXED_STATUSES)
+    # A Won't-Fix close-out always needs a trajectory, on top of the downgrade tags.
+    exit_tags = list(claim.get("downgrade_tags") or DEFAULT_DOWNGRADE_TAGS) + ["won't fix"]
+    exit_re = exit_disposition_re(exit_tags)
+
     try:
         with open(tp, "r", errors="replace") as f:
             lines = f.readlines()
@@ -98,9 +142,9 @@ def main():
     last_closeout = -1
     last_append = -1
     for i, (name, inp) in enumerate(seq):
-        if is_loop(name, inp):
+        if is_loop(name, inp, loops):
             loop_seen = True
-        if is_closeout(name, inp):
+        if is_closeout(name, inp, fixed_statuses, exit_re):
             last_closeout = i
         if "append_trajectory" in name.lower():
             last_append = i
