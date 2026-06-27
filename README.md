@@ -64,9 +64,9 @@ ship as adapters.
 ## What's in here
 
 - **`spec/`** - the Seven Gates standard. The IP. Each gate + its real scar.
-- **`enforcer/`** - the universal piece: a CI check / GitHub Action that blocks a
-  "fixed" PR unless it carries, and *survives*, the receipt. Agent-agnostic - works
-  no matter who or what wrote the code. **(in progress)**
+- **`enforcer/`** - the universal piece: a GitHub Action that fails a "fixed" PR
+  unless it carries, and *survives*, the receipt (the changed test must be red on
+  base, green on head). Agent-agnostic - works no matter who or what wrote the code.
 - **`plugin/`** - a Claude Code plugin (the agent adapter): teaches your agent to
   produce receipts as it works, so its PRs pass the gate naturally.
 - **`plugin/mcp/trajectory-kb/`** - the memory layer: what was tried on a surface and
@@ -77,9 +77,17 @@ ship as adapters.
 Two independent paths - use either or both.
 
 **Enforce it at the PR (any agent):**
-```bash
-# add the receipts check to your CI; block fix-claims that lack a surviving receipt
-# (GitHub Action - in progress)
+```yaml
+# .github/workflows/receipts.yml  (full template: enforcer/example-workflow.yml)
+on: pull_request
+jobs:
+  receipts:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with: { fetch-depth: 0 }
+      - uses: actions/setup-node@v4    # + your deps install (swap per stack)
+      - uses: shaheershoaib/receipts/enforcer@main
 ```
 
 **Teach your agent to pass it (Claude Code):**
@@ -109,10 +117,10 @@ Built and working today:
 - the focused `seven-gates` agent skill + two Stop-hook backstops (the Claude Code adapter)
 - the `trajectory-kb` memory MCP
 - `receipts init` - detects stack + deploy target, confirms, writes `receipts.config.json`
+- the **CI enforcer** (`enforcer/`) - the red->green re-verification at the PR, as a GitHub Action
 
-The next build is the **universal CI enforcer**: the re-verification at the PR
-(design in `enforcer/GENERALIZATION.md`; a local Stop-hook precursor ships in the
-plugin today).
+Next: `verify.live_drive` for symptoms a test can't express (drive the deployed app),
+and an `examples/` demo of a caught wrong-fix.
 
 ## License
 

@@ -1,0 +1,28 @@
+name: "receipts"
+description: "Re-prove a fix-claim PR by re-running its receipt: the changed test must be RED on the base commit and GREEN on the head commit. No receipt and no honest-downgrade tag => the check fails."
+branding:
+  icon: "check-circle"
+  color: "green"
+runs:
+  using: "composite"
+  steps:
+    - name: receipts verification gate
+      shell: bash
+      # Pass event data through env, never interpolated into the script body
+      # (avoids the classic Actions script-injection via a crafted PR body).
+      env:
+        PR_BODY: ${{ github.event.pull_request.body }}
+        BASE_SHA: ${{ github.event.pull_request.base.sha }}
+        HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+      run: |
+        set -e
+        if [ -z "$BASE_SHA" ] || [ -z "$HEAD_SHA" ]; then
+          echo "receipts: not a pull_request event - skipping"; exit 0
+        fi
+        # ensure both commits are present (checkout fetch-depth: 0 should provide them)
+        git fetch --no-tags --quiet origin "$BASE_SHA" "$HEAD_SHA" 2>/dev/null || true
+        printf '%s' "$PR_BODY" > "$RUNNER_TEMP/receipts_pr_body.txt"
+        node "$GITHUB_ACTION_PATH/verify.js" \
+          --base "$BASE_SHA" \
+          --head "$HEAD_SHA" \
+          --pr-body-file "$RUNNER_TEMP/receipts_pr_body.txt"

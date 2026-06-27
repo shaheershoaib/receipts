@@ -1,0 +1,27 @@
+# Copy this to .github/workflows/receipts.yml in your repo.
+#
+# It re-proves every fix-claim PR: the test the PR adds must FAIL on the base
+# commit and PASS on the head commit. A PR with no test (and no honest-downgrade
+# tag) fails the check. Requires a receipts.config.json at your repo root
+# (run `npx receipts init` once to create it).
+name: receipts
+on:
+  pull_request:
+
+jobs:
+  receipts:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0          # receipts needs base + head history to re-run the receipt
+
+      # --- set up your runtime + install deps so your verify.test_command runs ---
+      # (swap these for your stack: setup-python + pip install, setup-go, etc.)
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+      - run: npm ci
+      # -------------------------------------------------------------------------
+
+      - uses: shaheershoaib/receipts/enforcer@main
