@@ -69,8 +69,8 @@ ship as adapters.
   no matter who or what wrote the code. **(in progress)**
 - **`plugin/`** - a Claude Code plugin (the agent adapter): teaches your agent to
   produce receipts as it works, so its PRs pass the gate naturally.
-- **`mcp/trajectory-kb/`** - the memory layer: what was tried on a surface and how
-  it turned out, so the gates *learn* and stop the team repeating the same trap.
+- **`plugin/mcp/trajectory-kb/`** - the memory layer: what was tried on a surface and
+  how it turned out, so the gates *learn* and stop the team repeating the same trap.
 
 ## Install
 
@@ -87,6 +87,17 @@ Two independent paths - use either or both.
 claude plugin marketplace add <this-repo>
 claude plugin install receipts
 ```
+
+**Configure it for your project (any stack, any platform):**
+```bash
+receipts init   # detects your stack + deploy target, confirms with you, writes receipts.config.json
+```
+
+It works across any repo because the gate *logic* ships generic and only the project
+*plumbing* (how to test, where it deploys, what marks a fix-claim) is detected per
+project. See [enforcer/GENERALIZATION.md](enforcer/GENERALIZATION.md) for how,
+[enforcer/INIT.md](enforcer/INIT.md) for what `init` detects vs asks, and
+[receipts.config.example.json](receipts.config.example.json) for the output.
 
 ## Status
 

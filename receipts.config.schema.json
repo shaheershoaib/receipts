@@ -1,0 +1,101 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://github.com/OWNER/receipts/receipts.config.schema.json",
+  "title": "receipts project config",
+  "description": "Project-specific plumbing for the receipts gates. Produced by `receipts init` (detect -> confirm -> write); rarely hand-authored. The gate LOGIC ships generic; this file only tells receipts how to build/test/reach THIS project and what marks a fix-claim.",
+  "type": "object",
+  "required": ["version", "verify"],
+  "additionalProperties": false,
+  "properties": {
+    "$schema": { "type": "string" },
+    "version": { "const": 1, "description": "Config schema version." },
+    "claim": {
+      "type": "object",
+      "description": "How a PR claims to fix an issue, and how it honestly downgrades.",
+      "additionalProperties": false,
+      "properties": {
+        "issue_link": {
+          "type": "string",
+          "description": "Regex matching how a PR links the issue it fixes.",
+          "default": "closes #(\\d+)"
+        },
+        "downgrade_tags": {
+          "type": "array",
+          "items": { "type": "string" },
+          "description": "Tags that mark a PR as NOT claiming a clean fix (the honesty ladder); these pass the gate but are tracked, not treated as 'fixed'.",
+          "default": ["unverified-reasoned", "speculative", "reverted"]
+        }
+      }
+    },
+    "build": {
+      "type": "object",
+      "description": "How receipts binds to the build under test and (optionally) the deployed app.",
+      "additionalProperties": false,
+      "properties": {
+        "sha_source": {
+          "enum": ["github-deployments", "github-status", "ci-artifact", "none"],
+          "description": "How to confirm which commit the build/deploy carries (G3). 'none' = no deploy; verify against the built artifact + test run.",
+          "default": "github-deployments"
+        },
+        "platform": {
+          "type": "string",
+          "description": "Detected deploy platform (informational), e.g. vercel | railway | netlify | fly | render | none."
+        },
+        "deploy_host_patterns": {
+          "type": "array",
+          "items": { "type": "string" },
+          "description": "Host globs that count as 'pointed at the deployed build' (for optional live-drive)."
+        },
+        "environments": {
+          "type": "object",
+          "additionalProperties": { "type": "string", "format": "uri" },
+          "description": "Named environment URLs, e.g. {\"staging\": \"https://...\", \"production\": \"https://...\"}."
+        },
+        "verify_against": {
+          "type": "string",
+          "description": "Which environment the enforcer re-verifies on (a key of `environments`).",
+          "default": "staging"
+        }
+      }
+    },
+    "verify": {
+      "type": "object",
+      "description": "How to run the receipt: the carried red->green acceptance test. The PRIMARY verification; uses the project's own test framework + CI auth.",
+      "required": ["test_command"],
+      "additionalProperties": false,
+      "properties": {
+        "test_command": {
+          "type": "string",
+          "description": "Run ONE carried acceptance test. `{test}` is substituted with the test path/selector.",
+          "examples": ["npm test -- {test}", "pytest {test}", "go test -run {test} ./..."]
+        },
+        "suite_command": {
+          "type": "string",
+          "description": "Run the full suite (regression check)."
+        },
+        "live_drive": {
+          "type": ["string", "null"],
+          "description": "OPTIONAL advanced: a command/script that drives the deployed app for symptoms a unit/e2e test can't cover. null = not used (the carried test is enough).",
+          "default": null
+        }
+      }
+    },
+    "degrade": {
+      "type": "object",
+      "description": "Honest behavior when the symptom cannot be re-verified. Never silent-pass; never block-all.",
+      "additionalProperties": false,
+      "properties": {
+        "on_no_receipt": {
+          "enum": ["require-downgrade-tag", "warn", "block"],
+          "description": "What to do when a fix-claim carries no re-runnable acceptance test.",
+          "default": "require-downgrade-tag"
+        },
+        "on_unreachable_build": {
+          "enum": ["sha-bind-only", "warn", "block"],
+          "description": "What to do when the deployed build can't be reached for re-verification.",
+          "default": "sha-bind-only"
+        }
+      }
+    }
+  }
+}

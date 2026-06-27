@@ -1,8 +1,17 @@
 {
   "name": "receipts",
+  "displayName": "receipts",
   "version": "0.1.0",
   "description": "The Seven Gates agent adapter: reproduce-first, verify-by-value, pin the right surface, drive to the terminal action, sweep the twins - so an AI fix is verifiable, not just claimed.",
   "author": {
-    "name": "Shaheer Shoaib"
-  }
+    "name": "Shaheer Shoaib",
+    "email": "shaheershoaib11@gmail.com"
+  },
+  "homepage": "https://github.com/OWNER/receipts",
+  "repository": "https://github.com/OWNER/receipts",
+  "license": "MIT",
+  "keywords": ["verification", "ai-agents", "code-review", "ci", "gates"],
+  "skills": "./skills/",
+  "hooks": "./hooks/hooks.json",
+  "mcpServers": "./.mcp.json"
 }

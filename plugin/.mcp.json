@@ -1,0 +1,8 @@
+{
+  "mcpServers": {
+    "trajectory-kb": {
+      "command": "node",
+      "args": ["${CLAUDE_PLUGIN_ROOT}/mcp/trajectory-kb/index.js"]
+    }
+  }
+}

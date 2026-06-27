@@ -6,5 +6,5 @@ __pycache__/
 .playwright-mcp/
 
 # The trajectory store is LOCAL data, never shipped - only the sample is tracked.
-mcp/trajectory-kb/data/*.jsonl
-!mcp/trajectory-kb/data/trajectories.sample.jsonl
+plugin/mcp/trajectory-kb/data/*.jsonl
+!plugin/mcp/trajectory-kb/data/trajectories.sample.jsonl
