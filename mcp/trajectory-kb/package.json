@@ -1,0 +1,16 @@
+{
+  "name": "trajectory-kb",
+  "version": "1.0.0",
+  "description": "MCP server: a queryable, append-only JSONL store of dev trajectories (what was tried on a surface and what happened) so the fix/build loops stop repeating wrong-surface traps and can retrieve relevant past fixes.",
+  "type": "module",
+  "main": "index.js",
+  "scripts": {
+    "start": "node index.js"
+  },
+  "dependencies": {
+    "@modelcontextprotocol/sdk": "^1.0.0"
+  },
+  "engines": {
+    "node": ">=18"
+  }
+}

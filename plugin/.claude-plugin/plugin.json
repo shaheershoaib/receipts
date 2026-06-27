@@ -1,0 +1,8 @@
+{
+  "name": "receipts",
+  "version": "0.1.0",
+  "description": "The Seven Gates agent adapter: reproduce-first, verify-by-value, pin the right surface, drive to the terminal action, sweep the twins - so an AI fix is verifiable, not just claimed.",
+  "author": {
+    "name": "Shaheer Shoaib"
+  }
+}

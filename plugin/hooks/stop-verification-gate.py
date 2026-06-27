@@ -1,0 +1,267 @@
+#!/usr/bin/env python3
+"""Stop hook: block an UNVERIFIED "fixed" close-out.
+
+The recurring failure: a ticket is moved to Fixed / Pending-Retest (or Verified)
+on the strength of a PROXY (green CI, a passing unit test, a DB row read early,
+a confident code read) WITHOUT observing the reporter's symptom gone on the
+DEPLOYED build. The tester then catches it and resubmits. The verification gate
+(feedback-fix-loop G0/G1/G3) is the one step with no external referee, so it
+gets skipped under the pull-to-finish. This hook is that referee.
+
+Fires (decision:block, at most once per stop-cycle) when, this session:
+  * a ticket was moved to Fixed-Pending-Retest / Verified (the "claiming fixed"
+    action: a notion-update-page setting that Status), AND
+  * that close-out is NOT honestly downgraded (no unverified-reasoned /
+    unverified / speculative tag in the update), AND
+  * the session does NOT show, AFTER the last merge, BOTH of:
+      (1) DEPLOY-BINDING - you are pointed at the deployed build: a navigate to
+          *.vercel.app / *.up.railway.app / the staging domain, a get_deployment
+          sha-confirm, a Preview tool, or a staging DB query; AND
+      (2) an OBSERVATION - you actually saw the rendered value/state, not just
+          arrived: a screenshot, a by-value DOM read (read_page / get_page_text /
+          javascript_tool / *snapshot / evaluate), or a by-value staging query.
+
+The OLD floor accepted a bare navigate or a lone get_deployment as "verified."
+Both are touches, not observations: a navigate proves you arrived, get_deployment
+proves the sha is live (G3) - neither proves the reporter's symptom is GONE (G1).
+So the bar is now binding AND observation: a UI close needs navigate-to-host PLUS
+a screenshot or a DOM value-read; a data close needs a by-value staging query
+(which is itself both) PLUS the get_deployment sha-confirm.
+
+Detection is STRUCTURAL + ORDERED (real tool_use events + their fields, command
+boundaries), mirroring stop-trajectory-reminder.py. Fails SAFE on any parse
+problem (a missed nudge beats a spurious block). The by-type bar (which exact
+observation each symptom class needs) lives in the skill; this hook is the FLOOR:
+binding + SOME observation, or an explicit downgrade, must exist.
+
+Input: Stop-hook JSON on stdin ({transcript_path, stop_hook_active, ...}).
+Output: {"decision":"block","reason":...} when it fires; nothing otherwise.
+"""
+import sys, json, re
+
+# `gh pr merge` only at a command boundary (so a printf/grep containing the
+# string as data does not match) - same guard as the trajectory hook.
+GH_MERGE = re.compile(r"(?:^|[;&|]|\n)\s*gh\s+pr\s+merge\b")
+# Deployed-app hosts: a navigate here = pointed at the deployed build. Generic
+# platform defaults (TODO: load project overrides from receipts.config.json).
+DEPLOYED_HOST = re.compile(
+    r"(?:\.vercel\.app|\.railway\.app|\.up\.railway\.app|\.netlify\.app|\.fly\.dev|"
+    r"\.onrender\.com|\.pages\.dev|stg\.|staging|\.preview\.)",
+    re.I,
+)
+# A staging by-value DB check in Bash (a DB proxy host or a staging DB env var).
+# Generic defaults (TODO: load project overrides from receipts.config.json).
+STAGING_QUERY = re.compile(r"(?:STAGING_DB_URL|DATABASE_URL|db[_-]?proxy|mysql_query|psql)", re.I)
+DOWNGRADE = re.compile(r"unverified[- ]?reasoned|unverified|speculative", re.I)
+
+# A SCREENSHOT of the rendered build (visual proof you looked at it): the Preview
+# screenshot tool, chrome-devtools / Playwright / Firefox screenshot tools, the
+# Claude-in-Chrome gif_creator.
+SCREENSHOT_TOOL = re.compile(r"screenshot|gif_creator", re.I)
+# A BY-VALUE read of the rendered DOM/state (G1 "assert the value"): the authed-
+# browser readers and the Preview/devtools snapshot/eval tools.
+DOM_READ_TOOL = re.compile(
+    r"read_page|get_page_text|javascript_tool|preview_snapshot|preview_eval|"
+    r"preview_inspect|evaluate_script|browser_snapshot|browser_evaluate|take_snapshot",
+    re.I,
+)
+
+
+def walk_tool_uses(obj, out):
+    if isinstance(obj, dict):
+        if obj.get("type") == "tool_use" and "name" in obj:
+            out.append((str(obj.get("name", "")), obj.get("input", {})))
+        for v in obj.values():
+            walk_tool_uses(v, out)
+    elif isinstance(obj, list):
+        for v in obj:
+            walk_tool_uses(v, out)
+
+
+def sget(inp, key):
+    return inp.get(key) if isinstance(inp, dict) else None
+
+
+def _txt(inp):
+    return inp if isinstance(inp, str) else json.dumps(inp)
+
+
+# A (Bug) Status property set to a closeout value. Covers the internal board's
+# "Fixed - Pending Retest" / "Verified" AND the UAT board's "Fixed" / "Closed".
+# Anchored on the status KEY + value so a "1. Fixed the..." Resolution Note does
+# not false-match (that is a different key).
+CLOSEOUT_STATUS = re.compile(r'"(?:bug\s+)?status"\s*:\s*"\s*(?:fixed|closed|verified)\b', re.I)
+
+
+def is_fixed_closeout(name, inp):
+    """A notion-update-page that sets a Status / Bug Status to a 'this is fixed'
+    value: the internal board ('Fixed - Pending Retest' / 'Verified') or the UAT
+    board ('Fixed' / 'Closed')."""
+    if "notion-update-page" not in name.lower():
+        return False
+    s = _txt(inp)
+    if ("Pending Retest" in s) or ("Verified" in s):
+        return True
+    return bool(CLOSEOUT_STATUS.search(s))
+
+
+def is_merge(name, inp):
+    if "merge_pull_request" in name.lower():
+        return True
+    return name == "Bash" and bool(GH_MERGE.search(str(sget(inp, "command") or "")))
+
+
+def is_deploy_binding(name, inp):
+    """Evidence you are POINTED AT the deployed build (not which value you saw):
+    a live navigate to the app host, a Preview tool driving a running build, a
+    deploy-sha confirm, or a staging DB query (inherently against staging)."""
+    n = name.lower()
+    if "navigate" in n and DEPLOYED_HOST.search(str(sget(inp, "url") or "")):
+        return True
+    if "claude_preview" in n or "preview_" in n:
+        return True
+    if "get_deployment" in n:
+        return True
+    if "mysql_query" in n:
+        return True
+    if name == "Bash" and STAGING_QUERY.search(str(sget(inp, "command") or "")):
+        return True
+    # browser_batch wraps its real actions in input.actions (e.g. a navigate to
+    # the deployed host), so the binding is named there, not in the top-level
+    # tool name. A batched navigate to a deployed host is the same binding as a
+    # top-level one. Gated to the batch wrapper so an unrelated payload that
+    # merely mentions a host string cannot false-count.
+    if "browser_batch" in n:
+        actions = _txt(inp)
+        if "navigate" in actions and DEPLOYED_HOST.search(actions):
+            return True
+    return False
+
+
+def is_observation(name, inp):
+    """Evidence you OBSERVED the rendered value/state (not just arrived): a
+    screenshot, a by-value DOM read, a computer-use screenshot action, or a
+    by-value staging query (the value IS the observation for data tickets)."""
+    n = name.lower()
+    if SCREENSHOT_TOOL.search(n):
+        return True
+    if DOM_READ_TOOL.search(n):
+        return True
+    # Claude-in-Chrome computer-use: a screenshot action captures the screen.
+    if "computer" in n and "screenshot" in _txt(inp).lower():
+        return True
+    if "mysql_query" in n:
+        return True
+    if name == "Bash" and STAGING_QUERY.search(str(sget(inp, "command") or "")):
+        return True
+    # browser_batch wraps its real actions in input.actions, so a batched
+    # screenshot / DOM-read / computer-screenshot is named there, not in the
+    # top-level tool name - the name-based checks above all miss it. Scan the
+    # serialized actions so a batched observation counts exactly like a
+    # top-level one (the recurring false-positive: the live verify was driven
+    # via browser_batch, the hook saw only "browser_batch" and fired). Gated to
+    # the batch wrapper so an unrelated tool whose payload merely mentions
+    # "screenshot" (e.g. a Resolution Note) never false-counts.
+    if "browser_batch" in n:
+        actions = _txt(inp)
+        if SCREENSHOT_TOOL.search(actions) or DOM_READ_TOOL.search(actions):
+            return True
+    return False
+
+
+def main():
+    try:
+        data = json.load(sys.stdin)
+    except Exception:
+        return
+    if data.get("stop_hook_active"):
+        return
+    tp = data.get("transcript_path")
+    if not tp:
+        return
+    try:
+        with open(tp, "r", errors="replace") as f:
+            lines = f.readlines()
+    except Exception:
+        return
+
+    seq = []
+    for line in lines:
+        line = line.strip()
+        if not line:
+            continue
+        try:
+            walk_tool_uses(json.loads(line), seq)
+        except Exception:
+            continue
+    if not seq:
+        return  # no structured tool calls -> fail safe
+
+    last_closeout = -1
+    last_closeout_downgraded = False
+    merge_idxs = []
+    binding_idxs = []
+    obs_idxs = []
+    for i, (name, inp) in enumerate(seq):
+        if is_merge(name, inp):
+            merge_idxs.append(i)
+        if is_deploy_binding(name, inp):
+            binding_idxs.append(i)
+        if is_observation(name, inp):
+            obs_idxs.append(i)
+        if is_fixed_closeout(name, inp):
+            last_closeout = i
+            last_closeout_downgraded = bool(DOWNGRADE.search(_txt(inp)))
+
+    if last_closeout < 0:
+        return  # nothing was claimed fixed this session
+    if last_closeout_downgraded:
+        return  # honestly flagged as unverified -> allowed
+
+    # Require, AFTER the merge that shipped THIS fix and at/before the close-out,
+    # BOTH a deploy-binding (you are on the deployed build) AND an observation
+    # (you saw the rendered value/state). The relevant merge is the LAST one
+    # BEFORE the close-out - a merge that lands AFTER the close-out belongs to
+    # other, not-yet-closed work and must NOT retroactively invalidate an
+    # already-verified close-out (the old-closeout + newer-merge false-positive).
+    # If no merge precedes the close-out (a re-verify / no-code close), floor is
+    # -1, so any qualifying call before the close-out counts.
+    floor = max([m for m in merge_idxs if m < last_closeout], default=-1)
+    has_binding = any(floor < e <= last_closeout for e in binding_idxs)
+    has_obs = any(floor < e <= last_closeout for e in obs_idxs)
+    if has_binding and has_obs:
+        return  # bound to the deployed build AND observed by value -> allowed
+
+    # Tailor the nudge to which half is missing (often only the observation is).
+    if has_binding and not has_obs:
+        gap = (
+            "you reached the deployed build (a navigate / get_deployment) but never "
+            "OBSERVED the value there. Arriving is not verifying: a navigate proves you "
+            "got there, get_deployment proves the sha is live - neither shows the "
+            "reporter's symptom GONE. Capture the proof: take a screenshot AND read the "
+            "rendered value by DOM (javascript_tool / read_page) on the deployed app, or "
+            "for a data ticket run a by-value staging query."
+        )
+    else:
+        gap = (
+            "this session shows NO by-value verification on the DEPLOYED build after the "
+            "merge. Drive the reporter's exact flow on the deployed app and OBSERVE the "
+            "result, do not stop at CI-green / a passing test / a code or DB read."
+        )
+    reason = (
+        "A ticket was moved to Fixed - Pending Retest / Verified, but " + gap + " "
+        "(feedback-fix-loop G0/G1/G3). Before stopping, either: (a) BEHAVIOR/UI ticket -> "
+        "drive the reporter's exact flow on the deployed app (a real browser on your "
+        "staging / production URL), then SCREENSHOT it and read the rendered value; "
+        "or (b) DATA/seed ticket -> run a by-value staging query (DB proxy / API) and a "
+        "get_deployment sha-confirm; or (c) if you truly cannot observe it (NOT 'my first "
+        "try failed', and NEVER for a surface reachable by clicking a visible button), "
+        "re-open the close-out note with an explicit 'unverified-reasoned: <why "
+        "unobservable + the unit test covering it>' tag and route it to the reporter. "
+        "Cite the observed value in the close-out note. Then stop."
+    )
+    print(json.dumps({"decision": "block", "reason": reason}))
+
+
+if __name__ == "__main__":
+    main()
