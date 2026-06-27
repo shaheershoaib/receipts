@@ -2,7 +2,7 @@
   "mcpServers": {
     "trajectory-kb": {
       "command": "node",
-      "args": ["${CLAUDE_PLUGIN_ROOT}/mcp/trajectory-kb/index.js"]
+      "args": ["${CLAUDE_PLUGIN_ROOT}/mcp/trajectory-kb/server.bundle.mjs"]
     }
   }
 }

@@ -2,6 +2,14 @@
 
 A queryable, append-only store of dev **trajectories** — *what was tried on a surface and what happened* — so the fix/build loops stop repeating wrong-surface traps and can **retrieve** relevant past fixes at the start of a new one. (Borrowed from Ruflo's "learn from past trajectories" idea, kept lean.)
 
+## Packaging (how it ships in the plugin)
+The plugin runs the **bundled** server `server.bundle.mjs` (committed, ~540K, all deps
+inlined via esbuild), NOT `index.js`. Claude Code does not `npm install` a plugin's MCP
+server, so the raw `index.js` (which imports `@modelcontextprotocol/sdk`) cannot resolve
+its dependency from a fresh install. `index.js` is the SOURCE; after editing it, rebuild
+with `npm run build` and commit the regenerated `server.bundle.mjs`. `node_modules/` is a
+build-time-only dependency and stays gitignored.
+
 ## Storage
 Append-only JSONL is the source of truth, human-readable and greppable:
 `~/.claude/mcp-servers/trajectory-kb/data/trajectories.jsonl`

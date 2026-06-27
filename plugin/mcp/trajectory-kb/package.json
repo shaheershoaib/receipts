@@ -5,7 +5,8 @@
   "type": "module",
   "main": "index.js",
   "scripts": {
-    "start": "node index.js"
+    "start": "node index.js",
+    "build": "npx --yes esbuild index.js --bundle --platform=node --format=esm --outfile=server.bundle.mjs"
   },
   "dependencies": {
     "@modelcontextprotocol/sdk": "^1.0.0"
