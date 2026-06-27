@@ -28,10 +28,15 @@ of settings.json and no `claude mcp add`. `claude plugin validate` passes.
 
 ## Project-specifics are config-driven (no hand-editing)
 
-The hooks ship sensible generic defaults and MERGE per-project overrides from
-`receipts.config.json` (located by walking up from the session cwd), so a clean
-install + `receipts init` tunes them with no hand-editing. With no config found they
-fall back to the generic defaults, so a zero-config install still works:
+The hooks ship sensible generic defaults and MERGE config overrides from
+`receipts.config.json` - the agent-home `~/.claude/receipts.config.json` as a base,
+with the nearest project `receipts.config.json` (walked up from the session cwd)
+merged over it. So a clean install + `receipts init` tunes them with no hand-editing,
+and a **split repo** - skills + session cwd separate from the code repos (e.g. a
+central skills project + several code repos) - is supported via the agent-home layer
+(run `receipts init` there to write an agent-only config; the code repos get the
+enforcer's verify/build config). With no config found the hooks fall back to the
+generic defaults, so a zero-config install still works:
 
 - `hooks/stop-verification-gate.py` extends, from config: the deployed-host patterns
   (`build.deploy_host_patterns`), the by-value-query patterns

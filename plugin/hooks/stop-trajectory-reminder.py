@@ -38,24 +38,47 @@ DEFAULT_DOWNGRADE_TAGS = ("unverified-reasoned", "speculative", "reverted")
 GH_MERGE = re.compile(r"(?:^|[;&|]|\n)\s*gh\s+pr\s+merge\b")
 
 
+def _read_config_file(p):
+    """Read one receipts.config.json. None if absent; {} if present-but-unreadable
+    (signals 'found' so the walk-up stops; fail-safe to generics, never crash)."""
+    try:
+        with open(p) as f:
+            return json.load(f)
+    except FileNotFoundError:
+        return None
+    except Exception:
+        return {}
+
+
+def _deep_merge(base, over):
+    out = dict(base or {})
+    for k, v in (over or {}).items():
+        if isinstance(v, dict) and isinstance(out.get(k), dict):
+            out[k] = _deep_merge(out[k], v)
+        else:
+            out[k] = v
+    return out
+
+
 def load_receipts_config(start):
-    """Walk up from `start` (the session cwd) for receipts.config.json. Returns the
-    parsed dict, or {} if none found / unreadable - fail-safe to the generic
-    defaults, never crash the hook."""
+    """Effective config: the agent-home (~/.claude/receipts.config.json) as the base,
+    with the nearest project receipts.config.json (walked up from `start`) merged
+    over it. Either/both may be absent -> {} (fail-safe to the generic defaults).
+    The home layer is what makes a split repo work - skills + session cwd separate
+    from the code repo: the agent config lives in one place and applies everywhere."""
+    home = _read_config_file(os.path.join(os.path.expanduser("~"), ".claude", "receipts.config.json")) or {}
+    proj = {}
     d = os.path.abspath(start or ".")
     for _ in range(40):
-        try:
-            with open(os.path.join(d, "receipts.config.json")) as f:
-                return json.load(f)
-        except FileNotFoundError:
-            pass
-        except Exception:
-            return {}  # malformed config -> generics
+        c = _read_config_file(os.path.join(d, "receipts.config.json"))
+        if c is not None:
+            proj = c
+            break
         parent = os.path.dirname(d)
         if parent == d:
             break
         d = parent
-    return {}
+    return _deep_merge(home, proj)
 
 
 def exit_disposition_re(tags):
