@@ -4,7 +4,7 @@
   "title": "receipts project config",
   "description": "Project-specific plumbing for the receipts gates. Produced by `receipts init` (detect -> confirm -> write); rarely hand-authored. The gate LOGIC ships generic; this file only tells receipts how to build/test/reach THIS project and what marks a fix-claim.",
   "type": "object",
-  "required": ["version", "verify"],
+  "required": ["version"],
   "additionalProperties": false,
   "properties": {
     "$schema": { "type": "string" },
@@ -60,7 +60,7 @@
     },
     "verify": {
       "type": "object",
-      "description": "How to run the receipt: the carried red->green acceptance test. The PRIMARY verification; uses the project's own test framework + CI auth.",
+      "description": "How to run the receipt: the carried red->green acceptance test. The PRIMARY verification; uses the project's own test framework + CI auth. Required for the ENFORCER (it errors without test_command); an agent-home config (skills + session cwd, no code repo) may omit this whole block - that is why `verify` is not a top-level required field.",
       "required": ["test_command"],
       "additionalProperties": false,
       "properties": {

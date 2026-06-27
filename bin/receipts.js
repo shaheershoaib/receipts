@@ -53,6 +53,8 @@ function detect(dir) {
     stack = "node";
     suite_command = `${runner} test`;
     test_command = runner === "npm" ? "npm test -- {test}" : `${runner} test {test}`;
+  } else if (has("manage.py")) {
+    stack = "django"; suite_command = "python manage.py test"; test_command = "python manage.py test {test}";
   } else if (has("pyproject.toml") || has("pytest.ini") || has("setup.cfg") || has("tox.ini")) {
     stack = "python"; suite_command = "pytest"; test_command = "pytest {test}";
   } else if (has("go.mod")) {
@@ -88,8 +90,13 @@ function detect(dir) {
     for (const name of fs.readdirSync(skillsDir)) {
       const sk = path.join(skillsDir, name, "SKILL.md");
       if (!exists(sk)) continue;
-      const hay = (name + " " + (readText(sk) || "").slice(0, 2000)).toLowerCase();
-      if (/loop|fix|retest|feedback|build|parity|cycle|triage|ticket/.test(hay)) {
+      // Scan the NAME + the frontmatter description only - the body has incidental
+      // keywords ("fix"/"build") that over-match (an audit skill is not a loop).
+      const txt = readText(sk) || "";
+      const fm = (txt.match(/^---\s*[\r\n]([\s\S]*?)[\r\n]---/) || ["", ""])[1];
+      const desc = ((fm.match(/description:\s*([\s\S]*)/i) || ["", ""])[1] || "").slice(0, 400);
+      const nameHay = name.toLowerCase();
+      if (/loop|retest|feedback|parity|cycle/.test(nameHay + " " + desc.toLowerCase()) || /fix/.test(nameHay)) {
         loop_skills.push(name);
       }
     }
@@ -100,7 +107,7 @@ function detect(dir) {
 }
 
 function buildConfig(d, a) {
-  return {
+  const cfg = {
     version: 1,
     claim: {
       issue_link: "closes #(\\d+)",
@@ -130,6 +137,12 @@ function buildConfig(d, a) {
       repo_name: a.repo_name || d.repo_name,
     },
   };
+  // Agent-home (skills + cwd, no tests and no deploy): keep only version/claim/agent;
+  // the enforcer config (build/verify) belongs in the code repos.
+  if (!(a.test_command || d.test_command) && d.platform === "none") {
+    delete cfg.build; delete cfg.verify; delete cfg.degrade;
+  }
+  return cfg;
 }
 
 // Fill the bundled loop-skill template and write it into the project's skills dir.
@@ -162,12 +175,15 @@ async function init(opts) {
   }
 
   const d = detect(dir);
+  // Agent-home = skills + session cwd with no tests and no deploy (e.g. a skills
+  // project separate from the code repos): write an agent-only config (no build/verify).
+  const agentHome = !d.test_command && d.platform === "none";
   // Diagnostics go to stderr so --print keeps stdout pure JSON.
   console.error(`receipts init - scanning ${dir}\n`);
   console.error("  detected:");
-  console.error(`    stack       ${d.stack || "unknown"}`);
-  console.error(`    tests       ${d.test_command || "NOT DETECTED (you'll set verify.test_command)"}`);
-  console.error(`    deploy      ${d.platform === "none" ? "none (library/CLI: verify against build + tests)" : d.platform}`);
+  console.error(`    stack       ${d.stack || (agentHome ? "agent-home (skills, no code)" : "unknown")}`);
+  console.error(`    tests       ${d.test_command || (agentHome ? "none here (enforcer config lives in the code repos)" : "NOT DETECTED (you'll set verify.test_command)")}`);
+  console.error(`    deploy      ${d.platform === "none" ? "none" : d.platform}`);
   console.error(`    loop skills ${d.loop_skills.length ? d.loop_skills.join(", ") : "none found (seven-gates ships with the plugin)"}`);
   console.error("");
 
@@ -175,7 +191,7 @@ async function init(opts) {
   if (!opts.yes) {
     const rl = readline.createInterface({ input: process.stdin, output: process.stderr });
     try {
-      if (!d.test_command) a.test_command = await ask(rl, "How do you run ONE test? (use {test} for the path)", "");
+      if (!d.test_command && !agentHome) a.test_command = await ask(rl, "How do you run ONE test? (use {test} for the path)", "");
       if (d.platform !== "none") {
         const env = await ask(rl, "Which environment should receipts re-verify on?", "staging");
         const url = await ask(rl, `URL of '${env}'? (blank to fill in later)`, "");
@@ -227,8 +243,15 @@ async function init(opts) {
   fs.writeFileSync(outPath, json);
   JSON.parse(fs.readFileSync(outPath, "utf8")); // round-trip validate
   console.error(`\nWrote ${outPath}`);
-  console.error("Review it, then commit. The Stop hooks read it (loop skills, hosts, fixed-statuses);");
-  console.error("the enforcer reads it (test command, sha source). Each fix still carries its own red->green receipt.");
+  if (agentHome) {
+    console.error("Agent-home config (skills + cwd, no build/verify). The Stop hooks read it for");
+    console.error("loop skills / hosts / fixed-statuses. Put it at ~/.claude/receipts.config.json to");
+    console.error("apply across every session, or in the project root. Run init in your CODE repos");
+    console.error("too - there it writes the enforcer's verify/build config.");
+  } else {
+    console.error("Review it, then commit. The Stop hooks read it (loop skills, hosts, fixed-statuses);");
+    console.error("the enforcer reads it (test command, sha source). Each fix still carries its own red->green receipt.");
+  }
 }
 
 function doctor(opts) {
