@@ -44,6 +44,7 @@ const dedupe = (arr) => [...new Set(arr.filter(Boolean))];
 function detect(dir) {
   const at = (f) => path.join(dir, f);
   const has = (f) => exists(at(f));
+  const hasExt = (ext) => { try { return fs.readdirSync(dir).some((f) => f.endsWith(ext)); } catch { return false; } };
 
   // --- test runner ---
   let stack = null, test_command = null, suite_command = null;
@@ -63,6 +64,16 @@ function detect(dir) {
     stack = "ruby"; suite_command = "bundle exec rspec"; test_command = "bundle exec rspec {test}";
   } else if (has("Cargo.toml")) {
     stack = "rust"; suite_command = "cargo test"; test_command = "cargo test {test}";
+  } else if (has("pom.xml")) {
+    stack = "maven"; suite_command = "mvn test"; test_command = "mvn -Dtest={test} test";
+  } else if (has("build.gradle") || has("build.gradle.kts")) {
+    stack = "gradle"; suite_command = "gradle test"; test_command = "gradle test --tests {test}";
+  } else if (hasExt(".csproj") || hasExt(".sln") || hasExt(".fsproj")) {
+    stack = "dotnet"; suite_command = "dotnet test"; test_command = "dotnet test --filter {test}";
+  } else if (has("composer.json")) {
+    stack = "php"; suite_command = "vendor/bin/phpunit"; test_command = "vendor/bin/phpunit {test}";
+  } else if (has("mix.exs")) {
+    stack = "elixir"; suite_command = "mix test"; test_command = "mix test {test}";
   } else if (has("Makefile") && /(^|\n)test:/.test(readText(at("Makefile")) || "")) {
     stack = "make"; suite_command = "make test"; test_command = "make test";
   }
@@ -75,6 +86,7 @@ function detect(dir) {
     ["netlify", () => has("netlify.toml"),                            ["*.netlify.app"]],
     ["fly",     () => has("fly.toml"),                                ["*.fly.dev"]],
     ["render",  () => has("render.yaml"),                             ["*.onrender.com"]],
+    ["cloudflare", () => has("wrangler.toml") || has("wrangler.jsonc") || has("wrangler.json"), ["*.workers.dev", "*.pages.dev"]],
   ];
   for (const [name, test, hosts] of platforms) {
     if (test()) { platform = name; deploy_host_patterns = hosts; break; }

@@ -29,8 +29,8 @@ project.
 
 | Field | Signals it reads | Fallback |
 |---|---|---|
-| `verify.test_command` | `package.json` scripts.test (npm/pnpm/yarn); `pyproject.toml`/`pytest.ini` -> pytest; `go.mod` -> go test; `Gemfile` -> rspec; `Makefile` `test:` target | ask |
-| `build.sha_source` + platform | `vercel.json`/`.vercel` -> Vercel; `railway.json`/`railway.toml` -> Railway; `netlify.toml` -> Netlify; `fly.toml` -> Fly; `render.yaml` -> Render; `.github/workflows/*` deploy steps; else the GitHub Deployments API | `none` (library/CLI: verify against build+test, no deploy) |
+| `verify.test_command` | `package.json` scripts.test (npm/pnpm/yarn); `manage.py` -> Django; `pyproject.toml`/`pytest.ini`/`setup.cfg`/`tox.ini` -> pytest; `go.mod` -> go test; `Gemfile` -> rspec; `Cargo.toml` -> cargo; `pom.xml` -> Maven; `build.gradle`(`.kts`) -> Gradle; `*.csproj`/`*.sln`/`*.fsproj` -> dotnet; `composer.json` -> PHPUnit; `mix.exs` -> Elixir; `Makefile` `test:` target | ask |
+| `build.sha_source` + platform | `vercel.json`/`.vercel` -> Vercel; `railway.json`/`railway.toml` -> Railway; `netlify.toml` -> Netlify; `fly.toml` -> Fly; `render.yaml` -> Render; `wrangler.toml`/`wrangler.json(c)` -> Cloudflare; `.github/workflows/*` deploy steps; else the GitHub Deployments API | `none` (library/CLI: verify against build+test, no deploy) |
 | `build.environments` (URLs) | the platform config; the GitHub deployment `environment_url`s | ask |
 | `build.verify_against` | one environment found -> use it; staging + prod found -> default staging | ask |
 | `claim.issue_link` | scan recent merged PRs for `closes/fixes/resolves #N` | default `closes #(\d+)` |
