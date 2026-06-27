@@ -96,6 +96,34 @@
           "default": "sha-bind-only"
         }
       }
+    },
+    "agent": {
+      "type": "object",
+      "description": "How the agent-side Stop hooks bind to THIS project: which skills are fix/build loops (watched by the trajectory reminder + carrying the kb touchpoints), what extra by-value-query patterns count, and which tracker statuses mean 'fixed'. The hooks ship generic defaults; these MERGE OVER them (never replace the generics, so a clean install still works). Written by `receipts init`. Deploy-host patterns live in `build.deploy_host_patterns` (shared with the enforcer).",
+      "additionalProperties": false,
+      "properties": {
+        "loop_skills": {
+          "type": "array",
+          "items": { "type": "string" },
+          "description": "Skill names that are fix/build loops: the trajectory-reminder watches these (append-on-exit) and they carry the kb query/append touchpoints. The shipped 'seven-gates' plus any project loop skills.",
+          "default": ["seven-gates"]
+        },
+        "staging_query_patterns": {
+          "type": "array",
+          "items": { "type": "string" },
+          "description": "Extra substrings / MCP-tool names that count as a by-value query against the deployed build (e.g. a DB proxy host, a query tool), on top of the generic defaults."
+        },
+        "closeout_fixed_statuses": {
+          "type": "array",
+          "items": { "type": "string" },
+          "description": "Tracker status strings that mean 'claimed fixed' (e.g. 'Fixed - Pending Retest', 'Verified', 'Closed'); the verification gate treats a status update to one of these as a fix close-out.",
+          "default": ["Pending Retest", "Verified"]
+        },
+        "repo_name": {
+          "type": "string",
+          "description": "Default repo tag for trajectory-kb appends (the agent may override per append)."
+        }
+      }
     }
   }
 }

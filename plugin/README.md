@@ -26,19 +26,27 @@ Seven Gates before a PR is ever opened. This is the agent-side half of `receipts
 `trajectory-kb` server). Installing the plugin registers all three - no hand-editing
 of settings.json and no `claude mcp add`. `claude plugin validate` passes.
 
-## Before publishing - genericize the project-specifics
+## Project-specifics are config-driven (no hand-editing)
 
-Cloned from a battle-tested setup; these carry sensible-but-generic platform defaults
-a real product should make config-driven:
+The hooks ship sensible generic defaults and MERGE per-project overrides from
+`receipts.config.json` (located by walking up from the session cwd), so a clean
+install + `receipts init` tunes them with no hand-editing. With no config found they
+fall back to the generic defaults, so a zero-config install still works:
 
-- `hooks/stop-verification-gate.py` - the deployed-host patterns (vercel / railway /
-  netlify / fly / ...) and the board-status values are platform defaults. Move them
-  to a `receipts.config.json` so each project sets its own (see
-  `../enforcer/README.md`).
-- The skill (`seven-gates`) is already project-agnostic; keep all project-specific
-  facts in `receipts.config.json`, never in the skill.
+- `hooks/stop-verification-gate.py` extends, from config: the deployed-host patterns
+  (`build.deploy_host_patterns`), the by-value-query patterns
+  (`agent.staging_query_patterns`), the fixed-status values
+  (`agent.closeout_fixed_statuses`), and the downgrade tags (`claim.downgrade_tags`).
+- `hooks/stop-trajectory-reminder.py` reads which skills are fix/build loops from
+  `agent.loop_skills` (the shipped `seven-gates` plus any project loops), so the
+  reminder watches the project's actual loops, not just the bundled one.
+- `skills/seven-gates/` stays project-agnostic. For a project with its own loop,
+  `receipts init` registers it in `agent.loop_skills`; for a project with none, `init`
+  scaffolds one from `templates/loop-skill/SKILL.md.tmpl` (filled with the project's
+  facts) so the trajectory-kb is driven out of the box.
 
 ## Roadmap
 
-- [ ] `receipts.config.json` for host / board / verify-step overrides.
+- [x] `receipts.config.json` for host / loop-skill / fixed-status overrides - the hooks read it.
+- [x] `receipts init` detects + registers loop skills and scaffolds a harness when none exists; `receipts doctor` reports drift.
 - [ ] Install-test that the hooks + MCP auto-activate from the manifest in a real session.

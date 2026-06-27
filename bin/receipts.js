@@ -4,7 +4,12 @@
  * receipts CLI
  *
  * `receipts init` detects a project's plumbing (how it tests, where it deploys,
- * what marks a fix-claim), confirms with you, and writes receipts.config.json.
+ * what marks a fix-claim) AND its loop-skill harnesses (the skills that drive the
+ * trajectory-kb and that the Stop hooks watch), confirms with you, writes
+ * receipts.config.json, and - if the project has no fix/build loop skill - scaffolds
+ * one from the bundled template so a clean install reaches parity with no hand-edits.
+ *
+ * `receipts doctor` re-detects and reports drift against the current config.
  *
  * Zero dependencies - Node built-ins only - so it runs with `npx receipts` or a
  * bare `node bin/receipts.js` and never needs an install step.
@@ -17,20 +22,25 @@ const HELP = `receipts - verification gates for AI-written code
 
 Usage:
   receipts init [options]     Detect this project, confirm, write receipts.config.json
+                              (+ scaffold a loop-skill harness if none exists)
+  receipts doctor [options]   Re-detect and report drift against receipts.config.json
 
 Options:
   --dir <path>   Target repo (default: current directory)
   --yes, -y      Accept detected values, skip prompts (CI / scripted)
-  --print        Print the config to stdout, do not write a file
-  --force        Overwrite an existing receipts.config.json
+  --print        Print the config to stdout, do not write a file (init)
+  --force        Overwrite an existing receipts.config.json (init)
+  --no-scaffold  Do not scaffold a loop-skill harness even if none is found (init)
   --help, -h     Show this help
 `;
 
 const readText = (p) => { try { return fs.readFileSync(p, "utf8"); } catch { return null; } };
 const readJson = (p) => { const t = readText(p); if (!t) return null; try { return JSON.parse(t); } catch { return null; } };
 const exists = (p) => { try { fs.accessSync(p); return true; } catch { return false; } };
+const dedupe = (arr) => [...new Set(arr.filter(Boolean))];
 
-// Detect the project's plumbing from on-disk artifacts. Never throws.
+// Detect the project's plumbing + loop-skill harnesses from on-disk artifacts.
+// Never throws.
 function detect(dir) {
   const at = (f) => path.join(dir, f);
   const has = (f) => exists(at(f));
@@ -69,7 +79,24 @@ function detect(dir) {
   }
   if (platform !== "none") sha_source = "github-deployments";
 
-  return { stack, test_command, suite_command, platform, sha_source, deploy_host_patterns };
+  // --- loop-skill harnesses (the skills that drive the trajectory-kb + the hooks
+  //     watch). Scan .claude/skills/*/SKILL.md; a skill whose name or body reads
+  //     like a fix/build loop is a candidate. ---
+  let loop_skills = [];
+  const skillsDir = at(".claude/skills");
+  try {
+    for (const name of fs.readdirSync(skillsDir)) {
+      const sk = path.join(skillsDir, name, "SKILL.md");
+      if (!exists(sk)) continue;
+      const hay = (name + " " + (readText(sk) || "").slice(0, 2000)).toLowerCase();
+      if (/loop|fix|retest|feedback|build|parity|cycle|triage|ticket/.test(hay)) {
+        loop_skills.push(name);
+      }
+    }
+  } catch { /* no .claude/skills dir */ }
+
+  const repo_name = (pkg && pkg.name) || path.basename(dir);
+  return { stack, test_command, suite_command, platform, sha_source, deploy_host_patterns, loop_skills, repo_name };
 }
 
 function buildConfig(d, a) {
@@ -82,7 +109,7 @@ function buildConfig(d, a) {
     build: {
       sha_source: d.sha_source,
       platform: d.platform,
-      deploy_host_patterns: d.deploy_host_patterns,
+      deploy_host_patterns: dedupe([...(d.deploy_host_patterns || []), ...(a.extra_hosts || [])]),
       environments: a.environments || {},
       verify_against: a.verify_against || (d.platform !== "none" ? "staging" : "none"),
     },
@@ -95,18 +122,42 @@ function buildConfig(d, a) {
       on_no_receipt: "require-downgrade-tag",
       on_unreachable_build: "sha-bind-only",
     },
+    agent: {
+      // "seven-gates" (the shipped loop) is always watched; project loops merge in.
+      loop_skills: dedupe(["seven-gates", ...(a.loop_skills || d.loop_skills || [])]),
+      staging_query_patterns: a.staging_query_patterns || [],
+      closeout_fixed_statuses: a.closeout_fixed_statuses || ["Pending Retest", "Verified"],
+      repo_name: a.repo_name || d.repo_name,
+    },
   };
+}
+
+// Fill the bundled loop-skill template and write it into the project's skills dir.
+function scaffoldHarness(dir, vars) {
+  const tmplPath = path.join(__dirname, "..", "plugin", "templates", "loop-skill", "SKILL.md.tmpl");
+  let tmpl = readText(tmplPath);
+  if (!tmpl) return null;
+  for (const [k, v] of Object.entries(vars)) tmpl = tmpl.split(`{{${k}}}`).join(v);
+  const outDir = path.join(dir, ".claude", "skills", vars.loop_name);
+  try {
+    fs.mkdirSync(outDir, { recursive: true });
+    const outPath = path.join(outDir, "SKILL.md");
+    if (exists(outPath)) return outPath; // don't clobber an existing skill
+    fs.writeFileSync(outPath, tmpl);
+    return outPath;
+  } catch { return null; }
 }
 
 const ask = (rl, q, def) =>
   new Promise((res) => rl.question(def ? `${q} [${def}] ` : `${q} `, (x) => res((x || "").trim() || def || "")));
+const list = (s) => (s || "").split(",").map((x) => x.trim()).filter(Boolean);
 
 async function init(opts) {
   const dir = path.resolve(opts.dir || process.cwd());
   if (!exists(dir)) { console.error(`No such directory: ${dir}`); process.exit(1); }
   const outPath = path.join(dir, "receipts.config.json");
   if (exists(outPath) && !opts.force && !opts.print) {
-    console.error("receipts.config.json already exists. Re-run with --force to overwrite, or --print to preview.");
+    console.error("receipts.config.json already exists. Re-run with --force to overwrite, --print to preview, or `receipts doctor` to check drift.");
     process.exit(1);
   }
 
@@ -114,9 +165,10 @@ async function init(opts) {
   // Diagnostics go to stderr so --print keeps stdout pure JSON.
   console.error(`receipts init - scanning ${dir}\n`);
   console.error("  detected:");
-  console.error(`    stack    ${d.stack || "unknown"}`);
-  console.error(`    tests    ${d.test_command || "NOT DETECTED (you'll set verify.test_command)"}`);
-  console.error(`    deploy   ${d.platform === "none" ? "none (library/CLI: verify against build + tests)" : d.platform}`);
+  console.error(`    stack       ${d.stack || "unknown"}`);
+  console.error(`    tests       ${d.test_command || "NOT DETECTED (you'll set verify.test_command)"}`);
+  console.error(`    deploy      ${d.platform === "none" ? "none (library/CLI: verify against build + tests)" : d.platform}`);
+  console.error(`    loop skills ${d.loop_skills.length ? d.loop_skills.join(", ") : "none found (seven-gates ships with the plugin)"}`);
   console.error("");
 
   const a = {};
@@ -130,9 +182,44 @@ async function init(opts) {
         a.verify_against = env;
         if (url) a.environments = { [env]: url };
       }
+      // Loop-skill harnesses: which skills the trajectory hooks watch + that drive the kb.
+      const loopDef = dedupe(["seven-gates", ...d.loop_skills]).join(", ");
+      a.loop_skills = list(await ask(rl, "Which skills are your fix/build loops? (comma-separated)", loopDef));
+      // Offer to scaffold one if the project has no loop skill of its own.
+      const hasProjectLoop = a.loop_skills.some((s) => s !== "seven-gates");
+      if (!hasProjectLoop && !opts["no-scaffold"]) {
+        const yn = await ask(rl, `No project loop skill found. Scaffold one (${d.repo_name}-fix-loop) from the template?`, "Y");
+        if (/^y(es)?$/i.test(yn)) a._scaffold = true;
+      }
+      const xh = list(await ask(rl, "Extra deploy/prod hosts beyond detected? (comma-separated, blank to skip)", ""));
+      if (xh.length) a.extra_hosts = xh;
+      const sq = list(await ask(rl, "By-value query hosts/tools (e.g. a DB proxy host)? (blank to skip)", ""));
+      if (sq.length) a.staging_query_patterns = sq;
       const go = await ask(rl, "Write receipts.config.json with the above?", "Y");
       if (!/^y(es)?$/i.test(go)) { console.error("Aborted."); rl.close(); process.exit(1); }
     } finally { rl.close(); }
+  } else {
+    // --yes: register the shipped loop + any detected project loops; scaffold if none.
+    a.loop_skills = dedupe(["seven-gates", ...d.loop_skills]);
+    if (!d.loop_skills.length && !opts["no-scaffold"]) a._scaffold = true;
+  }
+
+  // Scaffold the harness (before building config, so we can register its name).
+  if (a._scaffold && !opts.print) {
+    const loop_name = `${d.repo_name}-fix-loop`;
+    const written = scaffoldHarness(dir, {
+      loop_name,
+      repo_name: d.repo_name,
+      test_command: d.test_command || a.test_command || "<your test command>",
+      platform: d.platform,
+      verify_against_url:
+        (a.environments && a.verify_against && a.environments[a.verify_against]) ||
+        "your deployed build",
+    });
+    if (written) {
+      a.loop_skills = dedupe([...(a.loop_skills || []), loop_name]);
+      console.error(`\nScaffolded loop-skill harness: ${written}`);
+    }
   }
 
   const json = JSON.stringify(buildConfig(d, a), null, 2) + "\n";
@@ -140,7 +227,30 @@ async function init(opts) {
   fs.writeFileSync(outPath, json);
   JSON.parse(fs.readFileSync(outPath, "utf8")); // round-trip validate
   console.error(`\nWrote ${outPath}`);
-  console.error("Review it, then commit. Each fix still carries its own red->green receipt.");
+  console.error("Review it, then commit. The Stop hooks read it (loop skills, hosts, fixed-statuses);");
+  console.error("the enforcer reads it (test command, sha source). Each fix still carries its own red->green receipt.");
+}
+
+function doctor(opts) {
+  const dir = path.resolve(opts.dir || process.cwd());
+  const cfg = readJson(path.join(dir, "receipts.config.json"));
+  if (!cfg) { console.error("No receipts.config.json here - run `receipts init`."); process.exit(1); }
+  const d = detect(dir);
+  const drift = [];
+  if (d.test_command && cfg.verify && cfg.verify.test_command && d.test_command !== cfg.verify.test_command)
+    drift.push(`test_command: config "${cfg.verify.test_command}" vs detected "${d.test_command}"`);
+  if (!cfg.verify || !cfg.verify.test_command || /REPLACE_ME/.test(cfg.verify.test_command || ""))
+    drift.push("verify.test_command is unset/placeholder");
+  if (d.platform !== "none" && cfg.build && d.platform !== cfg.build.platform)
+    drift.push(`platform: config "${cfg.build.platform}" vs detected "${d.platform}"`);
+  const cfgLoops = (cfg.agent && cfg.agent.loop_skills) || [];
+  const missing = (d.loop_skills || []).filter((s) => !cfgLoops.includes(s));
+  if (missing.length) drift.push(`loop skills on disk but not in config.agent.loop_skills: ${missing.join(", ")}`);
+  if (!cfg.agent) drift.push("config has no `agent` block - the Stop hooks will use generic defaults (re-init to bind project loops/hosts)");
+
+  if (!drift.length) { console.error("receipts doctor: config looks current."); return; }
+  console.error("receipts doctor: drift detected:\n  - " + drift.join("\n  - ") + "\n\nRe-run `receipts init --force` to refresh.");
+  process.exit(2);
 }
 
 function parseArgs(argv) {
@@ -151,6 +261,7 @@ function parseArgs(argv) {
     else if (x === "--yes" || x === "-y") o.yes = true;
     else if (x === "--print") o.print = true;
     else if (x === "--force") o.force = true;
+    else if (x === "--no-scaffold") o["no-scaffold"] = true;
     else if (x === "--help" || x === "-h") o.help = true;
     else o._.push(x);
   }
@@ -162,6 +273,7 @@ async function main() {
   const cmd = o._[0];
   if (o.help || !cmd) { process.stdout.write(HELP); return; }
   if (cmd === "init") return init(o);
+  if (cmd === "doctor") return doctor(o);
   console.error(`Unknown command: ${cmd}\n`);
   process.stdout.write(HELP);
   process.exit(1);
