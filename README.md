@@ -102,10 +102,17 @@ project. See [enforcer/GENERALIZATION.md](enforcer/GENERALIZATION.md) for how,
 ## Status
 
 Honest: the *discipline* is battle-tested - it has run a production codebase's bug
-pipeline for months and caught real money-path regressions. The *packaging* (the
-agent-agnostic CI enforcer, the installable plugin) is new and in active
-development. The Seven Gates spec and the Claude Code adapter are the most mature
-pieces today; the universal enforcer is the next build.
+pipeline for months and caught real money-path regressions.
+
+Built and working today:
+- the Seven Gates spec (`spec/SEVEN-GATES.md`)
+- the focused `seven-gates` agent skill + two Stop-hook backstops (the Claude Code adapter)
+- the `trajectory-kb` memory MCP
+- `receipts init` - detects stack + deploy target, confirms, writes `receipts.config.json`
+
+The next build is the **universal CI enforcer**: the re-verification at the PR
+(design in `enforcer/GENERALIZATION.md`; a local Stop-hook precursor ships in the
+plugin today).
 
 ## License
 

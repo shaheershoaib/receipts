@@ -1,0 +1,18 @@
+{
+  "name": "receipts",
+  "version": "0.1.0",
+  "description": "Verification gates for AI-written code - re-prove an agent's fix before you trust it.",
+  "bin": {
+    "receipts": "bin/receipts.js"
+  },
+  "scripts": {
+    "init": "node bin/receipts.js init"
+  },
+  "keywords": ["verification", "ai-agents", "code-review", "ci", "gates", "claude-code"],
+  "author": "Shaheer Shoaib <shaheershoaib11@gmail.com>",
+  "license": "MIT",
+  "repository": "https://github.com/OWNER/receipts",
+  "engines": {
+    "node": ">=18"
+  }
+}
