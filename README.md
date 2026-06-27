@@ -92,13 +92,15 @@ jobs:
 
 **Teach your agent to pass it (Claude Code):**
 ```bash
-claude plugin marketplace add <this-repo>
+claude plugin marketplace add shaheershoaib/receipts
 claude plugin install receipts
 ```
 
 **Configure it for your project (any stack, any platform):**
 ```bash
-receipts init   # detects your stack + deploy target, confirms with you, writes receipts.config.json
+npx @shaheershoaib/receipts init   # detects your stack + deploy target, confirms, writes receipts.config.json
+# not published to npm yet? run it straight from the repo, no install:
+# npx github:shaheershoaib/receipts init
 ```
 
 It works across any repo because the gate *logic* ships generic and only the project
