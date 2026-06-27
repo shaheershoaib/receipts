@@ -21,10 +21,14 @@ Seven Gates before a PR is ever opened. This is the agent-side half of `receipts
 
 ## Wiring
 
-`plugin.json` declares the components: `skills/` (auto-loaded), `hooks/hooks.json`
-(the two Stop hooks, referenced via `${CLAUDE_PLUGIN_ROOT}`), and `.mcp.json` (the
-`trajectory-kb` server). Installing the plugin registers all three - no hand-editing
-of settings.json and no `claude mcp add`. `claude plugin validate` passes.
+Claude Code AUTO-DISCOVERS the components from the plugin root: `skills/`,
+`hooks/hooks.json` (the two Stop hooks, referenced via `${CLAUDE_PLUGIN_ROOT}`), and
+`.mcp.json` (the `trajectory-kb` server). The manifest does NOT declare these standard
+paths - declaring a path that resolves to an auto-loaded file fails the load with a
+"Duplicate ... detected" error, so `plugin.json` carries metadata only. Installing the
+plugin registers all three - no hand-editing of settings.json and no `claude mcp add`.
+`claude plugin validate` passes (note: it checks manifest SYNTAX, not the load-time
+duplicate-path error, which only surfaces in `claude plugin list`).
 
 ## Project-specifics are config-driven (no hand-editing)
 
