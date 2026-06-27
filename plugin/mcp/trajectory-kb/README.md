@@ -16,7 +16,7 @@ Global, with every entry tagged by `repo` so it aggregates across repos. Structu
 | `list_repos` | Repos with recorded trajectories + counts. |
 
 ### Entry schema
-`id` · `ts` · `repo` · `surface` (free human text) · `surface_key` (canonical groupable key - primary file path / component id, **auto-derived** from `surface`/`files` when omitted, or passed explicitly; this is what makes recurrence on one component visible, since free-text `surface` is almost never written identically twice) · `symptom` · `root_cause` · `outcome` (`fixed`/`unverified-reasoned`/`speculative`/`reverted`) · `what_worked[]` · `what_failed[]` (incl. wrong-surface traps) · `files[]` (edited files, for fanout-plan history joins) · `regressed[]` (surfaces this fix broke, the coupling signal) · `tier` (`top`/`cheap`/`mixed`) · `tags[]` · `supersedes` (id).
+`id` · `ts` · `repo` · `surface` (free human text) · `surface_key` (canonical groupable key - primary file path / component id, **auto-derived** from `surface`/`files` when omitted, or passed explicitly; this is what makes recurrence on one component visible, since free-text `surface` is almost never written identically twice) · `symptom` · `root_cause` · `outcome` (`fixed`/`unverified-reasoned`/`speculative`/`reverted`) · `what_worked[]` · `what_failed[]` (incl. wrong-surface traps) · `files[]` (edited files, for history joins) · `regressed[]` (surfaces this fix broke, the coupling signal) · `tier` (`top`/`cheap`/`mixed`) · `tags[]` · `supersedes` (id).
 
 ## Setup
 ```bash
