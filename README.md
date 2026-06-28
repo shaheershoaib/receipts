@@ -76,11 +76,24 @@ ship as adapters.
 
 ## Install
 
-Two independent paths - use either or both.
+Two halves - the **agent adapter** (your agent produces receipts) and the **PR enforcer**
+(they get checked). Use either alone or both. Set up per repo, step by step:
 
-**Enforce it at the PR (any agent):**
+**1. Add the plugin** - teaches your Claude Code agent the Seven Gates:
+```bash
+claude plugin marketplace add shaheershoaib/receipts
+claude plugin install receipts
+```
+
+**2. Configure the repo** - detects your stack + deploy target, confirms, writes `receipts.config.json`:
+```bash
+npx receipts-cli init
+# or run the latest unreleased from source: npx github:shaheershoaib/receipts init
+```
+
+**3. Enforce at the PR** - re-runs each fix-claim's receipt (RED on the base commit, GREEN on the fix). Add `.github/workflows/receipts.yml`:
 ```yaml
-# .github/workflows/receipts.yml  (full template: enforcer/example-workflow.yml)
+# full template: enforcer/example-workflow.yml
 on: pull_request
 jobs:
   receipts:
@@ -90,18 +103,6 @@ jobs:
         with: { fetch-depth: 0 }
       - uses: actions/setup-node@v4    # + your deps install (swap per stack)
       - uses: shaheershoaib/receipts/enforcer@main
-```
-
-**Teach your agent to pass it (Claude Code):**
-```bash
-claude plugin marketplace add shaheershoaib/receipts
-claude plugin install receipts
-```
-
-**Configure it for your project (any stack, any platform):**
-```bash
-npx receipts-cli init   # detects your stack + deploy target, confirms, writes receipts.config.json
-# or run the latest unreleased from source: npx github:shaheershoaib/receipts init
 ```
 
 It works across any repo because the gate *logic* ships generic and only the project
@@ -124,6 +125,16 @@ Built and working today:
 
 Next: `verify.live_drive` for symptoms a test can't express (drive the deployed app),
 and an `examples/` demo of a caught wrong-fix.
+
+## Releasing (maintainer)
+
+`receipts-cli` is on npm. To cut a new version:
+
+1. Bump `version` in `package.json` (and `plugin/.claude-plugin/plugin.json` too if the plugin itself changed).
+2. If you edited `plugin/mcp/trajectory-kb/index.js`, rebuild the bundled MCP server: `cd plugin/mcp/trajectory-kb && npm run build`, then commit the regenerated `server.bundle.mjs`.
+3. `npm publish`.
+
+npm requires an auth token to publish **even with no 2FA** on the account. One-time: create a **Granular Access Token** (npmjs.com -> Access Tokens) with **Packages and scopes = Read and write, "All packages"** (Organizations = No access; no org needed), then `npm config set //registry.npmjs.org/:_authToken=<TOKEN>`. (Classic "Automation" tokens also work where the account still offers them.)
 
 ## License
 

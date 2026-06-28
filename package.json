@@ -1,6 +1,6 @@
 {
   "name": "receipts-cli",
-  "version": "0.1.3",
+  "version": "0.1.4",
   "description": "Verification gates for AI-written code - re-prove an agent's fix before you trust it.",
   "bin": {
     "receipts": "bin/receipts.js"
