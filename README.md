@@ -1,5 +1,7 @@
 # receipts
 
+[![npm](https://img.shields.io/npm/v/receipts-cli)](https://www.npmjs.com/package/receipts-cli)
+
 **Agents need receipts.**
 
 Your AI coding agent just told you it fixed the bug. Did it?
@@ -99,8 +101,7 @@ claude plugin install receipts
 **Configure it for your project (any stack, any platform):**
 ```bash
 npx receipts-cli init   # detects your stack + deploy target, confirms, writes receipts.config.json
-# not published to npm yet? run it straight from the repo, no install:
-# npx github:shaheershoaib/receipts init
+# or run the latest unreleased from source: npx github:shaheershoaib/receipts init
 ```
 
 It works across any repo because the gate *logic* ships generic and only the project
@@ -118,7 +119,7 @@ Built and working today:
 - the Seven Gates spec (`spec/SEVEN-GATES.md`)
 - the focused `seven-gates` agent skill + two Stop-hook backstops (the Claude Code adapter)
 - the `trajectory-kb` memory MCP
-- `receipts init` - detects stack + deploy target, confirms, writes `receipts.config.json`
+- `receipts init` - detects stack + deploy target, confirms, writes `receipts.config.json`; published to npm as [`receipts-cli`](https://www.npmjs.com/package/receipts-cli) (`npx receipts-cli init`)
 - the **CI enforcer** (`enforcer/`) - the red->green re-verification at the PR, as a GitHub Action
 
 Next: `verify.live_drive` for symptoms a test can't express (drive the deployed app),
