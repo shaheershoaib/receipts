@@ -98,7 +98,7 @@ claude plugin install receipts
 
 **Configure it for your project (any stack, any platform):**
 ```bash
-npx @shaheershoaib/receipts init   # detects your stack + deploy target, confirms, writes receipts.config.json
+npx receipts-cli init   # detects your stack + deploy target, confirms, writes receipts.config.json
 # not published to npm yet? run it straight from the repo, no install:
 # npx github:shaheershoaib/receipts init
 ```
