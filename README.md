@@ -80,7 +80,7 @@ ship as adapters.
 Two halves - the **agent adapter** (your agent produces receipts) and the **PR enforcer**
 (they get checked). Use either alone or both. Set up per repo, step by step:
 
-**1. Add the plugin** - teaches your Claude Code agent the Seven Gates:
+**1. Add the plugin** - teaches your Claude Code agent the Gates:
 ```bash
 claude plugin marketplace add shaheershoaib/receipts
 claude plugin install receipts
