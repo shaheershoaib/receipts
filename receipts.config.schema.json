@@ -105,8 +105,8 @@
         "loop_skills": {
           "type": "array",
           "items": { "type": "string" },
-          "description": "Skill names that are fix/build loops: the trajectory-reminder watches these (append-on-exit) and they carry the kb query/append touchpoints. The shipped 'seven-gates' plus any project loop skills.",
-          "default": ["seven-gates"]
+          "description": "Skill names that are fix/build loops: the trajectory-reminder watches these (append-on-exit) and they carry the kb query/append touchpoints. The shipped 'gates' plus any project loop skills.",
+          "default": ["gates"]
         },
         "staging_query_patterns": {
           "type": "array",

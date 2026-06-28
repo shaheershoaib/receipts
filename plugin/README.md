@@ -1,15 +1,16 @@
 # plugin (the Claude Code adapter)
 
-Teaches a Claude Code agent to *produce receipts* as it works, so its fixes clear the
-Seven Gates before a PR is ever opened. This is the agent-side half of `receipts`
+Teaches a Claude Code agent to *produce receipts* as it works, so its fixes clear
+the Gates before a PR is ever opened. This is the agent-side half of `receipts`
 (the PR-side half is `../enforcer`).
 
 ## What it provides
 
-- **`skills/seven-gates/`** - the gates as an agent skill: reproduce-first (G0),
+- **`skills/gates/`** - the gates as an agent skill: reproduce-first (G0),
   pin the exact flow (G2), verify by value on the deployed build (G1), land on the
   surface the reporter sees (G4), drive to the terminal action (G5), sweep the twins
-  (G6), confirm the sha (G3), and write the red->green receipt. Project-agnostic by
+  (G6), verify the dependents (G7), confirm the sha (G3), and write the red->green
+  receipt. Project-agnostic by
   design - a project supplies its own facts via `receipts.config.json`.
 - **`hooks/stop-verification-gate.py`** - the backstop: blocks a "fixed" close-out
   that lacks deployed-build evidence (binding + observation). The local precursor to
@@ -47,9 +48,9 @@ generic defaults, so a zero-config install still works:
   (`agent.staging_query_patterns`), the fixed-status values
   (`agent.closeout_fixed_statuses`), and the downgrade tags (`claim.downgrade_tags`).
 - `hooks/stop-trajectory-reminder.py` reads which skills are fix/build loops from
-  `agent.loop_skills` (the shipped `seven-gates` plus any project loops), so the
+  `agent.loop_skills` (the shipped `gates` plus any project loops), so the
   reminder watches the project's actual loops, not just the bundled one.
-- `skills/seven-gates/` stays project-agnostic. For a project with its own loop,
+- `skills/gates/` stays project-agnostic. For a project with its own loop,
   `receipts init` registers it in `agent.loop_skills`; for a project with none, `init`
   scaffolds one from `templates/loop-skill/SKILL.md.tmpl` (filled with the project's
   facts) so the trajectory-kb is driven out of the box.

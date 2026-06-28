@@ -3,7 +3,7 @@
 
 Fires (decision:block, at most once per stop-cycle) ONLY when this session
 actually ran a fix/build loop (a configured loop skill - default the shipped
-seven-gates) AND reached an EXIT - a clean close-out (PR merge / ticket moved to
+gates) AND reached an EXIT - a clean close-out (PR merge / ticket moved to
 Fixed|Verified) OR an honest downgrade / Won't-Fix - but recorded no trajectory
 afterward. Failure exits are the entries most worth capturing (a success-only
 store is survivorship bias that blinds retrieval), so a downgraded / blocked /
@@ -29,7 +29,7 @@ import sys, json, re, os
 
 # Generic defaults; receipts.config.json (agent.loop_skills,
 # agent.closeout_fixed_statuses, claim.downgrade_tags) overrides them per project.
-DEFAULT_LOOP_SKILLS = ("seven-gates",)  # the loop skill this plugin ships
+DEFAULT_LOOP_SKILLS = ("gates",)  # the loop skill this plugin ships
 DEFAULT_FIXED_STATUSES = ("Pending Retest", "Verified")
 DEFAULT_DOWNGRADE_TAGS = ("unverified-reasoned", "speculative", "reverted")
 
@@ -178,7 +178,7 @@ def main():
     reason = (
         "A fix/build loop ran and reached an exit (close-out: PR merge / ticket moved to "
         "Fixed / Verified, OR a downgrade / Won't-Fix), but no "
-        "trajectory-kb entry was recorded afterward. Per the seven-gates skill, at close-out call "
+        "trajectory-kb entry was recorded afterward. Per the gates skill, at close-out call "
         "mcp__trajectory-kb__append_trajectory({repo, surface, symptom, root_cause, "
         "outcome, what_worked, what_failed, files}) now with the HONEST outcome - 'fixed' "
         "for a clean fix, or 'unverified-reasoned' / 'speculative' / 'reverted' for a "

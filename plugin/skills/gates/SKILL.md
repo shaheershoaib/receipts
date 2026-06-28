@@ -1,16 +1,17 @@
 ---
-name: seven-gates
+name: gates
 description: >-
   Use when fixing a bug, addressing a tester or issue report, or about to claim a
-  change is "done" / "fixed" / "working". Enforces the Seven Gates: reproduce the
+  change is "done" / "fixed" / "working". Enforces the Gates: reproduce the
   reported symptom first, fix the surface the reporter actually sees, drive to the
-  terminal action, sweep parallel twins, confirm the right build, and above all
+  terminal action, sweep parallel twins, verify the dependents, confirm the right
+  build, and above all
   produce a RECEIPT - a re-runnable acceptance test that is red before the fix and
   green after, asserting the reported symptom. A fix is not done because you say so;
   it is done when the symptom is observably gone.
 ---
 
-# Seven Gates
+# The Gates
 
 The verification discipline behind `receipts`. When you fix or change something your
 job is not to *claim* it works - it is to *produce a receipt* that proves it, and to
@@ -19,7 +20,7 @@ fix the thing the reporter actually sees.
 This skill is the project-agnostic discipline. Project specifics (the test command,
 the deploy target, what marks a fix-claim) live in `receipts.config.json` - run
 `receipts init` once to create it. The full standard with the real scar behind each
-gate is in `spec/SEVEN-GATES.md`.
+gate is in `spec/GATES.md`.
 
 ## The receipt (the one non-negotiable)
 
@@ -54,6 +55,11 @@ suite, is not.
   visible there, you fixed the wrong one - revert it.
 - **G6 Sweep the twins.** A pattern changed on one surface leaves every sibling
   carrying the old pattern - the next ticket. Sweep them, or note the divergence.
+- **G7 Verify the dependents.** Your change has consumers; a freshly-pulled change may
+  now route through what you edited (e.g. your input field is now a chart's data
+  source). Enumerate the changed surface's dependents, flag the ones new since you
+  branched, and verify those still work - an integration break is neither your surface
+  (G4) nor a twin (G6).
 
 ## The honesty ladder (when you cannot clear a gate)
 

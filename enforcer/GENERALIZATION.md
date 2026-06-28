@@ -91,6 +91,44 @@ verify every symptom; each fix carries its **own** proof (the agent's red->green
 test). So the project-specific surface is bounded: "how do I run your tests and reach
 your build," not "how do I verify any conceivable bug."
 
+## Dependent-test-selection (G7's enforcer assist)
+
+The carried receipt proves the *changed surface* is fixed. G7 asks a second question
+the receipt cannot: did the change break a downstream *consumer* - especially one that
+arrived in a freshly-pulled commit you never saw? The enforcer assists by re-running
+the affected dependents' tests at the PR, on top of the red->green receipt.
+
+Mechanism, in the same base/head terms as the core re-run:
+
+1. **Build the reverse-dependency set.** For the changed files (base..head), compute
+   who imports them. Reuse the repo's code graph if present (e.g. a `graph.json` with
+   consumer edges), else a stack-native import grapher (`dependency-cruiser` / `madge`
+   for JS/TS, `grimp` / `importlab` for Python, `go list -deps` for Go) - the same
+   auto-detect tiering as the test runner.
+2. **Diff against the merge base -> keep only the NEW dependents.** A dependent is new
+   if its file was added in base..head, OR its import edge onto the changed surface
+   appeared in head but not base (build the graph at both commits and diff the edge
+   sets). This is the integration-regression subset - the consumer that did not exist,
+   or did not consume you, when you branched - and it keeps the set small even when the
+   changed file has hundreds of stable dependents.
+3. **Map each new dependent to its tests and run them on head.** Co-located convention
+   (`x.ts` -> `x.test.ts` / `test_x.py`) or "tests that import the dependent." They
+   must PASS - your change must not break its new consumers.
+
+Verdict, folded into the existing PASS / BLOCK / WARN:
+
+- a new dependent whose test FAILS on head -> **BLOCK** (an integration regression the
+  carried receipt would never have caught);
+- a new dependent with **no test** -> **WARN**, naming it ("consumer X is new and
+  affected, no test to re-run") - surfaced, never silently passed;
+- no new dependents, or no import graph for the stack -> nothing added, reported as
+  `dependents not computed` rather than a false all-clear (honest degradation, as
+  above).
+
+Default scope is the NEW dependents only; a `verify_all_dependents` config knob widens
+it to every consumer for high-blast-radius changes, and any cap on the set is logged,
+never silent.
+
 ## The promise to put in the README
 
 Not "verifies anything automatically." The sharper, true one:

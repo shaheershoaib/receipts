@@ -1,10 +1,10 @@
-# The Seven Gates
+# The Gates
 
 A standard for trusting AI-written fixes.
 
 A fix is **not** done because the agent says so, because CI is green, because a unit
 test passed, or because the code "looks right." It is done when the **reported
-symptom is observably gone on the deployed build.** The Seven Gates are what it takes
+symptom is observably gone on the deployed build.** The Gates are what it takes
 to earn that claim.
 
 Each gate exists because skipping it shipped a wrong or unverified "fix" at least
@@ -25,9 +25,11 @@ symptom). A receipt is the symptom itself, re-triggered, refusing to reproduce.
 - **Verify gates (G0, G1, G3, G5)** answer *"did you actually prove it works?"* They
   produce receipts, and they are enforceable at the one chokepoint every team shares
   regardless of which agent they use: the pull request. An enforcer can re-run them.
-- **Target gates (G2, G4, G6)** answer *"did you fix the right thing, all of it?"*
-  There is no artifact for "you fixed the right component" - these live inside the
-  agent's loop and ship as adapters.
+- **Target gates (G2, G4, G6, G7)** answer *"did you fix the right thing, all of it -
+  including what depends on it?"* There is mostly no artifact for "you fixed the right
+  component," so these live inside the agent's loop and ship as adapters. G7 is the
+  bridge case: the agent selects the dependents (especially newly-pulled ones), and the
+  enforcer can re-run their tests at the PR.
 
 ---
 
@@ -142,6 +144,36 @@ turns the sweep from guesswork into a list.)
 
 *Kind: target (agent-side).*
 
+## G7 - Verify the DEPENDENTS of what you changed, especially newly-pulled ones
+
+**Mandate.** Your change has a blast radius beyond the file you touched: other code
+*consumes* what you changed. Before claiming done, enumerate the dependents of the
+changed surface and diff that set against the merge base - so a dependent that arrived
+in a freshly-pulled change (one that did not exist when you branched) is flagged as
+NEW. Verify the affected dependents still work, not just the surface you edited - the
+newly-pulled ones above all, because those are the consumers you have no mental model
+of. A change that is correct in isolation can still break its consumers.
+
+This is the integration-regression gate, and it is distinct from every surface gate:
+G2/G4 pin the surface the reporter SEES, G6 sweeps SIBLINGS that render the same
+pattern - but a downstream CONSUMER is neither. It is the gate that survives a `git
+pull` landing on top of your in-flight change.
+
+**Scar.** An input field was edited as part of a feature. A change pulled from main now
+rendered that same field as a chart fed by the field's value. The field edit was
+correct and verified in isolation - and silently broke the chart, whose input contract
+the edit never accounted for, because the chart was not even in the tree when the
+change was scoped. No single-surface gate catches it: the regression lives in the
+consumer, not the changed surface or its twins.
+
+**Enforcement.** Agent-side for the selection (which dependents exist, which are new
+since the merge base), with an enforcer assist at the PR: compute the files that depend
+on the changed files (from the code graph / import edges), restrict to those whose
+dependency is new since the merge base, and run their tests too - not only the carried
+receipt. See `enforcer/GENERALIZATION.md` (dependent-test-selection).
+
+*Kind: target (agent-side; enforcer can re-run the dependents' tests).*
+
 ---
 
 ## The honesty ladder (when you cannot verify)
@@ -170,7 +202,9 @@ not.
   confirms it is gone. A pasted artifact is not accepted; a re-run is.
 - The **target gates** are carried by the agent adapter (e.g. the Claude Code
   plugin), which makes the agent pin the right surface, fix the surface the reporter
-  sees, and sweep the twins before it ever opens the PR.
+  sees, sweep the twins, and verify the dependents (especially freshly-pulled ones)
+  before it ever opens the PR. G7 also gets an enforcer assist: the enforcer selects
+  the changed files' newly-arrived dependents and runs their tests too.
 - The **memory layer** records what was tried on each surface and how it turned out,
   so a surface with a bad track record is flagged before the next fix, and the team
   stops paying for the same trap twice.

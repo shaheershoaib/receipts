@@ -1,7 +1,7 @@
 {
   "name": "receipts",
   "version": "0.1.0",
-  "description": "Agents need receipts: a verification layer that re-proves an AI fix before you trust it. The Seven Gates standard + a Claude Code adapter + verification memory.",
+  "description": "Agents need receipts: a verification layer that re-proves an AI fix before you trust it. The Gates standard + a Claude Code adapter + verification memory.",
   "repository": "https://github.com/shaheershoaib/receipts",
   "owner": {
     "name": "Shaheer Shoaib"
@@ -10,7 +10,7 @@
     {
       "name": "receipts",
       "source": "./plugin",
-      "description": "The Seven Gates agent adapter: teaches your agent to produce receipts (reproduce-first, verify-by-value, pin the right surface, sweep the twins) so its fixes are verifiable - plus a Stop-hook verification backstop and cross-loop verification memory."
+      "description": "The Gates agent adapter: teaches your agent to produce receipts (reproduce-first, verify-by-value, pin the right surface, sweep the twins) so its fixes are verifiable - plus a Stop-hook verification backstop and cross-loop verification memory."
     }
   ]
 }

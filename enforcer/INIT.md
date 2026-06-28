@@ -35,7 +35,7 @@ project.
 | `build.verify_against` | one environment found -> use it; staging + prod found -> default staging | ask |
 | `claim.issue_link` | scan recent merged PRs for `closes/fixes/resolves #N` | default `closes #(\d+)` |
 | `claim.downgrade_tags` | - | default `unverified-reasoned`, `speculative`, `reverted` |
-| `agent.loop_skills` | `.claude/skills/*/SKILL.md` whose name/body reads like a fix/build loop (loop / fix / retest / feedback / build / parity / ...) | the shipped `seven-gates`; if no project loop exists, scaffold one from the template |
+| `agent.loop_skills` | `.claude/skills/*/SKILL.md` whose name/body reads like a fix/build loop (loop / fix / retest / feedback / build / parity / ...) | the shipped `gates`; if no project loop exists, scaffold one from the template |
 | `agent.staging_query_patterns` / `agent.closeout_fixed_statuses` | - | generic defaults (DB-proxy / query tools; `Pending Retest` / `Verified`) |
 | `agent.repo_name` | `package.json` name, else the directory name | directory name |
 
@@ -48,7 +48,7 @@ of the box two ways:
 - **Register** the project's existing fix/build loop skills into `agent.loop_skills`
   (the Stop hooks watch these for the append-on-exit nudge).
 - **Scaffold** one from `plugin/templates/loop-skill/SKILL.md.tmpl` when the project
-  has none - a thin loop that rides on `seven-gates`, carries the `query_trajectory` /
+  has none - a thin loop that rides on `gates`, carries the `query_trajectory` /
   `append_trajectory` touchpoints, and is filled with the project's facts (repo name,
   test command, deploy host), then registered in `agent.loop_skills` automatically.
 
@@ -68,7 +68,7 @@ receipts init - scanning .
     loop skills myapp-fix-loop               (.claude/skills)
 
   > Which environment should receipts re-verify on?   [staging]
-  > Which skills are your fix/build loops?             [seven-gates, myapp-fix-loop]
+  > Which skills are your fix/build loops?             [gates, myapp-fix-loop]
   > Extra deploy/prod hosts beyond detected?          (blank to skip)
   > By-value query hosts/tools (e.g. a DB proxy)?     (blank to skip)
 Write receipts.config.json with the above?  [Y]/n

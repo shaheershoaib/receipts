@@ -25,7 +25,7 @@
     "on_unreachable_build": "sha-bind-only"
   },
   "agent": {
-    "loop_skills": ["seven-gates", "myapp-fix-loop"],
+    "loop_skills": ["gates", "myapp-fix-loop"],
     "staging_query_patterns": ["proxy.rlwy.net"],
     "closeout_fixed_statuses": ["Fixed - Pending Retest", "Verified"],
     "repo_name": "myapp"

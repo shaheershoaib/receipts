@@ -142,8 +142,8 @@ function buildConfig(d, a) {
       on_unreachable_build: "sha-bind-only",
     },
     agent: {
-      // "seven-gates" (the shipped loop) is always watched; project loops merge in.
-      loop_skills: dedupe(["seven-gates", ...(a.loop_skills || d.loop_skills || [])]),
+      // "gates" (the shipped loop) is always watched; project loops merge in.
+      loop_skills: dedupe(["gates", ...(a.loop_skills || d.loop_skills || [])]),
       staging_query_patterns: a.staging_query_patterns || [],
       closeout_fixed_statuses: a.closeout_fixed_statuses || ["Pending Retest", "Verified"],
       repo_name: a.repo_name || d.repo_name,
@@ -197,7 +197,7 @@ async function init(opts) {
   console.error(`    stack       ${d.stack || (agentHome ? "agent-home (skills, no code)" : "unknown")}`);
   console.error(`    tests       ${d.test_command || (agentHome ? "none here (enforcer config lives in the code repos)" : "NOT DETECTED (you'll set verify.test_command)")}`);
   console.error(`    deploy      ${d.platform === "none" ? "none" : d.platform}`);
-  console.error(`    loop skills ${d.loop_skills.length ? d.loop_skills.join(", ") : "none found (seven-gates ships with the plugin)"}`);
+  console.error(`    loop skills ${d.loop_skills.length ? d.loop_skills.join(", ") : "none found (gates ships with the plugin)"}`);
   console.error("");
 
   const a = {};
@@ -212,10 +212,10 @@ async function init(opts) {
         if (url) a.environments = { [env]: url };
       }
       // Loop-skill harnesses: which skills the trajectory hooks watch + that drive the kb.
-      const loopDef = dedupe(["seven-gates", ...d.loop_skills]).join(", ");
+      const loopDef = dedupe(["gates", ...d.loop_skills]).join(", ");
       a.loop_skills = list(await ask(rl, "Which skills are your fix/build loops? (comma-separated)", loopDef));
       // Offer to scaffold one if the project has no loop skill of its own.
-      const hasProjectLoop = a.loop_skills.some((s) => s !== "seven-gates");
+      const hasProjectLoop = a.loop_skills.some((s) => s !== "gates");
       if (!hasProjectLoop && !opts["no-scaffold"]) {
         const yn = await ask(rl, `No project loop skill found. Scaffold one (${d.repo_name}-fix-loop) from the template?`, "Y");
         if (/^y(es)?$/i.test(yn)) a._scaffold = true;
@@ -229,7 +229,7 @@ async function init(opts) {
     } finally { rl.close(); }
   } else {
     // --yes: register the shipped loop + any detected project loops; scaffold if none.
-    a.loop_skills = dedupe(["seven-gates", ...d.loop_skills]);
+    a.loop_skills = dedupe(["gates", ...d.loop_skills]);
     if (!d.loop_skills.length && !opts["no-scaffold"]) a._scaffold = true;
   }
 

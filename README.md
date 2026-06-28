@@ -40,9 +40,9 @@ never fixed. A *receipt* is the symptom's own acceptance test, re-run against th
 real build, coming back clean. `receipts` re-runs it. The agent does not get to
 grade its own homework.
 
-## How it works: the Seven Gates
+## How it works: the Gates
 
-The Seven Gates (`spec/SEVEN-GATES.md`) are the standard a fix must clear. Each one
+The Gates (`spec/GATES.md`) are the standard a fix must clear. Each one
 exists because skipping it shipped a wrong or unverified "fix" at least once - every
 gate carries the real scar that motivated it.
 
@@ -57,6 +57,7 @@ They split into two kinds:
 | **G2** pin the EXACT flow / component | target | agent-side |
 | **G4** land on the surface the reporter SEES | target | agent-side |
 | **G6** sweep the changed pattern's parallel TWINS | target | agent-side |
+| **G7** verify the DEPENDENTS, esp. newly-pulled ones | target | agent-side (+ enforcer) |
 
 The **verify** gates (did you actually prove it works) are enforceable at the one
 chokepoint every team shares regardless of which agent they use: the PR. The
@@ -65,7 +66,7 @@ ship as adapters.
 
 ## What's in here
 
-- **`spec/`** - the Seven Gates standard. The IP. Each gate + its real scar.
+- **`spec/`** - the Gates standard. The IP. Each gate + its real scar.
 - **`enforcer/`** - the universal piece: a GitHub Action that fails a "fixed" PR
   unless it carries, and *survives*, the receipt (the changed test must be red on
   base, green on head). Agent-agnostic - works no matter who or what wrote the code.
@@ -117,8 +118,8 @@ Honest: the *discipline* is battle-tested - it has run a production codebase's b
 pipeline for months and caught real money-path regressions.
 
 Built and working today:
-- the Seven Gates spec (`spec/SEVEN-GATES.md`)
-- the focused `seven-gates` agent skill + two Stop-hook backstops (the Claude Code adapter)
+- the Gates spec (`spec/GATES.md`)
+- the focused `gates` agent skill + two Stop-hook backstops (the Claude Code adapter)
 - the `trajectory-kb` memory MCP
 - `receipts init` - detects stack + deploy target, confirms, writes `receipts.config.json`; published to npm as [`receipts-cli`](https://www.npmjs.com/package/receipts-cli) (`npx receipts-cli init`)
 - the **CI enforcer** (`enforcer/`) - the red->green re-verification at the PR, as a GitHub Action
