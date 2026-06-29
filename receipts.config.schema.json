@@ -145,6 +145,27 @@
           "description": "Gate IDs to turn off even if `enabled` includes them; takes precedence over `enabled`.",
           "default": []
         },
+        "G7": {
+          "type": "object",
+          "additionalProperties": false,
+          "description": "Dependent-test-selection. The enforcer computes the NEW dependents of the changed source (a freshly-added consumer file, or a freshly-added import edge) and re-runs their co-located tests on head, catching an integration regression the carried receipt never exercises. Built-in support: a JS/TS import scan; for any stack, point `graph` at a consumer graph.",
+          "properties": {
+            "mode": {
+              "enum": ["warn", "block"],
+              "description": "What a failing NEW-dependent test does: warn (default - the reverse-dependency set is heuristic) or block.",
+              "default": "warn"
+            },
+            "graph": {
+              "type": "string",
+              "description": "Optional path (in the repo, read at head) to a consumer graph JSON: an object mapping each importer file to the list of files it imports. Used to compute dependents for stacks the built-in JS/TS scanner does not cover."
+            },
+            "verify_all_dependents": {
+              "type": "boolean",
+              "description": "Widen the scope from NEW dependents (the default - the freshly-routed consumer) to EVERY consumer of the changed surface. Use for high-blast-radius changes; slower and noisier.",
+              "default": false
+            }
+          }
+        },
         "G8": {
           "type": "object",
           "additionalProperties": false,

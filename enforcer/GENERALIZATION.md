@@ -129,6 +129,16 @@ Default scope is the NEW dependents only; a `verify_all_dependents` config knob 
 it to every consumer for high-blast-radius changes, and any cap on the set is logged,
 never silent.
 
+**Status (what ships today).** Implemented in `enforcer/g7.js`: a built-in **JS/TS import
+scan** (new-file AND new-edge detection) and an explicit **consumer graph** (`gates.G7.graph`,
+a JSON map of importer -> imported, for any stack). New dependents map to their co-located
+tests (`x.ts` -> `x.test.ts` / `__tests__/x.spec.tsx`), which are re-run on head: a failure is
+a **warn** by default (the reverse-dep set is heuristic) or a **block** via `gates.G7.mode`,
+and a new dependent with no test is surfaced as a warning, never a silent pass. A stack with
+no JS/TS changes and no graph degrades to "not computed" rather than a false all-clear. The
+stack-native graphers in the design above (`dependency-cruiser` / `grimp` / `go list`) are not
+yet wired - point `gates.G7.graph` at a precomputed graph to cover those stacks meanwhile.
+
 ## The promise to put in the README
 
 Not "verifies anything automatically." The sharper, true one:
