@@ -14,7 +14,7 @@
   "author": "Shaheer Shoaib <shaheershoaib11@gmail.com>",
   "license": "MIT",
   "repository": { "type": "git", "url": "git+https://github.com/shaheershoaib/receipts.git" },
-  "files": ["bin", "plugin/templates", "receipts.config.schema.json", "receipts.config.example.json", "README.md", "LICENSE"],
+  "files": ["bin", "enforcer/verify.js", "enforcer/g7.js", "plugin/templates", "receipts.config.schema.json", "receipts.config.example.json", "README.md", "LICENSE"],
   "engines": {
     "node": ">=18"
   }
