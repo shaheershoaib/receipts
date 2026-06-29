@@ -111,6 +111,10 @@
           "type": "string",
           "description": "The software type, so the gates apply in the right terms - a 'surface' / 'value' / 'terminal action' means something different for a web app vs an API vs a library vs a CLI vs a data pipeline vs infra. A hint the agent reads alongside references/MEDIA.md; free-form and expandable. Common values: web, api, service, library, cli, mobile, desktop, data, ml, infra, database, smart-contract, browser-extension, embedded, game, unknown."
         },
+        "work_type": {
+          "type": "string",
+          "description": "OPTIONAL default work type (fix / feature / migration / refactor / chore). Usually LEFT UNSET - work type is per-PR, not per-project (most repos mix), so the agent determines it per task and a PR signals it with a `work-type:` line in its body. It sets what the receipt asserts (the acceptance criterion), and for refactor/chore it inverts the receipt to 'the full suite stays green' (no behavior change). See references/WORK-TYPES.md."
+        },
         "enabled": {
           "description": "Which gates run here: \"all\", or an explicit array of gate IDs (G0-G10).",
           "default": "all",

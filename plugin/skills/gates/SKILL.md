@@ -39,6 +39,16 @@ mapping applies; if it is unknown or missing, infer the medium from the stack an
 principle. Do NOT default to "use the browser" - read the value where THIS project's
 consumer actually sees it.
 
+**Applying the gates by WORK TYPE:** the spec is written for fixes, but the receipt is just
+TDD and applies to any change - what shifts is what the receipt asserts (the acceptance
+criterion). Determine the work type from the task: a fix reproduces the reported symptom; a
+**feature** writes the acceptance test for the new behavior first (red until it exists); a
+**migration** tests a fixture incl. legacy rows + expand/contract ordering (G10); a
+**refactor** INVERTS the receipt - there is no red-before, the proof is the existing full
+suite staying green (G9), so a test that passes on base too is correct, not a weak receipt.
+See `references/WORK-TYPES.md`. For a refactor/chore, signal it with a `work-type: refactor`
+line in the PR body so the enforcer expects the inverted receipt.
+
 ## The receipt (the one non-negotiable)
 
 Before you claim a fix, write a **red-before / green-after acceptance test** in the

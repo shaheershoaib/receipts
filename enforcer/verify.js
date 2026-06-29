@@ -157,10 +157,16 @@ function main() {
   const degrade = cfg.degrade || {};
   const verify = cfg.verify || {};
   const gates = cfg.gates || {};
+  // Work type (per-PR): a `work-type:` line in the PR body, else gates.work_type. A
+  // refactor/chore changes no behavior, so its receipt inverts (proof = the full suite
+  // staying green on head, not a red->green on a new test).
+  const workType = ((prBody.match(/work[ _-]?type\s*[:=]\s*([a-z]+)/i) || [])[1] || gates.work_type || "").toLowerCase();
+  const inverted = workType === "refactor" || workType === "chore";
 
   // Not a fix-claim -> nothing to re-verify (only skip when a body was given to check).
+  // A work-type-marked PR (e.g. a refactor asserting "no behavior change") IS a claim.
   const issueRe = new RegExp(claim.issue_link || "closes #(\\d+)", "i");
-  if (prBody && !issueRe.test(prBody)) emit("PASS", "not a fix-claim (no issue link) - nothing to re-verify");
+  if (prBody && !issueRe.test(prBody) && !workType) emit("PASS", "not a fix-claim (no issue link) - nothing to re-verify");
 
   // Honest downgrade -> tracked, not blocked (the honesty ladder).
   const tags = claim.downgrade_tags || ["unverified-reasoned", "speculative", "reverted"];
@@ -188,6 +194,27 @@ function main() {
 
   // G10 rollout compatibility: flag a backward-incompatible change to a contract artifact.
   checkContracts(repo, base, head, gates);
+
+  // Inverted receipt: a refactor/chore must NOT change behavior, so the proof is the full
+  // suite staying green on head - not a red->green on a new test. Don't require (or expect)
+  // a carried receipt; run the suite on head instead.
+  if (inverted) {
+    const suiteCmd = verify.suite_command;
+    if (!suiteCmd || /REPLACE_ME/.test(suiteCmd))
+      emit(degrade.on_no_receipt === "warn" ? "WARN" : "BLOCK",
+        `${workType}: a ${workType} changes no behavior, so its receipt is the FULL suite staying green on head - but verify.suite_command is not set. Set it so the enforcer can prove behavior is unchanged, or tag the PR honestly.`);
+    const original = git(repo, "rev-parse HEAD").out.trim();
+    let suite;
+    try {
+      if (!git(repo, `checkout -q -f ${head}`).ok) emit("BLOCK", `cannot checkout head ${head}`);
+      suite = runCmd(repo, suiteCmd);
+    } finally {
+      git(repo, `checkout -q -f ${original}`);
+    }
+    if (!suite.ok)
+      emit("BLOCK", `${workType}: the full suite is NOT green on head - a ${workType} must not change behavior`, (suite.out || "").split("\n").slice(-8).join("\n"));
+    finish(`${workType} verified: the full suite is green on head (no behavior change) - G9`);
+  }
 
   // The receipt = test files added/changed between base and head.
   const diff = git(repo, `diff --name-only ${base}..${head}`);

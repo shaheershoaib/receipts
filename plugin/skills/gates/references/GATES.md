@@ -20,6 +20,12 @@ symptom). A receipt is the symptom itself, re-triggered, refusing to reproduce.
 
 **The principle: don't trust, re-verify.** The agent does not grade its own homework.
 
+This spec is written for the most common case, a bug fix. The same mechanic applies to
+any work type - the receipt just asserts that change's **acceptance criterion**: the
+reported symptom for a fix, the new behavior for a feature (red until it exists), the
+transformed data incl. legacy rows for a migration, and for a refactor it inverts to "the
+existing suite stays green" (no behavior change). See `references/WORK-TYPES.md`.
+
 ## Two kinds of gate
 
 - **Verify gates (G0, G1, G3, G5, G9)** answer *"did you actually prove it works?"* They
@@ -45,6 +51,13 @@ reality: the regression is often in code you never touched.
 record what you saw. That recorded observation is the exact thing your verification
 must later show GONE. "My change is deployed/live" is NOT verification - your change
 being live is not the same as the reporter's symptom being resolved.
+
+Beyond a fix, "the symptom" generalizes to the change's **acceptance criterion**: for a
+feature, write the acceptance test for the new behavior first (it is red until the feature
+exists); for a migration, a fixture incl. legacy rows that fails until migrated; for a
+refactor there is no symptom - the receipt inverts to "the existing suite stays green" (see
+`references/WORK-TYPES.md`). The rule is the same: pin what "done" looks like, observably,
+before you build.
 
 **Scar.** A "modal is cut off" report was read as a vertical footer-clip. A height
 cap was built, gated, deployed, and "verified by value" that the cap applied - all
