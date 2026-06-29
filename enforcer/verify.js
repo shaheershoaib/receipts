@@ -74,6 +74,77 @@ function gateOn(gates, id) {
   return Array.isArray(en) ? en.includes(id) : true;
 }
 
+// --- G10 rollout compatibility: a generic, zero-dep backward-compat check on changed
+// contract artifacts. JSON contracts (OpenAPI/JSON-Schema/AsyncAPI/introspection) get a
+// structural breaking-diff (a removed field/path, a removed enum value, a newly-required
+// field, a narrowed type); other formats (GraphQL SDL, proto, yaml) get a "changed -
+// verify manually" warning rather than false precision. Default verdict is WARN (a
+// consumer can opt into block via gates.G10.mode). ---
+const CONTRACT_RE = [
+  /(^|\/)(openapi|swagger|asyncapi)\.(ya?ml|json)$/i,
+  /\.(graphql|gql|proto|avsc)$/i,
+  /(^|\/)schema\.(graphql|json)$/i,
+];
+function globToRe(g) {
+  return new RegExp("^" + g.split("*").map((s) => s.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")).join(".*") + "$");
+}
+function isContractFile(f, extra) {
+  if (CONTRACT_RE.some((re) => re.test(f))) return true;
+  return (extra || []).some((g) => { try { return globToRe(g).test(f) || f.includes(g.replace(/\*/g, "")); } catch { return false; } });
+}
+function walkBreaks(path, a, b, out, depth) {
+  if (depth > 8 || out.length > 50) return;
+  if (Array.isArray(a)) {
+    if (/enum$/i.test(path) && Array.isArray(b))
+      for (const v of a) if (typeof v !== "object" && !b.includes(v)) out.push(`removed enum value ${JSON.stringify(v)} at ${path}`);
+    return;
+  }
+  if (a && typeof a === "object") {
+    if (!b || typeof b !== "object" || Array.isArray(b)) { out.push(`removed or retyped object at ${path || "(root)"}`); return; }
+    if (Array.isArray(a.required) && Array.isArray(b.required))
+      for (const r of b.required) if (!a.required.includes(r)) out.push(`added required field "${r}" at ${path || "(root)"}`);
+    for (const k of Object.keys(a)) {
+      const cp = path ? path + "." + k : k;
+      if (!(k in b)) { out.push(`removed "${cp}"`); continue; }
+      if (k === "type" && typeof a[k] === "string" && typeof b[k] === "string" && a[k] !== b[k])
+        out.push(`type changed at ${path || "(root)"}: ${a[k]} -> ${b[k]}`);
+      walkBreaks(cp, a[k], b[k], out, (depth || 0) + 1);
+    }
+  }
+}
+function contractBreaks(file, baseSrc, headSrc) {
+  if (/\.json$/i.test(file) || /^\s*[{[]/.test(baseSrc)) {
+    try {
+      const out = [];
+      walkBreaks("", JSON.parse(baseSrc), JSON.parse(headSrc), out, 0);
+      return { parsed: true, breaks: out.map((x) => `${file}: ${x}`) };
+    } catch { /* not valid JSON -> unparseable */ }
+  }
+  return { parsed: false, breaks: [] };
+}
+function checkContracts(repo, base, head, gates) {
+  if (!gateOn(gates, "G10")) return;
+  const g10 = (gates && gates.G10) || {};
+  const changed = git(repo, `diff --name-only ${base}..${head}`).out.split("\n").map((s) => s.trim()).filter(Boolean);
+  const files = changed.filter((f) => isContractFile(f, g10.contract_paths));
+  if (!files.length) return;
+  const breaks = [], unparseable = [];
+  for (const f of files) {
+    const bs = git(repo, `show "${base}:${f}"`), hs = git(repo, `show "${head}:${f}"`);
+    if (!bs.ok || !hs.ok) continue; // an added/removed file is not a change to an existing contract
+    const r = contractBreaks(f, bs.out, hs.out);
+    if (r.parsed) breaks.push(...r.breaks); else unparseable.push(f);
+  }
+  if (breaks.length) {
+    const shown = breaks.slice(0, 6).join("; ") + (breaks.length > 6 ? ` (+${breaks.length - 6} more)` : "");
+    const msg = `G10 rollout compatibility: potentially BREAKING contract change - ${shown}. A consumer still on the old side breaks during the deploy window; make it backward-compatible, sequence the deploys, or bump the major version.`;
+    if ((g10.mode || "warn") === "block") emit("BLOCK", msg);
+    warn(msg);
+  }
+  if (unparseable.length)
+    warn(`G10: contract file(s) changed (${unparseable.join(", ")}) - no structural parser for this format; verify backward-compatibility across the deploy window manually.`);
+}
+
 function main() {
   ARGS = parseArgs(process.argv.slice(2));
   const repo = path.resolve(ARGS.repo || process.cwd());
@@ -114,6 +185,9 @@ function main() {
       warn("G8 fresh base: could not determine base freshness (fetch base+head with fetch-depth: 0).");
     }
   }
+
+  // G10 rollout compatibility: flag a backward-incompatible change to a contract artifact.
+  checkContracts(repo, base, head, gates);
 
   // The receipt = test files added/changed between base and head.
   const diff = git(repo, `diff --name-only ${base}..${head}`);

@@ -139,8 +139,18 @@
         "G10": {
           "type": "object",
           "additionalProperties": false,
-          "description": "Rollout-compatibility selectors.",
+          "description": "Rollout-compatibility selectors. The enforcer back-compat-checks changed contract artifacts on a PR (built-in: OpenAPI/Swagger/AsyncAPI/JSON-Schema get a structural breaking-diff; GraphQL/proto/yaml get a 'changed - verify manually' warning).",
           "properties": {
+            "contract_paths": {
+              "type": "array",
+              "items": { "type": "string" },
+              "description": "Extra globs of contract artifacts to back-compat-check, on top of the built-in detection (e.g. \"api/schema.json\", \"**/*.proto\", \"proto/**\")."
+            },
+            "mode": {
+              "enum": ["warn", "block"],
+              "description": "What a detected breaking contract change does: warn (default) or block.",
+              "default": "warn"
+            },
             "contract_pairs": {
               "type": "array",
               "description": "Producer/consumer halves whose contract must stay compatible across the deploy window.",
