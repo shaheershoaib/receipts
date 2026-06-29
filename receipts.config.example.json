@@ -25,6 +25,11 @@
     "on_no_receipt": "require-downgrade-tag",
     "on_unreachable_build": "sha-bind-only"
   },
+  "gates": {
+    "enabled": "all",
+    "disabled": ["G10"],
+    "G8": { "integration_branch": "main" }
+  },
   "agent": {
     "loop_skills": ["gates", "myapp-fix-loop"],
     "staging_query_patterns": ["proxy.rlwy.net"],

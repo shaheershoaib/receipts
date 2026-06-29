@@ -102,6 +102,57 @@
         }
       }
     },
+    "gates": {
+      "type": "object",
+      "description": "Which gates apply to this project, and per-gate selectors. Gates are referenced by ID (G0-G10) - the shared vocabulary across the spec, the `gates` skill, the Stop hooks, and the enforcer. `receipts init` writes a safe default (all on); disable the gates that do not fit (e.g. G10 in a single repo with no split deploy, or the deploy-surface gates in a library with no deploy). The skill reads this to know which gates to apply; the enforcer reads it to know which checks to run.",
+      "additionalProperties": false,
+      "properties": {
+        "enabled": {
+          "description": "Which gates run here: \"all\", or an explicit array of gate IDs (G0-G10).",
+          "default": "all",
+          "oneOf": [
+            { "const": "all" },
+            { "type": "array", "items": { "type": "string", "pattern": "^G(10|[0-9])$" } }
+          ]
+        },
+        "disabled": {
+          "type": "array",
+          "items": { "type": "string", "pattern": "^G(10|[0-9])$" },
+          "description": "Gate IDs to turn off even if `enabled` includes them; takes precedence over `enabled`.",
+          "default": []
+        },
+        "G8": {
+          "type": "object",
+          "additionalProperties": false,
+          "description": "Fresh-base selectors.",
+          "properties": {
+            "integration_branch": {
+              "type": "string",
+              "description": "The branch whose tip 'fresh base' is measured against (e.g. main, dev-django). The enforcer also reads the PR's base automatically; this documents the intended integration branch for the agent."
+            }
+          }
+        },
+        "G10": {
+          "type": "object",
+          "additionalProperties": false,
+          "description": "Rollout-compatibility selectors.",
+          "properties": {
+            "contract_pairs": {
+              "type": "array",
+              "description": "Producer/consumer halves whose contract must stay compatible across the deploy window.",
+              "items": {
+                "type": "object",
+                "additionalProperties": false,
+                "properties": {
+                  "producer": { "type": "string" },
+                  "consumer": { "type": "string" }
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "agent": {
       "type": "object",
       "description": "How the agent-side Stop hooks bind to THIS project: which skills are fix/build loops (watched by the trajectory reminder + carrying the kb touchpoints), what extra by-value-query patterns count, and which tracker statuses mean 'fixed'. The hooks ship generic defaults; these MERGE OVER them (never replace the generics, so a clean install still works). Written by `receipts init`. Deploy-host patterns live in `build.deploy_host_patterns` (shared with the enforcer).",

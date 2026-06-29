@@ -115,7 +115,14 @@ function detect(dir) {
   } catch { /* no .claude/skills dir */ }
 
   const repo_name = (pkg && pkg.name) || path.basename(dir);
-  return { stack, test_command, suite_command, platform, sha_source, deploy_host_patterns, loop_skills, repo_name };
+
+  // --- default/integration branch (for G8 fresh-base): current branch from .git/HEAD ---
+  let default_branch = "main";
+  const head = readText(at(".git/HEAD"));
+  const bm = head && head.match(/ref:\s*refs\/heads\/(\S+)/);
+  if (bm) default_branch = bm[1];
+
+  return { stack, test_command, suite_command, platform, sha_source, deploy_host_patterns, loop_skills, repo_name, default_branch };
 }
 
 function buildConfig(d, a) {
@@ -149,10 +156,17 @@ function buildConfig(d, a) {
       repo_name: a.repo_name || d.repo_name,
     },
   };
+  // Which gates apply here (by ID). Safe default = all on; the project disables what
+  // does not fit. The skill reads this to know what to apply; the enforcer, which checks to run.
+  cfg.gates = {
+    enabled: "all",
+    disabled: a.gates_disabled || [],
+    G8: { integration_branch: a.integration_branch || d.default_branch || "main" },
+  };
   // Agent-home (skills + cwd, no tests and no deploy): keep only version/claim/agent;
-  // the enforcer config (build/verify) belongs in the code repos.
+  // the enforcer config (build/verify/gates) belongs in the code repos.
   if (!(a.test_command || d.test_command) && d.platform === "none") {
-    delete cfg.build; delete cfg.verify; delete cfg.degrade;
+    delete cfg.build; delete cfg.verify; delete cfg.degrade; delete cfg.gates;
     delete cfg.agent.repo_name; // no single repo at the agent home; each append names its repo
   }
   return cfg;
@@ -224,6 +238,12 @@ async function init(opts) {
       if (xh.length) a.extra_hosts = xh;
       const sq = list(await ask(rl, "By-value query hosts/tools (e.g. a DB proxy host)? (blank to skip)", ""));
       if (sq.length) a.staging_query_patterns = sq;
+      // Gate applicability (G0-G10): default all-on; disable what does not fit this project.
+      if (!agentHome) {
+        a.integration_branch = await ask(rl, "Integration branch for fresh-base checks (G8)?", d.default_branch || "main");
+        const dis = list(await ask(rl, "Gates to disable here? (comma-sep IDs, e.g. G10 if no separate repo consumes it)", ""));
+        if (dis.length) a.gates_disabled = dis;
+      }
       const go = await ask(rl, "Write receipts.config.json with the above?", "Y");
       if (!/^y(es)?$/i.test(go)) { console.error("Aborted."); rl.close(); process.exit(1); }
     } finally { rl.close(); }

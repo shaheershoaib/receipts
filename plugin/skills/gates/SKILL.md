@@ -19,8 +19,16 @@ fix the thing the reporter actually sees.
 
 This skill is the project-agnostic discipline. Project specifics (the test command,
 the deploy target, what marks a fix-claim) live in `receipts.config.json` - run
-`receipts init` once to create it. The full standard with the real scar behind each
-gate is in `spec/GATES.md`.
+`receipts init` once to create it.
+
+**Which gates apply here:** honor `receipts.config.json` `gates.enabled` / `gates.disabled`
+(default: all). A project disables the gates that do not fit it - e.g. G10 in a single
+repo with no split deploy, or the deploy-surface gates in a library with no deploy.
+
+**The deep how-to per gate** - the full mandate, the real scar, and the exact enforcement
+for each gate - is bundled with this skill in `references/GATES.md`. Read the section for
+a gate when you need the detailed procedure (e.g. G8's rebase + migration-leaf check, or
+G10's backward-compatible contract change); the list below is the gist.
 
 ## The receipt (the one non-negotiable)
 

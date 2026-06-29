@@ -64,6 +64,16 @@ function emit(verdict, reason, detail) {
 function warn(reason) { WARNINGS.push(reason); }
 function finish(reason) { emit(WARNINGS.length ? "WARN" : "PASS", reason); }
 
+// A gate runs unless the project's `gates` config turns it off (by ID, G0-G10).
+// No `gates` block => all on (backward-compatible).
+function gateOn(gates, id) {
+  if (!gates) return true;
+  if ((gates.disabled || []).includes(id)) return false;
+  const en = gates.enabled;
+  if (!en || en === "all") return true;
+  return Array.isArray(en) ? en.includes(id) : true;
+}
+
 function main() {
   ARGS = parseArgs(process.argv.slice(2));
   const repo = path.resolve(ARGS.repo || process.cwd());
@@ -75,6 +85,7 @@ function main() {
   const claim = cfg.claim || {};
   const degrade = cfg.degrade || {};
   const verify = cfg.verify || {};
+  const gates = cfg.gates || {};
 
   // Not a fix-claim -> nothing to re-verify (only skip when a body was given to check).
   const issueRe = new RegExp(claim.issue_link || "closes #(\\d+)", "i");
@@ -92,7 +103,7 @@ function main() {
   // earned on a stale base is a green against code that will not ship (the densest
   // multi-dev scar: a parallel push moved the base mid-build, or the checkout was behind).
   const freshMode = verify.require_fresh_base || "warn";
-  if (freshMode !== "off") {
+  if (gateOn(gates, "G8") && freshMode !== "off") {
     const anc = git(repo, `merge-base --is-ancestor ${base} ${head}`);
     if (!anc.ok && anc.code === 1) {
       const behind = git(repo, `rev-list --count ${head}..${base}`).out.trim() || "some";
@@ -134,7 +145,7 @@ function main() {
     git(repo, `checkout -q -f ${head}`);
     green = runCmd(repo, cmdFor(tests)); // expect PASS = bug gone
     // G9 full-scope green: run the WHOLE suite on head, not only the changed test.
-    if (green.ok && haveSuite) suite = runCmd(repo, suiteCmd);
+    if (green.ok && haveSuite && gateOn(gates, "G9")) suite = runCmd(repo, suiteCmd);
   } finally {
     git(repo, `checkout -q -f ${original}`);
   }
@@ -145,7 +156,7 @@ function main() {
     emit("BLOCK", "the fix does not pass its own receipt test on head", (green.out || "").split("\n").slice(-8).join("\n"));
   if (haveSuite && suite && !suite.ok)
     emit("BLOCK", "G9 full-scope green: the fix passes its own receipt but BREAKS the full suite - a regression in code the changed test never exercised. Fix it, or carry a downgrade tag.", (suite.out || "").split("\n").slice(-8).join("\n"));
-  if (!haveSuite)
+  if (gateOn(gates, "G9") && !haveSuite)
     warn("G9 full-scope green not checked: set verify.suite_command so the enforcer runs the full suite on head (the regression is often outside the changed test).");
   finish("receipt verified: red on base, green on fix - the symptom is reproduced and now gone");
 }

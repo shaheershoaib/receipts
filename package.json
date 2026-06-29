@@ -1,12 +1,13 @@
 {
   "name": "receipts-cli",
-  "version": "0.1.5",
+  "version": "0.1.6",
   "description": "Verification gates for AI-written code - re-prove an agent's fix before you trust it.",
   "bin": {
     "receipts": "bin/receipts.js"
   },
   "scripts": {
-    "init": "node bin/receipts.js init"
+    "init": "node bin/receipts.js init",
+    "build:refs": "node -e \"require('fs').copyFileSync('spec/GATES.md','plugin/skills/gates/references/GATES.md')\""
   },
   "keywords": ["verification", "ai-agents", "code-review", "ci", "gates", "claude-code"],
   "author": "Shaheer Shoaib <shaheershoaib11@gmail.com>",

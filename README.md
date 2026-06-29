@@ -167,8 +167,9 @@ and an `examples/` demo of a caught wrong-fix.
 `receipts-cli` is on npm. To cut a new version:
 
 1. Bump `version` in `package.json` (and `plugin/.claude-plugin/plugin.json` too if the plugin itself changed).
-2. If you edited `plugin/mcp/trajectory-kb/index.js`, rebuild the bundled MCP server: `cd plugin/mcp/trajectory-kb && npm run build`, then commit the regenerated `server.bundle.mjs`.
-3. `npm publish`.
+2. If you edited `spec/GATES.md`, run `npm run build:refs` to sync the bundled skill reference (`plugin/skills/gates/references/GATES.md`, the deep how-to the agent reads on a stranger's install), then commit it.
+3. If you edited `plugin/mcp/trajectory-kb/index.js`, rebuild the bundled MCP server: `cd plugin/mcp/trajectory-kb && npm run build`, then commit the regenerated `server.bundle.mjs`.
+4. `npm publish`.
 
 npm requires an auth token to publish **even with no 2FA** on the account. One-time: create a **Granular Access Token** (npmjs.com -> Access Tokens) with **Packages and scopes = Read and write, "All packages"** (Organizations = No access; no org needed), then `npm config set //registry.npmjs.org/:_authToken=<TOKEN>`. (Classic "Automation" tokens also work where the account still offers them.)
 
