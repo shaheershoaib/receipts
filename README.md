@@ -117,6 +117,36 @@ project. See [enforcer/GENERALIZATION.md](enforcer/GENERALIZATION.md) for how,
 [enforcer/INIT.md](enforcer/INIT.md) for what `init` detects vs asks, and
 [receipts.config.example.json](receipts.config.example.json) for the output.
 
+## How it activates (and making it always-on)
+
+Installing the plugin auto-loads three things from the plugin root - no `settings.json`
+edits, no `claude mcp add`:
+
+- the **`gates` skill** - the agent invokes it when your task matches its description
+  ("fixing a bug, addressing a tester/issue report, or about to claim a change is
+  done/fixed/working"). The skill *body* is the procedure: reproduce-first, the
+  red->green receipt, the gate list, the honesty ladder, the trajectory touchpoints.
+- the **two Stop hooks** - they fire on every stop-cycle, regardless of the model: one
+  blocks a "fixed" close-out that lacks deployed-build evidence, the other nudges a
+  trajectory-kb entry at a loop exit.
+- the **`trajectory-kb` MCP** - the verification memory the skill queries and appends.
+
+These form a gradient: the skill is a model-layer **nudge** (it is invoked by
+description-match, not guaranteed), while the Stop hooks and the [CI enforcer](enforcer/)
+are **deterministic** - they hold even if the agent never invokes the skill. The skill
+*teaches* the discipline; the hooks and the enforcer *enforce* it.
+
+To make the discipline always-on at the model layer too (not just nudged), add one line
+to your project's `CLAUDE.md` / `AGENTS.md`:
+
+```
+When fixing a bug, addressing tester or issue feedback, or about to claim a change is
+"fixed", invoke the `gates` skill first and follow it.
+```
+
+Or register a `SessionStart` hook that injects the same instruction. Even without this,
+the deterministic backstops still apply - this just hardens the model-layer trigger.
+
 ## Status
 
 Honest: the *discipline* is battle-tested - it has run a production codebase's bug
