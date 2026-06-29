@@ -262,7 +262,10 @@ def main():
     global DEPLOYED_HOST, STAGING_QUERY, DOWNGRADE, FIXED_STATUSES
     cfg = load_receipts_config(data.get("cwd"))
     agent = cfg.get("agent") or {}
-    build = cfg.get("build") or {}
+    # A non-dict `build` (e.g. a typo'd `"build": "none"`) must not crash the hook or let it
+    # silently stand down - coerce to {} so .get is safe and the stand-down check below sees
+    # no valid build block, i.e. keeps enforcing.
+    build = cfg.get("build") if isinstance(cfg.get("build"), dict) else {}
     claim = cfg.get("claim") or {}
     DEPLOYED_HOST = _extend(DEFAULT_DEPLOYED_HOST_SRC, build.get("deploy_host_patterns"))
     STAGING_QUERY = _extend(DEFAULT_STAGING_QUERY_SRC, agent.get("staging_query_patterns"))
@@ -276,9 +279,13 @@ def main():
     # agent-home: skills + session cwd, the code repos deploy elsewhere) is left alone, so
     # the split-topology case still enforces. Honors gates.enabled/disabled like the enforcer.
     gates = cfg.get("gates") or {}
-    if "build" in cfg:
-        url_deploy = build.get("sha_source") in ("github-deployments", "github-status")
-        if (not url_deploy) or not (gate_on(gates, "G1") and gate_on(gates, "G3")):
+    if isinstance(cfg.get("build"), dict):
+        # Stand down ONLY on an EXPLICIT no-URL-deploy build (a library/CLI/artifact) or an
+        # explicit G1/G3 disable. A missing or typo'd sha_source is treated as unknown ->
+        # keep enforcing (fail toward verification), so a malformed build block cannot
+        # silently weaken the gate.
+        explicit_no_url = build.get("sha_source") in ("none", "ci-artifact")
+        if explicit_no_url or not (gate_on(gates, "G1") and gate_on(gates, "G3")):
             return
 
     try:

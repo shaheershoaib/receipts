@@ -302,3 +302,19 @@ not.
 - The **memory layer** records what was tried on each surface and how it turned out,
   so a surface with a bad track record is flagged before the next fix, and the team
   stops paying for the same trap twice.
+
+## What the Gates do NOT defend against
+
+The enforcer re-runs the fix's own receipt and the project's own tests. That makes it a
+referee against **self-deception and mistakes** - the agent's "Fixed" when the symptom is
+still there, a green that tested the wrong thing, a fix on the wrong surface, a stale base.
+It is NOT a security boundary against a **hostile author**: the test command and the code it
+runs come from the changed branch, so a PR can in principle make its own tests lie (edit the
+test script, a wrapper, or the runner so it always exits 0). receipts shrinks the easy
+bypasses - it reads its own config from the trusted **base** commit (not the PR head),
+rejects exit-masking test commands (G9), and refuses shell-metacharacter paths - but it
+cannot make a branch's own tests unsubvertible. That is what human review of the diff
+(especially of test / harness / config changes) and branch protection are for. The Gates
+raise the floor on honesty; they do not replace review. Likewise the G10 contract check is a
+best-effort structural diff for common breaking changes, not a complete contract differ -
+pair it with a dedicated tool (e.g. oasdiff) where full coverage matters.

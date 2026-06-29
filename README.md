@@ -69,6 +69,13 @@ ship as adapters. G7, G8, and G10 are the **multi-dev gates**: the failures that
 only happen because other people are pushing in parallel and the codebase changes
 under you. G9 is amplified by the same reality.
 
+**What it is not:** a referee against self-deception and mistakes, not a security boundary
+against a hostile author. The enforcer re-runs the branch's own tests, so a PR could in
+principle make them lie; receipts closes the easy bypasses (it reads its config from the
+trusted base commit, rejects exit-masking test commands, refuses shell-metacharacter paths)
+but does not replace human review of the diff or branch protection. It raises the floor on
+honesty.
+
 ## What's in here
 
 - **`spec/`** - the Gates standard. The IP. Each gate + its real scar.
