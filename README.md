@@ -161,10 +161,13 @@ pipeline for months and caught real money-path regressions.
 
 Built and working today:
 - the Gates spec (`spec/GATES.md`)
-- the focused `gates` agent skill + two Stop-hook backstops (the Claude Code adapter)
+- the focused `gates` agent skill + two Stop-hook backstops (the Claude Code adapter), tracker-agnostic (Notion / Linear / Jira / GitHub)
 - the `trajectory-kb` memory MCP
 - `receipts init` - detects stack + deploy target, confirms, writes `receipts.config.json`; published to npm as [`receipts-cli`](https://www.npmjs.com/package/receipts-cli) (`npx receipts-cli init`)
-- the **CI enforcer** (`enforcer/`) - the red->green re-verification at the PR, as a GitHub Action
+- the **verification engine** as both a **CI enforcer** (`enforcer/`, a GitHub Action) and a **local CLI** (`receipts verify` / `replay` / `explain`) - one engine, the red->green re-verification at the PR or on your machine
+- **replayable receipts** - every verification can emit a machine-readable evidence artifact (`--receipt-out`, schema in `spec/RECEIPT.md`): base/head, verdict, every command run with its exit code, the red->green proof. `receipts replay` re-runs it; `receipts explain` reads it
+- **G7 dependent-test-selection** - the enforcer re-runs the tests of consumers that newly route through the changed surface (JS/TS scan + an explicit graph for any stack)
+- the enforcer **verifies itself**: an adversarial test suite (per gate: valid / invalid / malicious receipt) runs in CI, and receipts' enforcer gates receipts' own PRs
 
 Next: `verify.live_drive` for symptoms a test can't express (drive the deployed app),
 and an `examples/` demo of a caught wrong-fix.
