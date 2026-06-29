@@ -69,11 +69,16 @@ function runCmd(repo, cmd) {
   catch (e) { return { ok: false, out: (e.stdout || "") + (e.stderr || ""), code: e.status }; }
 }
 
-// True if a command can mask its own non-zero exit: a `;` (sequencing), `||` (or-true), or
-// a single `|` (the last pipe stage's exit wins). `&&` is fine - it propagates failure.
+// Best-effort lint against ACCIDENTAL exit-masking (the `npm test ; echo` footgun): a `;`
+// (sequencing), `||` (or-true), a single `|` (last pipe stage wins), a background `&`, a
+// newline (sequencing), a backtick or `$(` (command substitution that can swallow the exit).
+// `&&` is fine - it propagates failure. NOT exhaustive: a determined config author can always
+// write a command that exits 0 (the threat model - receipts cannot make a branch's own tests
+// unsubvertible; see spec/GATES.md "What the Gates do NOT defend against").
 function masksExit(cmd) {
   const c = String(cmd || "");
-  return /;/.test(c) || /\|\|/.test(c) || /\|/.test(c.replace(/\|\|/g, ""));
+  return /;/.test(c) || /\|\|/.test(c) || /\|/.test(c.replace(/\|\|/g, "")) ||
+    /&/.test(c.replace(/&&/g, "")) || /[\n\r]/.test(c) || /`/.test(c) || /\$\(/.test(c);
 }
 
 function emit(verdict, reason, detail) {
@@ -188,6 +193,9 @@ function main() {
   const { base, head } = ARGS;
   if (!base || !head) emit("BLOCK", "usage: --base <sha> --head <sha>");
   const prBody = ARGS["pr-body-file"] ? fs.readFileSync(ARGS["pr-body-file"], "utf8") : (ARGS["pr-body"] || "");
+  // A body ARG was supplied (even if empty) - distinct from "no body to check". An empty
+  // body with no issue link is "not a fix-claim", not a missing receipt.
+  const bodyProvided = ARGS["pr-body-file"] !== undefined || ARGS["pr-body"] !== undefined;
 
   // Config from the BASE commit (trusted), NOT the PR head - else a PR can edit its own
   // receipts.config.json to disable the gate. An explicit --config path is local/trusted.
@@ -204,8 +212,14 @@ function main() {
   }
   let cfg;
   try { cfg = JSON.parse(cfgRaw); } catch { emit("BLOCK", "receipts.config.json is not valid JSON"); }
-  if (configFromHead)
-    warn("config read from the PR head, not the base (receipts.config.json is not on base yet) - a PR can alter its own gate this way; once it is merged via a trusted PR, the enforcer reads it from base.");
+  if (configFromHead) {
+    warn("config read from the PR head, not the base (receipts.config.json is not on base yet) - once it is merged via a trusted PR, the enforcer reads it from base.");
+    // On first setup the PR controls its own config, so do NOT honor head's gate-RELAXING
+    // fields - force the strict defaults for the security-relevant ones (issue_link /
+    // downgrade tags / on_no_receipt / gate-enablement). Keep verify (the plumbing needed to
+    // run the tests at all; masksExit still guards it).
+    cfg.claim = {}; cfg.degrade = {}; cfg.gates = {};
+  }
 
   const claim = cfg.claim || {};
   const degrade = cfg.degrade || {};
@@ -222,7 +236,7 @@ function main() {
   const inverted = (workType === "refactor" || workType === "chore") && !isFixClaim;
 
   // Not a fix-claim and no work-type -> nothing to re-verify.
-  if (prBody && !isFixClaim && !workType) emit("PASS", "not a fix-claim (no issue link) - nothing to re-verify");
+  if (bodyProvided && !isFixClaim && !workType) emit("PASS", "not a fix-claim (no issue link) - nothing to re-verify");
 
   // Honest downgrade -> tracked, not blocked (the honesty ladder).
   const tags = claim.downgrade_tags || ["unverified-reasoned", "speculative", "reverted"];
@@ -255,12 +269,14 @@ function main() {
   if (changed.includes("receipts.config.json"))
     warn("this PR changes receipts.config.json - the enforcer ran with the BASE config (the change takes effect after merge); review the config change.");
 
-  // G9 unmasked: a test/suite command that can hide its own exit code cannot be trusted.
+  // G9 unmasked: a command that can hide its own exit code cannot be trusted - but only
+  // check a command that will actually RUN (test_command on the normal receipt path; suite
+  // on the inverted path or when G9 is enabled), so a disabled/unused command is not a false block.
   const testCmd = verify.test_command;
-  if (testCmd && masksExit(testCmd))
-    emit("BLOCK", "verify.test_command can mask its own exit code (it contains ; , || , or a pipe), so a green from it cannot be trusted (G9). Use a single command whose own exit is the test result, or wrap it in a script.");
-  if (verify.suite_command && masksExit(verify.suite_command))
-    emit("BLOCK", "verify.suite_command can mask its own exit code (; , || , or a pipe) - a green cannot be trusted (G9). Use a clean command or a script.");
+  if (!inverted && testCmd && masksExit(testCmd))
+    emit("BLOCK", "verify.test_command can mask its own exit code (; , || , pipe, background &, newline, or command substitution), so a green from it cannot be trusted (G9). Use a single command whose own exit is the test result, or wrap it in a script.");
+  if ((inverted || gateOn(gates, "G9")) && verify.suite_command && masksExit(verify.suite_command))
+    emit("BLOCK", "verify.suite_command can mask its own exit code - a green cannot be trusted (G9). Use a clean command or a script.");
 
   // Inverted receipt: a refactor/chore changes no behavior, so the proof is the full suite
   // staying green on head - not a red->green on a new test.
@@ -288,10 +304,12 @@ function main() {
     if (noReceiptMode === "warn") emit("WARN", "no receipt (no test added/changed) - allowed by config, but unverified");
     emit("BLOCK", "no receipt: this fix-claim adds no acceptance test. Add a test that FAILS before and PASSES after the fix, or tag the PR 'unverified-reasoned' / 'speculative'. (A behavior-preserving change: tag it `work-type: refactor`.)");
   }
-  // Path safety: these get interpolated into the shell test command.
-  const unsafe = tests.filter((f) => UNSAFE_PATH.test(f));
+  // Path safety: these get interpolated into the shell test command (shell metacharacters)
+  // and passed as test-runner args / git pathspecs (a leading "-" reads as a flag, a leading
+  // ":" as git pathspec magic). Refuse rather than run.
+  const unsafe = tests.filter((f) => UNSAFE_PATH.test(f) || /^[-:]/.test(f));
   if (unsafe.length)
-    emit("BLOCK", `refusing to run: changed test path(s) contain shell metacharacters: ${unsafe.join(", ")}`);
+    emit("BLOCK", `refusing to run: changed test path(s) are unsafe (shell metacharacters, or a leading - / : a test runner or git pathspec could misread): ${unsafe.join(", ")}`);
 
   if (!testCmd || /REPLACE_ME/.test(testCmd))
     emit("BLOCK", "verify.test_command is not set in receipts.config.json (run `receipts init`)");
