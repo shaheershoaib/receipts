@@ -1,0 +1,25 @@
+{
+  "version": 1,
+  "claim": {
+    "issue_link": "closes #(\\d+)",
+    "downgrade_tags": ["unverified-reasoned", "speculative", "reverted"]
+  },
+  "build": {
+    "sha_source": "none",
+    "platform": "none"
+  },
+  "verify": {
+    "test_command": "node --test {test}",
+    "suite_command": "npm test"
+  },
+  "degrade": {
+    "on_no_receipt": "require-downgrade-tag",
+    "on_unreachable_build": "sha-bind-only"
+  },
+  "gates": {
+    "medium": "cli",
+    "enabled": "all",
+    "disabled": ["G4", "G5"],
+    "G8": { "integration_branch": "main" }
+  }
+}

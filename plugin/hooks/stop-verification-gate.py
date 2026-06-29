@@ -9,8 +9,9 @@ DEPLOYED build. The tester then catches it and resubmits. The verification gate
 gets skipped under the pull-to-finish. This hook is that referee.
 
 Fires (decision:block, at most once per stop-cycle) when, this session:
-  * a ticket was moved to a "fixed" status (the "claiming fixed" action: a
-    notion-update-page setting that Status), AND
+  * a ticket was moved to a "fixed" status (the "claiming fixed" action: a tracker
+    write - Notion / Linear / Jira / GitHub - that sets a Status/State to a fixed
+    value, or a close/resolve of the item), AND
   * that close-out is NOT honestly downgraded (no unverified-reasoned /
     unverified / speculative tag in the update), AND
   * the session does NOT show, AFTER the last merge, BOTH of:
@@ -48,6 +49,21 @@ import sys, json, re, os
 # `gh pr merge` only at a command boundary (so a printf/grep containing the
 # string as data does not match) - same guard as the trajectory hook.
 GH_MERGE = re.compile(r"(?:^|[;&|]|\n)\s*gh\s+pr\s+merge\b")
+# `gh issue close` at a command boundary (closing an issue IS a fixed close-out).
+GH_ISSUE_CLOSE = re.compile(r"(?:^|[;&|]|\n)\s*gh\s+issue\s+close\b")
+
+# Tool-name shapes that mean "I changed a tracker item's state" - tracker-agnostic, so the
+# gate is not Notion-only. Matches update/set/edit/patch/transition/move/resolve/close on an
+# issue/ticket/task/story/card/page/item/bug/work-item: Notion (update-page), Linear/Jira/
+# GitHub (update_issue, transition_issue, close_issue), and similar MCP tools.
+TRACKER_WRITE = re.compile(
+    r"(update|set|edit|patch|transition|move|resolve|close)[-_ ]?"
+    r"(issue|ticket|task|story|card|page|item|bug|work[-_ ]?item)",
+    re.I,
+)
+# A close/resolve action whose NAME alone implies the item is finished (no status field
+# needed): close_issue, resolve_ticket, etc.
+TRACKER_CLOSE = re.compile(r"(close|resolve)[-_ ]?(issue|ticket|task|bug|item|story|card)", re.I)
 
 # Generic default matcher SOURCES (inner alternations). receipts.config.json
 # extends these per project; `_extend` ORs the config patterns onto the default.
@@ -76,10 +92,15 @@ DOM_READ_TOOL = re.compile(
     r"preview_inspect|evaluate_script|browser_snapshot|browser_evaluate|take_snapshot",
     re.I,
 )
-# A (Bug) Status property set to a closeout value. Covers boards that label a fix
-# 'Fixed' / 'Closed' / 'Verified'. Anchored on the status KEY + value so a
-# "1. Fixed the..." Resolution Note does not false-match (that is a different key).
-CLOSEOUT_STATUS = re.compile(r'"(?:bug\s+)?status"\s*:\s*"\s*(?:fixed|closed|verified)\b', re.I)
+# A Status/State property set to a closeout value. Covers boards that label a fix
+# 'Fixed' / 'Closed' / 'Verified' / 'Done' / 'Resolved' (Notion/Jira use "status", Linear
+# uses "state"). Anchored on the status KEY + value so a "1. Fixed the..." Resolution Note
+# does not false-match (that is a different key).
+CLOSEOUT_STATUS = re.compile(
+    r'"(?:bug\s+)?(?:status|state)"\s*:\s*"\s*'
+    r'(?:fixed|closed|verified|done|resolved|complete|completed)\b',
+    re.I,
+)
 
 
 def _read_config_file(p):
@@ -171,11 +192,18 @@ def _txt(inp):
 
 
 def is_fixed_closeout(name, inp):
-    """A notion-update-page that sets a Status / Bug Status to a 'this is fixed'
-    value (the project's configured fixed-statuses, or the generic Fixed/Closed/
-    Verified)."""
-    if "notion-update-page" not in name.lower():
+    """A tracker write that moves an item to a 'this is fixed' state - tracker-agnostic.
+    Either (a) `gh issue close`, (b) a close/resolve tool whose NAME alone means finished,
+    or (c) an update/transition tool whose INPUT sets a Status/State to a fixed value (the
+    project's configured fixed-statuses, or the generic Fixed/Closed/Verified/Done/Resolved).
+    Gated on a tracker-write NAME shape first, so an unrelated tool that merely mentions
+    'Fixed' in its payload (e.g. a Resolution Note) does not false-match."""
+    if name == "Bash" and GH_ISSUE_CLOSE.search(str(sget(inp, "command") or "")):
+        return True
+    if not TRACKER_WRITE.search(name or ""):
         return False
+    if TRACKER_CLOSE.search(name or ""):
+        return True  # closing/resolving the item is itself the fixed signal
     s = _txt(inp)
     if any(st in s for st in FIXED_STATUSES):
         return True

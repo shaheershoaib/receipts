@@ -19,6 +19,11 @@
           "description": "Regex matching how a PR links the issue it fixes.",
           "default": "closes #(\\d+)"
         },
+        "require_receipt_for": {
+          "enum": ["issue-link", "any-source-change"],
+          "description": "When the enforcer requires a receipt. 'issue-link' (default): only a fix-claim (a PR matching issue_link) must carry one - a PR with no issue link and no work-type passes untouched. 'any-source-change' (strict): a PR that changes production source (excluding docs / tests / CI / config) must ALSO carry a receipt, an honest downgrade tag, or an explicit work-type - closing the 'omit the issue link => silent green' bypass.",
+          "default": "issue-link"
+        },
         "downgrade_tags": {
           "type": "array",
           "items": { "type": "string" },
@@ -76,6 +81,11 @@
         "require_fresh_base": {
           "enum": ["warn", "block", "off"],
           "description": "G8 fresh base: whether the enforcer flags a branch that is behind its base (a green earned on a stale base is green on code that won't ship). 'warn' (default) surfaces it without failing the check; 'block' fails it; 'off' disables.",
+          "default": "warn"
+        },
+        "on_load_error_red": {
+          "enum": ["warn", "block"],
+          "description": "What to do when the receipt's RED on base is a load/collection error (import / syntax / no-tests), not an assertion failure - a red that may not prove the symptom (the test may just import code that only exists on head). 'warn' (default): surface it, still allow. 'block': fail it, EXCEPT when the PR is `work-type: feature` (a feature's test is legitimately red until the feature exists).",
           "default": "warn"
         },
         "live_drive": {
