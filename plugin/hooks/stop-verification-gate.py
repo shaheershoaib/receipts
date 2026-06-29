@@ -138,6 +138,19 @@ def _extend(default_src, extra):
     return re.compile("(?:%s)" % "|".join(parts), re.I)
 
 
+def gate_on(gates, gid):
+    """A gate runs unless the project's `gates` config turns it off (by ID, G0-G10).
+    No `gates` block => all on (backward-compatible). Mirrors the enforcer's gateOn."""
+    if not gates:
+        return True
+    if gid in (gates.get("disabled") or []):
+        return False
+    en = gates.get("enabled")
+    if not en or en == "all":
+        return True
+    return (gid in en) if isinstance(en, list) else True
+
+
 def walk_tool_uses(obj, out):
     if isinstance(obj, dict):
         if obj.get("type") == "tool_use" and "name" in obj:
@@ -255,6 +268,18 @@ def main():
     STAGING_QUERY = _extend(DEFAULT_STAGING_QUERY_SRC, agent.get("staging_query_patterns"))
     DOWNGRADE = _extend(DEFAULT_DOWNGRADE_SRC, claim.get("downgrade_tags"))
     FIXED_STATUSES = tuple(agent.get("closeout_fixed_statuses") or DEFAULT_FIXED_STATUSES)
+
+    # This hook enforces verification on a URL-DEPLOYED build (the Gates G1/G3). It does
+    # NOT apply when THIS repo has no such build to observe: a library/CLI/artifact config
+    # (a `build` block whose sha_source is none / ci-artifact) or one that disables G1/G3 -
+    # there the receipt re-run at the PR is the proof. A config with NO `build` block (an
+    # agent-home: skills + session cwd, the code repos deploy elsewhere) is left alone, so
+    # the split-topology case still enforces. Honors gates.enabled/disabled like the enforcer.
+    gates = cfg.get("gates") or {}
+    if "build" in cfg:
+        url_deploy = build.get("sha_source") in ("github-deployments", "github-status")
+        if (not url_deploy) or not (gate_on(gates, "G1") and gate_on(gates, "G3")):
+            return
 
     try:
         with open(tp, "r", errors="replace") as f:

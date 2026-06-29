@@ -122,7 +122,24 @@ function detect(dir) {
   const bm = head && head.match(/ref:\s*refs\/heads\/(\S+)/);
   if (bm) default_branch = bm[1];
 
-  return { stack, test_command, suite_command, platform, sha_source, deploy_host_patterns, loop_skills, repo_name, default_branch };
+  // --- medium (best-effort software-type guess; the agent confirms + applies each
+  //     gate in this medium's terms via references/MEDIA.md). Honest: a guess. ---
+  const deps = pkg ? Object.assign({}, pkg.dependencies, pkg.devDependencies, pkg.peerDependencies) : {};
+  const anyDep = (...ns) => ns.some((n) => Object.prototype.hasOwnProperty.call(deps, n));
+  let medium = "unknown";
+  if (has("main.tf") || hasExt(".tf") || has("Chart.yaml") || has("kustomization.yaml") || has("Pulumi.yaml")) medium = "infra";
+  else if (has("dbt_project.yml") || has("dbt_project.yaml")) medium = "data";
+  else if (has("pubspec.yaml") || anyDep("react-native", "expo") || (has("android") && has("ios"))) medium = "mobile";
+  else if (anyDep("electron")) medium = "desktop";
+  else if (anyDep("react", "next", "vue", "nuxt", "svelte", "@sveltejs/kit", "@angular/core", "solid-js", "astro", "gatsby") || has("index.html")) medium = "web";
+  else if (anyDep("express", "fastify", "@nestjs/core", "koa", "@hapi/hapi", "fastapi", "flask", "django") || has("manage.py") || stack === "django") medium = "api";
+  else if (pkg && pkg.bin) medium = "cli";
+  else if (has("Cargo.toml")) medium = /\[\[bin\]\]/.test(readText(at("Cargo.toml")) || "") ? "cli" : "library";
+  else if (has("go.mod")) { let cmd = false; try { cmd = has("main.go") || fs.readdirSync(dir).includes("cmd"); } catch { /* ignore */ } medium = cmd ? "cli" : "library"; }
+  else if (pkg && (pkg.main || pkg.exports || pkg.module) && !pkg.private && platform === "none") medium = "library";
+  else if (platform !== "none") medium = "service";
+
+  return { stack, test_command, suite_command, platform, sha_source, deploy_host_patterns, loop_skills, repo_name, default_branch, medium };
 }
 
 function buildConfig(d, a) {
@@ -159,6 +176,7 @@ function buildConfig(d, a) {
   // Which gates apply here (by ID). Safe default = all on; the project disables what
   // does not fit. The skill reads this to know what to apply; the enforcer, which checks to run.
   cfg.gates = {
+    medium: a.medium || d.medium || "unknown",
     enabled: "all",
     disabled: a.gates_disabled || [],
     G8: { integration_branch: a.integration_branch || d.default_branch || "main" },
@@ -211,6 +229,7 @@ async function init(opts) {
   console.error(`    stack       ${d.stack || (agentHome ? "agent-home (skills, no code)" : "unknown")}`);
   console.error(`    tests       ${d.test_command || (agentHome ? "none here (enforcer config lives in the code repos)" : "NOT DETECTED (you'll set verify.test_command)")}`);
   console.error(`    deploy      ${d.platform === "none" ? "none" : d.platform}`);
+  if (!agentHome) console.error(`    medium      ${d.medium} (gates apply in this software type's terms - see references/MEDIA.md)`);
   console.error(`    loop skills ${d.loop_skills.length ? d.loop_skills.join(", ") : "none found (gates ships with the plugin)"}`);
   console.error("");
 
@@ -240,8 +259,9 @@ async function init(opts) {
       if (sq.length) a.staging_query_patterns = sq;
       // Gate applicability (G0-G10): default all-on; disable what does not fit this project.
       if (!agentHome) {
+        a.medium = await ask(rl, "Project type / medium? (web/api/library/cli/data/infra/mobile/desktop/...)", d.medium);
         a.integration_branch = await ask(rl, "Integration branch for fresh-base checks (G8)?", d.default_branch || "main");
-        const dis = list(await ask(rl, "Gates to disable here? (comma-sep IDs, e.g. G10 if no separate repo consumes it)", ""));
+        const dis = list(await ask(rl, "Gates to disable here? (comma-sep IDs, e.g. G10 if no separate repo consumes it, G4/G5 for a pure library)", ""));
         if (dis.length) a.gates_disabled = dis;
       }
       const go = await ask(rl, "Write receipts.config.json with the above?", "Y");

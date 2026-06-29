@@ -107,6 +107,10 @@
       "description": "Which gates apply to this project, and per-gate selectors. Gates are referenced by ID (G0-G10) - the shared vocabulary across the spec, the `gates` skill, the Stop hooks, and the enforcer. `receipts init` writes a safe default (all on); disable the gates that do not fit (e.g. G10 in a single repo with no split deploy, or the deploy-surface gates in a library with no deploy). The skill reads this to know which gates to apply; the enforcer reads it to know which checks to run.",
       "additionalProperties": false,
       "properties": {
+        "medium": {
+          "type": "string",
+          "description": "The software type, so the gates apply in the right terms - a 'surface' / 'value' / 'terminal action' means something different for a web app vs an API vs a library vs a CLI vs a data pipeline vs infra. A hint the agent reads alongside references/MEDIA.md; free-form and expandable. Common values: web, api, service, library, cli, mobile, desktop, data, ml, infra, database, smart-contract, browser-extension, embedded, game, unknown."
+        },
         "enabled": {
           "description": "Which gates run here: \"all\", or an explicit array of gate IDs (G0-G10).",
           "default": "all",

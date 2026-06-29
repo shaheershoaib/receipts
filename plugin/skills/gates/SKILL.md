@@ -30,6 +30,15 @@ for each gate - is bundled with this skill in `references/GATES.md`. Read the se
 a gate when you need the detailed procedure (e.g. G8's rebase + migration-leaf check, or
 G10's backward-compatible contract change); the list below is the gist.
 
+**Applying the gates in THIS project's medium:** the gates are principles, and what a
+"surface" or "value" or "terminal action" means depends on what you ship (a web page vs an
+API endpoint vs a library function vs a CLI command vs a data table). `references/MEDIA.md`
+maps every gate to the concrete artifact and tool per software type, and gives a template
+for any type not listed. Use `receipts.config.json` `gates.medium` as the hint for which
+mapping applies; if it is unknown or missing, infer the medium from the stack and apply the
+principle. Do NOT default to "use the browser" - read the value where THIS project's
+consumer actually sees it.
+
 ## The receipt (the one non-negotiable)
 
 Before you claim a fix, write a **red-before / green-after acceptance test** in the

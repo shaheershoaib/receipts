@@ -26,6 +26,7 @@
     "on_unreachable_build": "sha-bind-only"
   },
   "gates": {
+    "medium": "web",
     "enabled": "all",
     "disabled": ["G10"],
     "G8": { "integration_branch": "main" }
