@@ -72,13 +72,14 @@ function runCmd(repo, cmd) {
 // Best-effort lint against ACCIDENTAL exit-masking (the `npm test ; echo` footgun): a `;`
 // (sequencing), `||` (or-true), a single `|` (last pipe stage wins), a background `&`, a
 // newline (sequencing), a backtick or `$(` (command substitution that can swallow the exit).
-// `&&` is fine - it propagates failure. NOT exhaustive: a determined config author can always
+// `&&` propagates failure and shell redirections (2>&1, >&2, &>file) preserve the exit - both
+// are fine, so they are stripped first. NOT exhaustive: a determined config author can always
 // write a command that exits 0 (the threat model - receipts cannot make a branch's own tests
 // unsubvertible; see spec/GATES.md "What the Gates do NOT defend against").
 function masksExit(cmd) {
-  const c = String(cmd || "");
-  return /;/.test(c) || /\|\|/.test(c) || /\|/.test(c.replace(/\|\|/g, "")) ||
-    /&/.test(c.replace(/&&/g, "")) || /[\n\r]/.test(c) || /`/.test(c) || /\$\(/.test(c);
+  const s = String(cmd || "").replace(/&&/g, " ").replace(/[0-9]*>&[0-9]*/g, " ").replace(/&>>?/g, " ");
+  return /;/.test(s) || /\|\|/.test(s) || /\|/.test(s.replace(/\|\|/g, "")) ||
+    /&/.test(s) || /[\n\r]/.test(s) || /`/.test(s) || /\$\(/.test(s);
 }
 
 function emit(verdict, reason, detail) {
@@ -269,14 +270,11 @@ function main() {
   if (changed.includes("receipts.config.json"))
     warn("this PR changes receipts.config.json - the enforcer ran with the BASE config (the change takes effect after merge); review the config change.");
 
-  // G9 unmasked: a command that can hide its own exit code cannot be trusted - but only
-  // check a command that will actually RUN (test_command on the normal receipt path; suite
-  // on the inverted path or when G9 is enabled), so a disabled/unused command is not a false block.
+  // G9 unmasked: a command that can hide its own exit code cannot be trusted. Checked at the
+  // point each command actually RUNS (below), so a command that will NOT run - a masked
+  // test_command on an inverted or no-receipt path, or a suite_command with G9 off - is never
+  // a false block.
   const testCmd = verify.test_command;
-  if (!inverted && testCmd && masksExit(testCmd))
-    emit("BLOCK", "verify.test_command can mask its own exit code (; , || , pipe, background &, newline, or command substitution), so a green from it cannot be trusted (G9). Use a single command whose own exit is the test result, or wrap it in a script.");
-  if ((inverted || gateOn(gates, "G9")) && verify.suite_command && masksExit(verify.suite_command))
-    emit("BLOCK", "verify.suite_command can mask its own exit code - a green cannot be trusted (G9). Use a clean command or a script.");
 
   // Inverted receipt: a refactor/chore changes no behavior, so the proof is the full suite
   // staying green on head - not a red->green on a new test.
@@ -285,6 +283,8 @@ function main() {
     if (!suiteCmd || /REPLACE_ME/.test(suiteCmd))
       emit(noReceiptMode === "warn" ? "WARN" : "BLOCK",
         `${workType}: a ${workType} changes no behavior, so its receipt is the FULL suite staying green on head - but verify.suite_command is not set. Set it, or tag the PR honestly.`);
+    if (masksExit(suiteCmd))
+      emit("BLOCK", "verify.suite_command can mask its own exit code - a green cannot be trusted (G9). Use a clean command or a script.");
     const original = git(repo, ["rev-parse", "HEAD"]).out.trim();
     let suite;
     try {
@@ -317,6 +317,11 @@ function main() {
 
   const suiteCmd = verify.suite_command;
   const haveSuite = suiteCmd && !/REPLACE_ME/.test(suiteCmd);
+  // Mask-check only the commands that will now run: the receipt always, the suite if G9 is on.
+  if (masksExit(testCmd))
+    emit("BLOCK", "verify.test_command can mask its own exit code (; , || , pipe, background &, newline, or command substitution), so a green from it cannot be trusted (G9). Use a single command whose own exit is the test result, or wrap it in a script.");
+  if (haveSuite && gateOn(gates, "G9") && masksExit(suiteCmd))
+    emit("BLOCK", "verify.suite_command can mask its own exit code - a green cannot be trusted (G9). Use a clean command or a script.");
 
   const original = git(repo, ["rev-parse", "HEAD"]).out.trim();
   let red, green, suite;
