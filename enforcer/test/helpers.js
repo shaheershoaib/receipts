@@ -102,13 +102,14 @@ function makeDivergedRepo({ rootFiles, headFiles, baseFiles }) {
   return { dir, base, head, root };
 }
 
-function runVerify({ dir, base, head, prBody, config }) {
+function runVerify({ dir, base, head, prBody, config, receiptOut }) {
   const args = [VERIFY, "--json", "--base", base, "--head", head, "--repo", dir];
   if (config) args.push("--config", config);
+  if (receiptOut) args.push("--receipt-out", receiptOut);
   if (prBody !== undefined) args.push("--pr-body", prBody);
   let stdout = "", exitCode = 0;
   try {
-    stdout = execFileSync("node", args, { encoding: "utf8", maxBuffer: 16 * 1024 * 1024 });
+    stdout = execFileSync("node", args, { encoding: "utf8", maxBuffer: 128 * 1024 * 1024 });
   } catch (e) {
     stdout = (e.stdout || "") + (e.stderr || "");
     exitCode = typeof e.status === "number" ? e.status : 1;
@@ -117,7 +118,9 @@ function runVerify({ dir, base, head, prBody, config }) {
   let parsed;
   try { parsed = JSON.parse(line); }
   catch { parsed = { verdict: "PARSE_ERROR", reason: stdout, warnings: [] }; }
-  return { ...parsed, exitCode, raw: stdout };
+  let receipt = null;
+  if (receiptOut) { try { receipt = JSON.parse(fs.readFileSync(receiptOut, "utf8")); } catch { /* none written */ } }
+  return { ...parsed, exitCode, raw: stdout, receipt };
 }
 
 // A node "test" script: asserts require('./mod')() === expected. Runs as `node {test}`.

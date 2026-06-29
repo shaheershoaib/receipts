@@ -25,4 +25,14 @@ runs:
         node "$GITHUB_ACTION_PATH/verify.js" \
           --base "$BASE_SHA" \
           --head "$HEAD_SHA" \
-          --pr-body-file "$RUNNER_TEMP/receipts_pr_body.txt"
+          --pr-body-file "$RUNNER_TEMP/receipts_pr_body.txt" \
+          --receipt-out "$RUNNER_TEMP/receipts_receipt.json"
+    # Upload the replayable receipt (the evidence of what was re-run) even when the gate
+    # BLOCKs, so a failing check still leaves an auditable artifact.
+    - name: upload receipt
+      if: always()
+      uses: actions/upload-artifact@v4
+      with:
+        name: receipts-receipt
+        path: ${{ runner.temp }}/receipts_receipt.json
+        if-no-files-found: ignore

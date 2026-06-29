@@ -45,6 +45,14 @@ const DOC_OR_META = /(^|\/)(LICENSE|CHANGELOG)|\.(md|markdown|txt|rst|adoc)$|(^|
 
 let ARGS = {};
 const WARNINGS = [];
+// 64 MiB: a chatty-but-honest suite can print well past Node's 1 MiB execSync default, and
+// blowing the buffer used to surface as ENOBUFS -> a FALSE failure (a green misread as red).
+const CMD_MAXBUF = 64 * 1024 * 1024;
+
+// The replayable receipt: machine-readable evidence of what the enforcer re-ran and saw, so a
+// verdict is auditable and re-runnable rather than a bare PASS/BLOCK. Accumulated through
+// main() and written to --receipt-out (if given) by emit(), regardless of verdict.
+const RECEIPT = { schema: "receipts/receipt@1", commands: [], gates: {} };
 
 function parseArgs(argv) {
   const o = { _: [] };
@@ -52,25 +60,61 @@ function parseArgs(argv) {
     const a = argv[i];
     if (a.startsWith("--")) {
       const k = a.slice(2);
-      if (["base", "head", "config", "repo", "pr-body", "pr-body-file"].includes(k)) o[k] = argv[++i];
+      if (["base", "head", "config", "repo", "pr-body", "pr-body-file", "receipt-out"].includes(k)) o[k] = argv[++i];
       else o[k] = true;
     } else o._.push(a);
   }
   return o;
 }
 
+// Last `n` lines of output, for the receipt (full logs can be huge; the tail is what shows
+// why a command passed or failed).
+function tail(s, n) { return String(s || "").split("\n").slice(-(n || 20)).join("\n"); }
+
 // git via execFileSync with an argv ARRAY - no shell, so shas/filenames are never
 // interpreted (closes the crafted-filename injection class).
 function git(repo, args) {
-  try { return { ok: true, out: execFileSync("git", ["-C", repo, ...args], { encoding: "utf8", stdio: ["ignore", "pipe", "pipe"] }) }; }
+  try { return { ok: true, out: execFileSync("git", ["-C", repo, ...args], { encoding: "utf8", stdio: ["ignore", "pipe", "pipe"], maxBuffer: CMD_MAXBUF }) }; }
   catch (e) { return { ok: false, out: (e.stdout || "") + (e.stderr || ""), code: e.status }; }
 }
 
 // The project's own test/suite command - necessarily a shell string. Callers gate the
-// interpolated file list with UNSAFE_PATH first, and masksExit() rejects exit-masking.
-function runCmd(repo, cmd) {
-  try { execSync(cmd, { cwd: repo, encoding: "utf8", stdio: ["ignore", "pipe", "pipe"] }); return { ok: true, out: "" }; }
-  catch (e) { return { ok: false, out: (e.stdout || "") + (e.stderr || ""), code: e.status }; }
+// interpolated file list with UNSAFE_PATH first, and masksExit() rejects exit-masking. The
+// optional timeout (verify.command_timeout_ms) guards a hung test; default none preserves
+// prior behavior. Captures stdout+stderr and duration for the receipt.
+function runCmd(repo, cmd, timeoutMs) {
+  const t0 = Date.now();
+  const opts = { cwd: repo, encoding: "utf8", stdio: ["ignore", "pipe", "pipe"], maxBuffer: CMD_MAXBUF };
+  if (timeoutMs && timeoutMs > 0) opts.timeout = timeoutMs;
+  try {
+    const out = execSync(cmd, opts);
+    return { ok: true, out: out || "", ms: Date.now() - t0 };
+  } catch (e) {
+    return { ok: false, out: (e.stdout || "") + (e.stderr || ""), code: e.status, ms: Date.now() - t0, timedOut: e.killed === true || e.signal === "SIGTERM" };
+  }
+}
+
+// Record one executed command into the receipt (label + the command string + how it exited).
+function record(label, cmd, res) {
+  RECEIPT.commands.push({
+    label, command: cmd, ok: !!res.ok,
+    exit_code: res.ok ? 0 : (typeof res.code === "number" ? res.code : null),
+    duration_ms: res.ms != null ? res.ms : null,
+    timed_out: res.timedOut || false,
+    output_tail: tail(res.out, 20),
+  });
+}
+
+// Write the receipt artifact. Side-effect only - a write failure must never change the
+// verdict or the exit code (best-effort, swallow the error after a stderr note).
+function writeReceipt(verdict, reason, detail) {
+  RECEIPT.verdict = verdict;
+  RECEIPT.reason = reason;
+  RECEIPT.detail = detail || null;
+  RECEIPT.warnings = WARNINGS.slice();
+  RECEIPT.generated_at = new Date().toISOString();
+  try { fs.writeFileSync(ARGS["receipt-out"], JSON.stringify(RECEIPT, null, 2) + "\n"); }
+  catch (e) { process.stderr.write("receipts: could not write receipt to " + ARGS["receipt-out"] + " - " + (e && e.message) + "\n"); }
 }
 
 // Best-effort lint against ACCIDENTAL exit-masking (the `npm test ; echo` footgun): a `;`
@@ -87,6 +131,7 @@ function masksExit(cmd) {
 }
 
 function emit(verdict, reason, detail) {
+  if (ARGS["receipt-out"]) writeReceipt(verdict, reason, detail);
   const warns = WARNINGS.length ? "\n  warnings:\n  - " + WARNINGS.join("\n  - ") : "";
   if (ARGS.json) console.log(JSON.stringify({ verdict, reason, detail: detail || null, warnings: WARNINGS }));
   else console.log(`receipts: ${verdict} - ${reason}` + (detail ? `\n  ${String(detail).trim()}` : "") + warns);
@@ -231,6 +276,9 @@ function main() {
   const verify = cfg.verify || {};
   const gates = cfg.gates || {};
   const noReceiptMode = degrade.on_no_receipt || "require-downgrade-tag";
+  // Optional per-command timeout (ms) for the test/suite commands; 0 / unset = no timeout
+  // (preserves prior behavior). Guards a hung test from hanging the whole job.
+  const cmdTimeout = Number(verify.command_timeout_ms) || 0;
   // Trigger scope. Default ("issue-link"): only a fix-claim (closes #N) must carry a receipt.
   // Opt-in ("any-source-change"): a PR that touches production source without a receipt, an
   // honest downgrade tag, or an explicit work-type is also blocked - closing the "omit the
@@ -244,6 +292,14 @@ function main() {
   // refactor, so it cannot self-declare its way out of carrying a real red->green receipt.
   const workType = ((prBody.match(/work[ _-]?type\s*[:=]\s*([a-z]+)/i) || [])[1] || gates.work_type || "").toLowerCase();
   const inverted = (workType === "refactor" || workType === "chore") && !isFixClaim;
+
+  // Receipt metadata (the evidence header). The per-command results are recorded as they run.
+  Object.assign(RECEIPT, {
+    repo, base, head,
+    config_source: ARGS.config ? "explicit" : (configFromHead ? "head" : "base"),
+    strict, work_type: workType || null, is_fix_claim: isFixClaim,
+  });
+  RECEIPT.gates = { enabled: gates.enabled || "all", disabled: gates.disabled || [] };
 
   // Not a fix-claim and no work-type -> nothing to re-verify (default trigger). Under the
   // strict trigger we do NOT bail here: control falls through to the source-change check
@@ -306,11 +362,13 @@ function main() {
         `${workType}: a ${workType} changes no behavior, so its receipt is the FULL suite staying green on head - but verify.suite_command is not set. Set it, or tag the PR honestly.`);
     if (masksExit(suiteCmd))
       emit("BLOCK", "verify.suite_command can mask its own exit code - a green cannot be trusted (G9). Use a clean command or a script.");
+    RECEIPT.gates.work_type_inverted = workType;
     const original = git(repo, ["rev-parse", "HEAD"]).out.trim();
     let suite;
     try {
       if (!git(repo, ["checkout", "-q", "-f", head]).ok) emit("BLOCK", `cannot checkout head ${head}`);
-      suite = runCmd(repo, suiteCmd);
+      suite = runCmd(repo, suiteCmd, cmdTimeout);
+      record(`${workType}-suite@head`, suiteCmd, suite);
     } finally {
       git(repo, ["checkout", "-q", "-f", original]);
     }
@@ -321,6 +379,7 @@ function main() {
 
   // The receipt = test files added/changed between base and head.
   const tests = changed.filter((f) => TEST_PATH.test(f));
+  RECEIPT.tests = tests;
   if (!tests.length) {
     if (noReceiptMode === "warn") emit("WARN", "no receipt (no test added/changed) - allowed by config, but unverified");
     emit("BLOCK", "no receipt: this change adds no acceptance test. Add a test that FAILS before and PASSES after the change, or tag the PR 'unverified-reasoned' / 'speculative'. (A behavior-preserving change: tag it `work-type: refactor`.)");
@@ -350,11 +409,15 @@ function main() {
     // RED: base source, with head's receipt test(s) overlaid on top.
     if (!git(repo, ["checkout", "-q", "-f", base]).ok) emit("BLOCK", `cannot checkout base ${base}`);
     git(repo, ["checkout", "-q", head, "--", ...tests]);
-    red = runCmd(repo, cmdFor(tests)); // expect FAIL = reproduces the bug
+    red = runCmd(repo, cmdFor(tests), cmdTimeout); // expect FAIL = reproduces the bug
+    record("receipt-red@base", cmdFor(tests), red);
+    RECEIPT.red = !red.ok; // red = the receipt reproduced the symptom on base (it FAILED there)
     // GREEN: full head.
     git(repo, ["checkout", "-q", "-f", head]);
-    green = runCmd(repo, cmdFor(tests)); // expect PASS = bug gone
-    if (green.ok && haveSuite && gateOn(gates, "G9")) suite = runCmd(repo, suiteCmd);
+    green = runCmd(repo, cmdFor(tests), cmdTimeout); // expect PASS = bug gone
+    record("receipt-green@head", cmdFor(tests), green);
+    RECEIPT.green = green.ok; // green = the symptom is gone on head (it PASSED there)
+    if (green.ok && haveSuite && gateOn(gates, "G9")) { suite = runCmd(repo, suiteCmd, cmdTimeout); record("suite@head", suiteCmd, suite); }
   } finally {
     git(repo, ["checkout", "-q", "-f", original]);
   }
