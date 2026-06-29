@@ -88,6 +88,12 @@
           "description": "What to do when the receipt's RED on base is a load/collection error (import / syntax / no-tests), not an assertion failure - a red that may not prove the symptom (the test may just import code that only exists on head). 'warn' (default): surface it, still allow. 'block': fail it, EXCEPT when the PR is `work-type: feature` (a feature's test is legitimately red until the feature exists).",
           "default": "warn"
         },
+        "command_timeout_ms": {
+          "type": "integer",
+          "minimum": 0,
+          "description": "Optional per-command timeout (milliseconds) for the test/suite commands the enforcer runs. A hung test is killed and reported rather than hanging the whole job. 0 / unset = no timeout (the CI job's own timeout still applies).",
+          "default": 0
+        },
         "live_drive": {
           "type": ["string", "null"],
           "description": "OPTIONAL advanced: a command/script that drives the deployed app for symptoms a unit/e2e test can't cover. null = not used (the carried test is enough).",
