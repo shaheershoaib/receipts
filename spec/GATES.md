@@ -22,14 +22,20 @@ symptom). A receipt is the symptom itself, re-triggered, refusing to reproduce.
 
 ## Two kinds of gate
 
-- **Verify gates (G0, G1, G3, G5)** answer *"did you actually prove it works?"* They
+- **Verify gates (G0, G1, G3, G5, G9)** answer *"did you actually prove it works?"* They
   produce receipts, and they are enforceable at the one chokepoint every team shares
   regardless of which agent they use: the pull request. An enforcer can re-run them.
-- **Target gates (G2, G4, G6, G7)** answer *"did you fix the right thing, all of it -
-  including what depends on it?"* There is mostly no artifact for "you fixed the right
-  component," so these live inside the agent's loop and ship as adapters. G7 is the
-  bridge case: the agent selects the dependents (especially newly-pulled ones), and the
-  enforcer can re-run their tests at the PR.
+- **Target gates (G2, G4, G6, G7, G8, G10)** answer *"did you fix the right thing, all of
+  it - including what depends on it, and against the code that will actually ship?"* There
+  is mostly no artifact for "you fixed the right component," so these live inside the
+  agent's loop and ship as adapters. Several are bridge cases with an enforcer assist: the
+  agent does the selection/judgment, and the enforcer re-checks what it can at the PR (G7
+  the dependents' tests, G8 the base is current, G10 the contract is back-compatible).
+
+G7, G8, and G10 are the **multi-dev gates** - the ones that only bite because other people
+are working in parallel and the codebase changes under you (a consumer is pulled in, the
+base moves, the two halves of a contract deploy out of order). G9 is amplified by the same
+reality: the regression is often in code you never touched.
 
 ---
 
@@ -174,6 +180,77 @@ receipt. See `enforcer/GENERALIZATION.md` (dependent-test-selection).
 
 *Kind: target (agent-side; enforcer can re-run the dependents' tests).*
 
+## G8 - Verify on a base that is even with origin (the fresh-base gate)
+
+**Mandate.** Recon, build, and verify against origin's CURRENT tip - not a long-lived local
+checkout, and not a base that moved under you while you worked. Before you trust a
+diagnosis, fetch and cut your work from the tip. Before you merge, rebase onto the current
+integration tip, re-run the receipt green on the rebased tree, and resolve any
+integration-number collision (two migrations claiming the same number, two leaf nodes). A
+green earned on a stale base is a green against code that will not ship. In a repo with more
+than one developer the base is not a constant, so this is the gate that survives other
+people pushing while you work.
+
+**Scar.** A recon ran against a checkout 55 commits behind origin and reported a feature as
+missing that origin already had; another ran off a 90-to-109-commit-stale checkout and
+produced false "gap" findings, laundered through a five-agent fan-out and a confidence score
+so they looked rigorous. A parallel session pushed to the integration branch mid-build, so
+CI failed on base-timing rather than on the code, and two sessions independently allocated
+the same migration number and collided at merge. The densest scar cluster in the record.
+
+**Enforcement.** Hybrid. The verify half is PR-checkable: the enforcer asserts the branch's
+base is an ancestor of head (it was rebased onto the current tip) and re-runs green on it; a
+domain check (`makemigrations --check` / a single-leaf check on the merged tree) catches
+number collisions. The recon half is agent-side: fetch and work from origin's tip, never a
+long-lived local checkout.
+
+*Kind: target + verify (agent-side recon; enforcer base-freshness + re-green).*
+
+## G9 - The receipt's green must be trustworthy (full-scope, unmasked, representative)
+
+**Mandate.** A green that proves nothing is worse than a red. For the receipt to count, its
+green must be: FULL-SCOPE - the whole suite on head, not only the changed test, because the
+regression is most often in code you did not touch (and in a parallel repo it is broken by
+the interaction with someone else's concurrent change); UNMASKED - the test command's own
+non-zero exit must be able to surface (no `cmd; echo; tail` wrapper that exits 0 and hides
+the failure); and REPRESENTATIVE - run on an engine that matches production (the real
+database engine, a real browser), not a substitute that passes where production fails.
+
+**Scar.** An agent ran only a narrow test subset locally, declared done, and CI then caught
+a count invariant and a money-serializer leak the subset never exercised (it recurred on the
+same file). A `npm test; echo; tail` wrapper exited 0 and hid a real non-zero that was
+trusted as green (it recurred). A local SQLite run passed while the CI MySQL engine caught a
+leak; a jsdom test passed only by shimming the real component away.
+
+**Receipt.** The full suite, green on head, after the narrow red->green receipt - run by the
+enforcer itself, so a user-supplied masking wrapper cannot stand in for it.
+
+*Kind: verify (re-runnable at the PR).*
+
+## G10 - A contract change must survive the deploy window (the rollout-compatibility gate)
+
+**Mandate.** When a change splits across independently-deployed units - a backend and a
+frontend, two services, a repo and its consumer - the two halves deploy in some order, and
+there is a window where one is new and the other is still old. A change that is correct once
+both sides ship can still break the live system during that window. Make the contract change
+backward-compatible (the new producer still satisfies the old consumer, or the new consumer
+tolerates the old producer), or sequence the deploys explicitly. A new endpoint is not
+reachable until its proxy/route ships too. With separate people owning the halves, the order
+is not yours to assume.
+
+**Scar.** A response-shape change from an array to `{rows, resolved_count}` would have broken
+the still-live old frontend on a backend-first deploy; a backend PR had to merge and deploy
+before its frontend PR or the contract broke; a new endpoint returned 404 until its proxy
+route was added - a class that recurred three times in one session.
+
+**Enforcement.** Hybrid, and distinct from G7: G7 verifies the consumer works at one instant;
+G10 guards the transient rollout window BETWEEN the two deploys. PR-checkable in part (a
+backward-compatibility contract test - the new producer against the old consumer's
+expectations; a deploy-order assertion when the units are coupled); agent-side for declaring
+the contract pair and the safe order.
+
+*Kind: target + verify (agent-side sequencing; enforcer back-compat contract test).*
+
 ---
 
 ## The honesty ladder (when you cannot verify)
@@ -199,12 +276,16 @@ not.
 
 - The **verify gates** are re-run by the enforcer at the pull request: it reproduces
   the symptom's acceptance test against the build that carries the commit and
-  confirms it is gone. A pasted artifact is not accepted; a re-run is.
+  confirms it is gone. A pasted artifact is not accepted; a re-run is. G9 extends this
+  to the full suite on head (so a regression outside the changed test is caught), run
+  by the enforcer itself so a masked or narrow command cannot stand in for it.
 - The **target gates** are carried by the agent adapter (e.g. the Claude Code
   plugin), which makes the agent pin the right surface, fix the surface the reporter
   sees, sweep the twins, and verify the dependents (especially freshly-pulled ones)
-  before it ever opens the PR. G7 also gets an enforcer assist: the enforcer selects
-  the changed files' newly-arrived dependents and runs their tests too.
+  before it ever opens the PR. Three get an enforcer assist at the PR: G7 runs the
+  changed files' newly-arrived dependents' tests, G8 asserts the branch's base is the
+  current tip (a green on a stale base is flagged or blocked), and G10 checks a
+  contract change is backward-compatible across the deploy window.
 - The **memory layer** records what was tried on each surface and how it turned out,
   so a surface with a bad track record is flagged before the next fix, and the team
   stops paying for the same trap twice.

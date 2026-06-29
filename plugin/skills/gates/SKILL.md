@@ -47,6 +47,10 @@ suite, is not.
 - **G5 Terminal action.** Drive a multi-step flow to its final action (submit /
   activate / save), accepting pre-filled defaults; the state seams between steps are
   where fixed-one-broke-another hides.
+- **G9 Trustworthy green.** The receipt's green must be full-scope (the whole suite on
+  head, not just the changed test), unmasked (no `cmd; echo; tail` that exits 0 and
+  hides a failure), and run on a prod-representative engine (real DB / browser, not a
+  substitute that passes where prod fails).
 
 **Target gates - did you fix the RIGHT thing, all of it?** (your judgment, as you work)
 - **G2 Pin the exact flow.** Apps grow parallel copies of the "same" feature; fix the
@@ -60,6 +64,17 @@ suite, is not.
   source). Enumerate the changed surface's dependents, flag the ones new since you
   branched, and verify those still work - an integration break is neither your surface
   (G4) nor a twin (G6).
+- **G8 Fresh base.** Recon and build off origin's CURRENT tip, not a long-lived local
+  checkout; rebase onto the live tip and re-run green before merge, and resolve
+  migration-number / leaf collisions. A green earned on a stale base is green on code
+  that will not ship.
+- **G10 Rollout compatibility.** When a change splits across separately-deployed halves
+  (BE/FE, two services), make the contract backward-compatible or sequence the deploys -
+  the system must not break in the window where one half is new and the other is old. A
+  new endpoint is unreachable until its proxy ships too.
+
+G7, G8, and G10 are the multi-dev gates: they only bite because other people push in
+parallel and the codebase changes under you.
 
 ## The honesty ladder (when you cannot clear a gate)
 

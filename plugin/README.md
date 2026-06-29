@@ -9,8 +9,10 @@ the Gates before a PR is ever opened. This is the agent-side half of `receipts`
 - **`skills/gates/`** - the gates as an agent skill: reproduce-first (G0),
   pin the exact flow (G2), verify by value on the deployed build (G1), land on the
   surface the reporter sees (G4), drive to the terminal action (G5), sweep the twins
-  (G6), verify the dependents (G7), confirm the sha (G3), and write the red->green
-  receipt. Project-agnostic by
+  (G6), verify the dependents (G7), confirm the sha (G3), keep the green trustworthy
+  (G9), and - the multi-dev gates - work off a fresh base (G8) and keep a contract
+  change compatible across the deploy window (G10), then write the red->green receipt.
+  Project-agnostic by
   design - a project supplies its own facts via `receipts.config.json`.
 - **`hooks/stop-verification-gate.py`** - the backstop: blocks a "fixed" close-out
   that lacks deployed-build evidence (binding + observation). The local precursor to

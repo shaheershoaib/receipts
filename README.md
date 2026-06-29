@@ -54,15 +54,20 @@ They split into two kinds:
 | **G1** assert the rendered VALUE, not a placeholder | verify | PR / CI (re-run) |
 | **G3** verify on the build that carries YOUR commit | verify | PR / CI |
 | **G5** drive the flow to its TERMINAL action | verify | PR / CI (re-run) |
+| **G9** trustworthy green: full-scope, unmasked, representative | verify | PR / CI (re-run) |
 | **G2** pin the EXACT flow / component | target | agent-side |
 | **G4** land on the surface the reporter SEES | target | agent-side |
 | **G6** sweep the changed pattern's parallel TWINS | target | agent-side |
 | **G7** verify the DEPENDENTS, esp. newly-pulled ones | target | agent-side (+ enforcer) |
+| **G8** verify on a base even with origin (fresh base) | target | agent-side (+ enforcer) |
+| **G10** a contract change survives the deploy window | target | agent-side (+ enforcer) |
 
 The **verify** gates (did you actually prove it works) are enforceable at the one
 chokepoint every team shares regardless of which agent they use: the PR. The
 **target** gates (did you fix the *right* thing) live inside the agent's loop, and
-ship as adapters.
+ship as adapters. G7, G8, and G10 are the **multi-dev gates**: the failures that
+only happen because other people are pushing in parallel and the codebase changes
+under you. G9 is amplified by the same reality.
 
 ## What's in here
 

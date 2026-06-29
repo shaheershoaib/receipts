@@ -18,6 +18,7 @@
   "verify": {
     "test_command": "npm test -- {test}",
     "suite_command": "npm test",
+    "require_fresh_base": "warn",
     "live_drive": null
   },
   "degrade": {

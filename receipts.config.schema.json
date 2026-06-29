@@ -71,7 +71,12 @@
         },
         "suite_command": {
           "type": "string",
-          "description": "Run the full suite (regression check)."
+          "description": "Run the full suite (G9 full-scope green: the enforcer runs this on head after the narrow receipt, so a regression in code the changed test never exercises is caught, not just the changed test)."
+        },
+        "require_fresh_base": {
+          "enum": ["warn", "block", "off"],
+          "description": "G8 fresh base: whether the enforcer flags a branch that is behind its base (a green earned on a stale base is green on code that won't ship). 'warn' (default) surfaces it without failing the check; 'block' fails it; 'off' disables.",
+          "default": "warn"
         },
         "live_drive": {
           "type": ["string", "null"],
