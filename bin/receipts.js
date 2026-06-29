@@ -17,13 +17,22 @@
 const fs = require("fs");
 const path = require("path");
 const readline = require("readline");
+const { spawnSync } = require("child_process");
 
 const HELP = `receipts - verification gates for AI-written code
 
 Usage:
-  receipts init [options]     Detect this project, confirm, write receipts.config.json
-                              (+ scaffold a loop-skill harness if none exists)
-  receipts doctor [options]   Re-detect and report drift against receipts.config.json
+  receipts init [options]      Detect this project, confirm, write receipts.config.json
+                               (+ scaffold a loop-skill harness if none exists)
+  receipts doctor [options]    Re-detect and report drift against receipts.config.json
+  receipts verify [args]       Run the enforcer locally: re-prove a fix-claim's receipt
+                               (red on base, green on head). Same args as the CI action:
+                               --base <sha> --head <sha> [--repo <dir>] [--config <path>]
+                               [--pr-body <text> | --pr-body-file <path>] [--json]
+                               [--receipt-out <path>]
+  receipts replay <receipt>    Re-run the verification recorded in a receipt and check the
+                               verdict reproduces (exit 1 on mismatch). [--repo <dir>]
+  receipts explain <receipt>   Print a human-readable summary of a receipt artifact
 
 Options:
   --dir <path>   Target repo (default: current directory)
@@ -329,6 +338,66 @@ function doctor(opts) {
   process.exit(2);
 }
 
+const ENFORCER = path.join(__dirname, "..", "enforcer", "verify.js");
+
+// `receipts verify` - run the enforcer engine locally, same args as the CI action. Pass the
+// args straight through so the CLI and the action share ONE engine (no drift).
+function verify(rest) {
+  if (!exists(ENFORCER)) { console.error(`enforcer engine not found at ${ENFORCER}`); process.exit(1); }
+  const r = spawnSync(process.execPath, [ENFORCER, ...rest], { stdio: "inherit" });
+  process.exit(r.status == null ? 1 : r.status);
+}
+
+const flagVal = (rest, name) => { const i = rest.indexOf(name); return i >= 0 ? rest[i + 1] : null; };
+const firstPositional = (rest) => rest.find((a) => !a.startsWith("-"));
+
+// `receipts replay <receipt>` - re-run the recorded verification from the same commits and
+// confirm the verdict reproduces. Reconstructs the trigger (fix-claim / work-type) from the
+// receipt so the same path runs; the issue link uses the default `closes #N`.
+function replay(rest) {
+  const receiptPath = firstPositional(rest);
+  if (!receiptPath) { console.error("usage: receipts replay <receipt.json> [--repo <dir>]"); process.exit(1); }
+  const rec = readJson(receiptPath);
+  if (!rec || !rec.base || !rec.head) { console.error(`not a receipt (missing base/head): ${receiptPath}`); process.exit(1); }
+  const repo = flagVal(rest, "--repo") || rec.repo || process.cwd();
+  let body = "";
+  if (rec.is_fix_claim) body += "closes #1";
+  if (rec.work_type) body += (body ? "\n" : "") + "work-type: " + rec.work_type;
+  const a = [ENFORCER, "--json", "--base", rec.base, "--head", rec.head, "--repo", repo];
+  if (body) a.push("--pr-body", body);
+  const r = spawnSync(process.execPath, a, { encoding: "utf8" });
+  const line = (r.stdout || "").trim().split("\n").filter(Boolean).pop() || "{}";
+  let now; try { now = JSON.parse(line); } catch { now = { verdict: "PARSE_ERROR", reason: r.stderr || "" }; }
+  const match = now.verdict === rec.verdict;
+  console.log(`receipts replay: recorded=${rec.verdict} now=${now.verdict} -> ${match ? "REPRODUCED" : "MISMATCH"}`);
+  if (!match) { console.log(`  recorded: ${rec.reason || ""}`); console.log(`  now:      ${now.reason || ""}`); }
+  process.exit(match ? 0 : 1);
+}
+
+// `receipts explain <receipt>` - human-readable summary of a receipt artifact.
+function explain(rest) {
+  const receiptPath = firstPositional(rest);
+  if (!receiptPath) { console.error("usage: receipts explain <receipt.json>"); process.exit(1); }
+  const rec = readJson(receiptPath);
+  if (!rec) { console.error(`cannot read receipt: ${receiptPath}`); process.exit(1); }
+  const sha = (s) => String(s || "").slice(0, 12) || "?";
+  const out = [];
+  out.push(`receipt (${rec.schema || "?"}) - ${rec.verdict || "?"}`);
+  if (rec.reason) out.push(`  ${rec.reason}`);
+  out.push(`  base ${sha(rec.base)}  head ${sha(rec.head)}  config:${rec.config_source || "?"}` +
+    (rec.work_type ? `  work-type:${rec.work_type}` : ""));
+  if (rec.red != null || rec.green != null)
+    out.push(`  red (reproduced on base): ${rec.red}   green (gone on head): ${rec.green}`);
+  if (Array.isArray(rec.tests) && rec.tests.length) out.push(`  receipt tests: ${rec.tests.join(", ")}`);
+  for (const c of rec.commands || [])
+    out.push(`  $ ${c.command}  ->  exit ${c.exit_code} (${c.duration_ms}ms)${c.timed_out ? " [TIMED OUT]" : ""}`);
+  const g7 = rec.gates && rec.gates.G7;
+  if (g7 && Array.isArray(g7.new_dependents) && g7.new_dependents.length)
+    out.push(`  G7 new dependents: ${g7.new_dependents.map((d) => d.file).join(", ")}`);
+  for (const w of rec.warnings || []) out.push(`  ! ${w}`);
+  process.stdout.write(out.join("\n") + "\n");
+}
+
 function parseArgs(argv) {
   const o = { _: [] };
   for (let i = 0; i < argv.length; i++) {
@@ -345,11 +414,17 @@ function parseArgs(argv) {
 }
 
 async function main() {
-  const o = parseArgs(process.argv.slice(2));
+  const raw = process.argv.slice(2);
+  const o = parseArgs(raw);
   const cmd = o._[0];
-  if (o.help || !cmd) { process.stdout.write(HELP); return; }
+  if (!cmd || (o.help && cmd !== "verify")) { process.stdout.write(HELP); return; }
+  // Args after the command word, raw (preserves --base etc. for the passthrough commands).
+  const rest = raw.slice(raw.indexOf(cmd) + 1);
   if (cmd === "init") return init(o);
   if (cmd === "doctor") return doctor(o);
+  if (cmd === "verify") return verify(rest);
+  if (cmd === "replay") return replay(rest);
+  if (cmd === "explain") return explain(rest);
   console.error(`Unknown command: ${cmd}\n`);
   process.stdout.write(HELP);
   process.exit(1);
