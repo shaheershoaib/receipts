@@ -36,6 +36,23 @@ DEFAULT_DOWNGRADE_TAGS = ("unverified-reasoned", "speculative", "reverted")
 # `gh pr merge` only at a command boundary (start / ; / && / | / newline) - so a
 # printf/echo/grep that merely CONTAINS the string as data does not match.
 GH_MERGE = re.compile(r"(?:^|[;&|]|\n)\s*gh\s+pr\s+merge\b")
+GH_ISSUE_CLOSE = re.compile(r"(?:^|[;&|]|\n)\s*gh\s+issue\s+close\b")
+
+# Tracker-agnostic close-out NAME shapes (see stop-verification-gate.py for the rationale):
+# update/transition/resolve/close on an issue/ticket/task/page/item across Notion, Linear,
+# Jira, GitHub, and similar - so the trajectory nudge is not Notion-only either.
+TRACKER_WRITE = re.compile(
+    r"(update|set|edit|patch|transition|move|resolve|close)[-_ ]?"
+    r"(issue|ticket|task|story|card|page|item|bug|work[-_ ]?item)",
+    re.I,
+)
+TRACKER_CLOSE = re.compile(r"(close|resolve)[-_ ]?(issue|ticket|task|bug|item|story|card)", re.I)
+# Generic Status/State -> closeout value (mirrors stop-verification-gate.py).
+CLOSEOUT_STATUS = re.compile(
+    r'"(?:bug\s+)?(?:status|state)"\s*:\s*"\s*'
+    r'(?:fixed|closed|verified|done|resolved|complete|completed)\b',
+    re.I,
+)
 
 
 def _read_config_file(p):
@@ -116,9 +133,14 @@ def is_closeout(name, inp, fixed_statuses, exit_re):
         return True
     if name == "Bash" and GH_MERGE.search(str(sget(inp, "command") or "")):
         return True
-    if "notion-update-page" in n:
+    if name == "Bash" and GH_ISSUE_CLOSE.search(str(sget(inp, "command") or "")):
+        return True
+    if TRACKER_WRITE.search(name or ""):
+        if TRACKER_CLOSE.search(name or ""):
+            return True
         s = inp if isinstance(inp, str) else json.dumps(inp)
-        return any(st in s for st in fixed_statuses) or bool(exit_re.search(s))
+        return (any(st in s for st in fixed_statuses) or bool(exit_re.search(s))
+                or bool(CLOSEOUT_STATUS.search(s)))
     return False
 
 

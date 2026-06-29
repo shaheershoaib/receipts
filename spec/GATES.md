@@ -318,3 +318,13 @@ cannot make a branch's own tests unsubvertible. That is what human review of the
 raise the floor on honesty; they do not replace review. Likewise the G10 contract check is a
 best-effort structural diff for common breaking changes, not a complete contract differ -
 pair it with a dedicated tool (e.g. oasdiff) where full coverage matters.
+
+Two trigger-scope notes in the same spirit. First, by default the enforcer only requires a
+receipt of a **fix-claim** (a PR matching `claim.issue_link`, e.g. `closes #N`); a code change
+that omits the issue link is not re-verified. A project that wants every code change held to
+the bar sets `claim.require_receipt_for: "any-source-change"` - then a PR touching production
+source (excluding docs / tests / CI / config) must carry a receipt, an honest downgrade tag,
+or an explicit `work-type`, or it is blocked. Second, even under the strict trigger a fix
+**mislabeled** `work-type: refactor` (which proves itself with suite-green, no red->green) is
+structurally indistinguishable from a real refactor, so it is not caught - the hostile-author
+case above, where diff review is the backstop.

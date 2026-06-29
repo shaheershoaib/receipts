@@ -38,6 +38,10 @@ const DOC_KEYS = new Set(["description", "summary", "title", "example", "example
 const UNSAFE_PATH = /["'`$;|&()<>\n\r\\]/;
 // A base run that "failed" to LOAD rather than to ASSERT - a red that may not prove the symptom.
 const LOAD_ERROR = /cannot find module|module ?not ?found|cannot import|importerror|modulenotfounderror|syntaxerror|no tests? (found|ran|collected)|collected 0 items|0 tests? found/i;
+// Not production source: docs, license/changelog, CI workflows, the receipts config itself,
+// VCS meta. Used by the "any-source-change" strict trigger to decide whether a non-fix-claim
+// PR touched anything that needs a receipt. (Test files are excluded separately via TEST_PATH.)
+const DOC_OR_META = /(^|\/)(LICENSE|CHANGELOG)|\.(md|markdown|txt|rst|adoc)$|(^|\/)\.github\/|(^|\/)receipts\.config\.json$|(^|\/)\.gitignore$/i;
 
 let ARGS = {};
 const WARNINGS = [];
@@ -227,6 +231,11 @@ function main() {
   const verify = cfg.verify || {};
   const gates = cfg.gates || {};
   const noReceiptMode = degrade.on_no_receipt || "require-downgrade-tag";
+  // Trigger scope. Default ("issue-link"): only a fix-claim (closes #N) must carry a receipt.
+  // Opt-in ("any-source-change"): a PR that touches production source without a receipt, an
+  // honest downgrade tag, or an explicit work-type is also blocked - closing the "omit the
+  // issue link -> silent green" bypass. Default preserves prior behavior for existing users.
+  const strict = (claim.require_receipt_for || "issue-link") === "any-source-change";
 
   const issueRe = new RegExp(claim.issue_link || "closes #(\\d+)", "i");
   const isFixClaim = issueRe.test(prBody);
@@ -236,8 +245,10 @@ function main() {
   const workType = ((prBody.match(/work[ _-]?type\s*[:=]\s*([a-z]+)/i) || [])[1] || gates.work_type || "").toLowerCase();
   const inverted = (workType === "refactor" || workType === "chore") && !isFixClaim;
 
-  // Not a fix-claim and no work-type -> nothing to re-verify.
-  if (bodyProvided && !isFixClaim && !workType) emit("PASS", "not a fix-claim (no issue link) - nothing to re-verify");
+  // Not a fix-claim and no work-type -> nothing to re-verify (default trigger). Under the
+  // strict trigger we do NOT bail here: control falls through to the source-change check
+  // below (after the diff is computed), so an unclaimed code change still needs a receipt.
+  if (bodyProvided && !isFixClaim && !workType && !strict) emit("PASS", "not a fix-claim (no issue link) - nothing to re-verify");
 
   // Honest downgrade -> tracked, not blocked (the honesty ladder).
   const tags = claim.downgrade_tags || ["unverified-reasoned", "speculative", "reverted"];
@@ -269,6 +280,16 @@ function main() {
   const changed = diff.out.split("\n").map((s) => s.trim()).filter(Boolean);
   if (changed.includes("receipts.config.json"))
     warn("this PR changes receipts.config.json - the enforcer ran with the BASE config (the change takes effect after merge); review the config change.");
+
+  // Strict trigger: a non-fix-claim with no work-type only reaches here when
+  // require_receipt_for is "any-source-change". If it touched no PRODUCTION source (docs /
+  // tests / CI / config only) there is nothing to re-verify; otherwise it falls through and
+  // must carry a receipt below, exactly like a fix-claim.
+  if (strict && bodyProvided && !isFixClaim && !workType) {
+    const changedSource = changed.filter((f) => !DOC_OR_META.test(f) && !TEST_PATH.test(f));
+    if (!changedSource.length)
+      emit("PASS", "no production source changed (docs / tests / config only) - nothing to re-verify");
+  }
 
   // G9 unmasked: a command that can hide its own exit code cannot be trusted. Checked at the
   // point each command actually RUNS (below), so a command that will NOT run - a masked
@@ -302,7 +323,7 @@ function main() {
   const tests = changed.filter((f) => TEST_PATH.test(f));
   if (!tests.length) {
     if (noReceiptMode === "warn") emit("WARN", "no receipt (no test added/changed) - allowed by config, but unverified");
-    emit("BLOCK", "no receipt: this fix-claim adds no acceptance test. Add a test that FAILS before and PASSES after the fix, or tag the PR 'unverified-reasoned' / 'speculative'. (A behavior-preserving change: tag it `work-type: refactor`.)");
+    emit("BLOCK", "no receipt: this change adds no acceptance test. Add a test that FAILS before and PASSES after the change, or tag the PR 'unverified-reasoned' / 'speculative'. (A behavior-preserving change: tag it `work-type: refactor`.)");
   }
   // Path safety: these get interpolated into the shell test command (shell metacharacters)
   // and passed as test-runner args / git pathspecs (a leading "-" reads as a flag, a leading
@@ -343,8 +364,23 @@ function main() {
     // unproven receipt, not a clean pass. (A behavior-preserving change uses work-type.)
     emit(noReceiptMode === "warn" ? "WARN" : "BLOCK",
       "weak receipt: the test PASSES on the base commit, so it does not prove it reproduced the reported symptom (G0/G1). Make the test assert the actual symptom, tag the PR honestly, or - if no behavior changes - mark it `work-type: refactor`.");
-  if (LOAD_ERROR.test(red.out || ""))
-    warn("the base run looks like a LOAD / collection error (import / syntax / no-tests), not an assertion failure - the red may not prove the symptom; confirm the test fails on the bug, not on setup.");
+  if (LOAD_ERROR.test(red.out || "")) {
+    // The base run FAILED, but as a load/collection error (import / syntax / no-tests-found),
+    // not an assertion. That red may not prove the symptom: the test could be red on base
+    // merely because it imports code that only exists on head (common and LEGITIMATE for a
+    // feature - the behavior is absent until built - but suspicious for a fix, where the code
+    // already exists and the symptom should reproduce by assertion). Default: warn. A repo
+    // that wants fixes to carry an asserting red sets verify.on_load_error_red: "block".
+    const loadMode = verify.on_load_error_red || "warn";
+    const msg =
+      "weak receipt: the test FAILED on the base commit as a LOAD / collection error (import / " +
+      "syntax / no-tests), not an assertion - so this red may not prove it reproduced the symptom " +
+      "(it can be red merely because it imports code that only exists on head). For a fix, make " +
+      "the test importable on base and assert the actual symptom; for a feature, that red is " +
+      "expected - mark the PR `work-type: feature`. ";
+    if (loadMode === "block" && workType !== "feature") emit("BLOCK", msg);
+    warn(msg);
+  }
   if (!green.ok)
     emit("BLOCK", "the fix does not pass its own receipt test on head", (green.out || "").split("\n").slice(-8).join("\n"));
   if (haveSuite && suite && !suite.ok)
@@ -354,5 +390,12 @@ function main() {
   finish("receipt verified: red on base, green on fix - the symptom is reproduced and now gone");
 }
 
-try { main(); }
-catch (e) { console.error("receipts enforcer error: " + (e && e.message ? e.message : e)); process.exit(1); }
+// Run only when invoked as a script. When this file is `require`d (the enforcer's own
+// test suite - Phase 0 self-verification), main() must NOT run; only the pure,
+// side-effect-free helpers below are exported for direct unit testing.
+if (require.main === module) {
+  try { main(); }
+  catch (e) { console.error("receipts enforcer error: " + (e && e.message ? e.message : e)); process.exit(1); }
+}
+
+module.exports = { masksExit, gateOn, globToRe, isContractFile, typeSet, walkBreaks, contractBreaks };

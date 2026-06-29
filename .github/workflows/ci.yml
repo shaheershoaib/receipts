@@ -1,0 +1,48 @@
+name: ci
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+jobs:
+  test:
+    name: enforcer self-verification suite
+    runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        node: ['20', '22']
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: ${{ matrix.node }}
+      - name: Run the enforcer's own test suite
+        run: npm test
+
+  hooks:
+    name: stop-hook backstop tests
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.x'
+      - name: Run the Stop-hook tests
+        run: python3 -m unittest discover -s plugin/hooks/test -p 'test_*.py'
+
+  receipts:
+    # Dogfood: the receipts enforcer gates receipts' OWN fix-claim PRs. A "looks
+    # done" PR here must carry, and survive, its own red->green receipt - the same
+    # bar the tool holds everyone else to. Non-fix PRs (no `closes #N`) pass through.
+    name: receipts enforcer (dogfood)
+    if: github.event_name == 'pull_request'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+      - uses: ./enforcer

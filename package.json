@@ -6,6 +6,7 @@
     "receipts": "bin/receipts.js"
   },
   "scripts": {
+    "test": "node --test enforcer/test/*.test.js",
     "init": "node bin/receipts.js init",
     "build:refs": "node -e \"const fs=require('fs'),d='plugin/skills/gates/references/';fs.mkdirSync(d,{recursive:true});for(const f of fs.readdirSync('spec'))if(f.endsWith('.md'))fs.copyFileSync('spec/'+f,d+f)\""
   },
