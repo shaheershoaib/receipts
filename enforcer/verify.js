@@ -30,6 +30,7 @@
 const { execFileSync, execSync } = require("child_process");
 const fs = require("fs");
 const path = require("path");
+const g7 = require("./g7.js");
 
 const TEST_PATH = /(\.test\.|\.spec\.|_test\.|(^|\/)test_|(^|\/)tests?\/|\/__tests__\/|_spec\.)/i;
 // JSON keys that are documentation, not contract surface - removing them is not breaking.
@@ -337,14 +338,29 @@ function main() {
   if (changed.includes("receipts.config.json"))
     warn("this PR changes receipts.config.json - the enforcer ran with the BASE config (the change takes effect after merge); review the config change.");
 
+  const changedSource = changed.filter((f) => !DOC_OR_META.test(f) && !TEST_PATH.test(f));
   // Strict trigger: a non-fix-claim with no work-type only reaches here when
   // require_receipt_for is "any-source-change". If it touched no PRODUCTION source (docs /
   // tests / CI / config only) there is nothing to re-verify; otherwise it falls through and
   // must carry a receipt below, exactly like a fix-claim.
-  if (strict && bodyProvided && !isFixClaim && !workType) {
-    const changedSource = changed.filter((f) => !DOC_OR_META.test(f) && !TEST_PATH.test(f));
-    if (!changedSource.length)
-      emit("PASS", "no production source changed (docs / tests / config only) - nothing to re-verify");
+  if (strict && bodyProvided && !isFixClaim && !workType && !changedSource.length)
+    emit("PASS", "no production source changed (docs / tests / config only) - nothing to re-verify");
+
+  // G7 dependent-test-selection: compute the NEW dependents of the changed source - consumers
+  // that newly route through it (a freshly-added file, or a freshly-added import edge). Their
+  // co-located tests get re-run on head below, so an integration break the carried receipt
+  // never exercises is caught. Built-in JS/TS scan + an optional gates.G7.graph for any stack.
+  const g7cfg = (gates && gates.G7) || {};
+  let g7res = { computed: false, newDependents: [] };
+  if (gateOn(gates, "G7") && changedSource.length) {
+    const listAt = (c) => git(repo, ["ls-tree", "-r", "--name-only", c]).out.split("\n").map((s) => s.trim()).filter(Boolean);
+    const readAt = (c, p) => { const r = git(repo, ["show", `${c}:${p}`]); return r.ok ? r.out : null; };
+    let graph = null;
+    if (g7cfg.graph) { const g = readAt(head, g7cfg.graph); if (g) { try { graph = JSON.parse(g); } catch { /* not JSON */ } } }
+    try {
+      g7res = g7.computeNewDependents({ base, head, changedSource, listAt, readAt, graph, allDependents: !!g7cfg.verify_all_dependents });
+    } catch { g7res = { computed: false, newDependents: [] }; }
+    RECEIPT.gates.G7 = { computed: g7res.computed, new_dependents: g7res.newDependents.map((d) => ({ file: d.file, reason: d.reason, tests: d.tests })) };
   }
 
   // G9 unmasked: a command that can hide its own exit code cannot be trusted. Checked at the
@@ -403,8 +419,14 @@ function main() {
   if (haveSuite && gateOn(gates, "G9") && masksExit(suiteCmd))
     emit("BLOCK", "verify.suite_command can mask its own exit code - a green cannot be trusted (G9). Use a clean command or a script.");
 
+  // G7: the new dependents' co-located tests to re-run on head (path-safe, deduped), and the
+  // new dependents that have NO test to re-run (surfaced as a warning, never a silent pass).
+  const depTests = [...new Set(g7res.newDependents.flatMap((d) => d.tests))]
+    .filter((f) => !(UNSAFE_PATH.test(f) || /^[-:]/.test(f)));
+  const depNoTest = g7res.newDependents.filter((d) => !d.tests.length);
+
   const original = git(repo, ["rev-parse", "HEAD"]).out.trim();
-  let red, green, suite;
+  let red, green, suite, g7run;
   try {
     // RED: base source, with head's receipt test(s) overlaid on top.
     if (!git(repo, ["checkout", "-q", "-f", base]).ok) emit("BLOCK", `cannot checkout base ${base}`);
@@ -418,6 +440,12 @@ function main() {
     record("receipt-green@head", cmdFor(tests), green);
     RECEIPT.green = green.ok; // green = the symptom is gone on head (it PASSED there)
     if (green.ok && haveSuite && gateOn(gates, "G9")) { suite = runCmd(repo, suiteCmd, cmdTimeout); record("suite@head", suiteCmd, suite); }
+    // G7: re-run the new dependents' tests on head - unless a green full suite already covered
+    // them (it runs every test, so re-running the subset would be waste).
+    if (green.ok && gateOn(gates, "G7") && depTests.length && !(suite && suite.ok)) {
+      g7run = runCmd(repo, cmdFor(depTests), cmdTimeout);
+      record("g7-dependents@head", cmdFor(depTests), g7run);
+    }
   } finally {
     git(repo, ["checkout", "-q", "-f", original]);
   }
@@ -450,6 +478,21 @@ function main() {
     emit("BLOCK", "G9 full-scope green: the fix passes its own receipt but BREAKS the full suite - a regression in code the changed test never exercised. Fix it, or carry a downgrade tag.", (suite.out || "").split("\n").slice(-8).join("\n"));
   if (gateOn(gates, "G9") && !haveSuite)
     warn("G9 full-scope green not checked: set verify.suite_command so the enforcer runs the full suite on head (the regression is often outside the changed test).");
+
+  // G7: a NEW consumer of the changed surface whose test fails on head is an integration
+  // regression the carried receipt would never catch. Default warn (the reverse-dep set is
+  // heuristic); gates.G7.mode -> block. A new consumer with NO test is surfaced, never silent.
+  if (gateOn(gates, "G7")) {
+    if (g7run && !g7run.ok) {
+      const names = g7res.newDependents.filter((d) => d.tests.length).map((d) => d.file).join(", ");
+      const msg = `G7 dependent regression: a NEW consumer of the changed surface FAILS its tests on head (${names}). The change broke a downstream dependent the carried receipt never exercised. Fix it, sequence the change, or carry a downgrade tag.`;
+      if (RECEIPT.gates.G7) { RECEIPT.gates.G7.ran = true; RECEIPT.gates.G7.ok = false; }
+      if ((g7cfg.mode || "warn") === "block") emit("BLOCK", msg, (g7run.out || "").split("\n").slice(-8).join("\n"));
+      warn(msg);
+    }
+    if (depNoTest.length)
+      warn(`G7: ${depNoTest.length} new dependent(s) of the changed surface have no co-located test to re-run (${depNoTest.map((d) => d.file).join(", ")}) - verify them manually.`);
+  }
   finish("receipt verified: red on base, green on fix - the symptom is reproduced and now gone");
 }
 
