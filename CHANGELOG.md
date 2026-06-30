@@ -13,6 +13,12 @@ The verification engine learns to verify itself, ship a replayable proof, and ru
 - **Replayable receipts.** Any verification can emit a machine-readable evidence artifact
   (`--receipt-out`): base/head, verdict, red/green, and every command run with its exit code
   and duration. Schema in `spec/RECEIPT.md`. The GitHub Action uploads it as a build artifact.
+- **G6 surface-coverage** (the "sweep the twins" assist). Catches a pattern applied to SOME
+  sibling surfaces but not all - the "claimed app-wide, actually partial" failure (e.g.
+  pagination added to 2 of 4 `*Table` components). Declared families (`gates.G6.surfaces`: a
+  glob + a required marker, any language) encode an app-wide claim as a re-checkable invariant;
+  a built-in JS/TS heuristic flags same-named twins that missed an import rolled out to >=2
+  siblings. Runs on every PR; default warn, `gates.G6.mode` -> block.
 - **G7 dependent-test-selection.** The enforcer computes the NEW dependents of the changed
   source (a freshly-added consumer file, or a freshly-added import edge) and re-runs their
   co-located tests on head. Built-in JS/TS import scan + an explicit consumer graph
