@@ -148,7 +148,7 @@
         "G6": {
           "type": "object",
           "additionalProperties": false,
-          "description": "Surface coverage - the 'sweep the twins' assist. Catches a pattern applied to SOME sibling surfaces but not all (an 'app-wide' change that is actually partial). Two mechanisms: declared `surfaces` (a glob + a required marker, any language) and a built-in JS/TS heuristic (an import rolled out to >=2 siblings flags same-named twins that missed it). Runs on every PR with a diff.",
+          "description": "Surface coverage - the 'sweep the twins' assist. Catches a pattern applied to SOME sibling surfaces but not all (an 'app-wide' change that is actually partial). Two mechanisms: declared `surfaces` (a glob + a required marker substring, any language) and a built-in JS/TS heuristic - an AFFORDANCE (a component, hook, attribute, call, or import) rolled out to >=2 same-named siblings flags the twins that missed it. Runs on every PR with a diff.",
           "properties": {
             "mode": {
               "enum": ["warn", "block"],
