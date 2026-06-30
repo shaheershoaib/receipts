@@ -66,6 +66,42 @@ function endsWithWords(file, trail) {
 
 const isJsSurface = (f) => JS_EXT.test(f) && !TEST_PATH.test(f) && !f.includes("node_modules/");
 
+// Language keywords + ubiquitous framework tokens - excluded from the auto-heuristic (a
+// rollout of `useState` or `return` is noise). A flat-lowercase marker like `disabled` is
+// also excluded here on purpose; declare it as a `surfaces` marker if you want it checked.
+const KEYWORDS = new Set([
+  "const", "let", "var", "function", "return", "if", "else", "for", "while", "switch", "case",
+  "break", "continue", "new", "this", "class", "extends", "super", "import", "export", "from",
+  "default", "async", "await", "yield", "typeof", "instanceof", "void", "delete", "true",
+  "false", "null", "undefined", "type", "interface", "enum", "namespace", "declare", "public",
+  "private", "protected", "readonly", "static", "abstract", "implements", "of", "in", "as",
+  "is", "keyof", "props", "state", "children", "classname", "style", "react", "fragment",
+  "usestate", "useeffect", "useref", "usememo", "usecallback", "usecontext", "string", "number",
+  "boolean", "object", "array", "promise", "any", "unknown", "never",
+]);
+
+// All identifier-ish tokens in a source (regex-level; '-' kept so JSX attributes like
+// `aria-label` are single tokens). Not an AST - good enough to spot a rolled-out affordance.
+function identifiers(src) {
+  const out = new Set();
+  const re = /[A-Za-z_$][\w$-]*/g;
+  let m;
+  while ((m = re.exec(String(src || "")))) out.add(m[0]);
+  return out;
+}
+
+// A token distinctive enough to be a meaningful "affordance" the auto-heuristic tracks: a
+// component / type (PascalCase), a hook / call (camelCase), or an attribute (kebab). Flat
+// lowercase words and keywords are excluded (too noisy without a declaration).
+function isDistinctive(tok) {
+  if (!tok || tok.length < 3) return false;
+  if (KEYWORDS.has(tok.toLowerCase())) return false;
+  if (tok.includes("-")) return true;        // kebab: aria-label, data-testid
+  if (/^[A-Z]/.test(tok)) return true;        // PascalCase / CONSTANT_CASE
+  if (/[a-z][A-Z]/.test(tok)) return true;    // camelCase: useAuth, rateLimit, reportError
+  return false;                                // flat lowercase -> declared territory
+}
+
 /*
  * computeG6({ base, head, changed, listAt, readAt, surfaces, auto })
  *   -> { findings: [{ kind, name, marker, adopters, uncovered }] }
@@ -101,34 +137,55 @@ function computeG6(opts) {
     }
   }
 
-  // 2) HEURISTIC import-rollout detection (JS/TS).
+  // 2) HEURISTIC rollout detection (JS/TS): a marker added to >=2 same-named siblings, with
+  //    the twins that missed it flagged. A "marker" is whatever the rollout expresses - an
+  //    added IMPORT specifier (a module-source change), OR an added DISTINCTIVE identifier: a
+  //    component <Pagination/>, a hook useAuth, an attribute aria-label, a call reportError.
+  //    So the check generalizes beyond imports to props / attributes / calls / tags.
   if (auto !== false) {
-    const addedBy = new Map(); // import specifier -> Set(changed file that newly added it)
+    const addedBy = new Map(); // marker -> { kind: "import" | "token", files: Set }
+    const note = (marker, kind, f) => {
+      const cur = addedBy.get(marker) || { kind, files: new Set() };
+      cur.files.add(f);
+      addedBy.set(marker, cur);
+    };
     for (const f of changed || []) {
       if (!isJsSurface(f)) continue;
       const head_ = readAt(head, f);
       if (head_ == null) continue;
-      const before = new Set(jsImports(readAt(base, f) || ""));
-      for (const spec of jsImports(head_)) if (!before.has(spec)) {
-        if (!addedBy.has(spec)) addedBy.set(spec, new Set());
-        addedBy.get(spec).add(f);
-      }
+      const base_ = readAt(base, f) || "";
+      const beforeImp = new Set(jsImports(base_));
+      for (const spec of jsImports(head_)) if (!beforeImp.has(spec)) note(spec, "import", f);
+      const beforeTok = identifiers(base_);
+      for (const tok of identifiers(head_)) if (!beforeTok.has(tok) && isDistinctive(tok)) note(tok, "token", f);
     }
-    for (const [spec, set] of addedBy) {
-      const adopters = [...set];
+    const hits = [];
+    for (const [marker, { kind, files }] of addedBy) {
+      const adopters = [...files];
       if (adopters.length < 2) continue; // a rollout, not a one-off
       const trail = commonTrailing(adopters.map((f) => camelWords(path.posix.basename(f))));
       if (trail.join("").length < 4) continue; // need a confident family signature
       const family = headFiles.filter(isJsSurface).filter((f) => endsWithWords(f, trail));
       const adopterSet = new Set(adopters);
-      const uncovered = family.filter((f) => !adopterSet.has(f) && !jsImports(readAt(head, f) || "").includes(spec));
-      if (uncovered.length) {
-        findings.push({ kind: "heuristic", name: "*" + trail.join(""), marker: spec, adopters, uncovered });
-      }
+      const has = (f) => {
+        const s = readAt(head, f) || "";
+        return kind === "import" ? jsImports(s).includes(marker) : s.includes(marker);
+      };
+      const uncovered = family.filter((f) => !adopterSet.has(f) && !has(f));
+      if (uncovered.length) hits.push({ kind: "heuristic", name: "*" + trail.join(""), marker, marker_kind: kind, adopters, uncovered });
     }
+    // An import specifier and the name it binds usually fire on the same rollout; collapse to
+    // one finding per (family + uncovered set), preferring the readable token marker.
+    const best = new Map();
+    for (const h of hits) {
+      const key = h.name + "|" + [...h.uncovered].sort().join(",");
+      const prev = best.get(key);
+      if (!prev || (h.marker_kind === "token" && prev.marker_kind === "import")) best.set(key, h);
+    }
+    for (const h of best.values()) findings.push(h);
   }
 
   return { findings };
 }
 
-module.exports = { globToRe, camelWords, commonTrailing, endsWithWords, computeG6 };
+module.exports = { globToRe, camelWords, commonTrailing, endsWithWords, identifiers, isDistinctive, computeG6 };

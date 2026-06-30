@@ -46,6 +46,21 @@ test("a COMPLETE rollout does not warn (no false positive)", () => {
   assert.ok(!g6warn(v), "a complete rollout must not be flagged: " + JSON.stringify(v.warnings));
 });
 
+test("heuristic catches a NON-import rollout end-to-end (aria-label on inputs)", () => {
+  const withAria = 'export const I = () => (<input aria-label="name" />);\n';
+  const plain = "export const I = () => (<input />);\n";
+  const baseFiles = { "receipts.config.json": cfg() };
+  for (const i of ["NameInput", "EmailInput", "PhoneInput"]) baseFiles[`src/${i}.tsx`] = plain;
+  const headFiles = { "src/NameInput.tsx": withAria, "src/EmailInput.tsx": withAria };
+  const r = makeRepo({ baseFiles, headFiles });
+  const v = runVerify({ ...r, prBody: "add aria-labels to inputs" }); // not an import; not a fix-claim
+  assert.equal(v.exitCode, 0, v.raw);
+  const w = g6warn(v);
+  assert.ok(w, "expected a G6 warning: " + JSON.stringify(v.warnings));
+  assert.match(w, /PhoneInput/);
+  assert.match(w, /aria-label/);
+});
+
 test("declared family: the project's coverage invariant flags the gaps", () => {
   const r = tablesRepo(
     { gates: { G6: { auto: false, surfaces: [{ name: "table pagination", glob: "src/**/*Table.tsx", marker: "Pagination" }] } } },
