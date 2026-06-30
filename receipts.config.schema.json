@@ -145,6 +145,38 @@
           "description": "Gate IDs to turn off even if `enabled` includes them; takes precedence over `enabled`.",
           "default": []
         },
+        "G6": {
+          "type": "object",
+          "additionalProperties": false,
+          "description": "Surface coverage - the 'sweep the twins' assist. Catches a pattern applied to SOME sibling surfaces but not all (an 'app-wide' change that is actually partial). Two mechanisms: declared `surfaces` (a glob + a required marker, any language) and a built-in JS/TS heuristic (an import rolled out to >=2 siblings flags same-named twins that missed it). Runs on every PR with a diff.",
+          "properties": {
+            "mode": {
+              "enum": ["warn", "block"],
+              "description": "What an incomplete rollout does: warn (default) or block.",
+              "default": "warn"
+            },
+            "auto": {
+              "type": "boolean",
+              "description": "Enable the JS/TS import-rollout heuristic (no config needed). Set false to rely only on declared `surfaces`.",
+              "default": true
+            },
+            "surfaces": {
+              "type": "array",
+              "description": "Declared surface families: each is a set of files (glob) that must all carry a marker (substring). Encodes an 'app-wide' invariant the enforcer re-checks - language-agnostic.",
+              "items": {
+                "type": "object",
+                "additionalProperties": false,
+                "required": ["glob", "marker"],
+                "properties": {
+                  "name": { "type": "string", "description": "Human label, e.g. 'table pagination'." },
+                  "glob": { "type": "string", "description": "Files in the family, e.g. 'src/**/*Table.tsx'. Supports * and **." },
+                  "marker": { "type": "string", "description": "Substring every family member must contain, e.g. 'Pagination' or 'usePagination' or 'LIMIT'." },
+                  "always": { "type": "boolean", "description": "Check coverage on every PR (a standing invariant), not only when a PR touches the marker. Default false.", "default": false }
+                }
+              }
+            }
+          }
+        },
         "G7": {
           "type": "object",
           "additionalProperties": false,
