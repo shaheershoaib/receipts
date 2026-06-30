@@ -31,6 +31,7 @@ const { execFileSync, execSync } = require("child_process");
 const fs = require("fs");
 const path = require("path");
 const g7 = require("./g7.js");
+const g6 = require("./g6.js");
 
 const TEST_PATH = /(\.test\.|\.spec\.|_test\.|(^|\/)test_|(^|\/)tests?\/|\/__tests__\/|_spec\.)/i;
 // JSON keys that are documentation, not contract surface - removing them is not breaking.
@@ -302,10 +303,43 @@ function main() {
   });
   RECEIPT.gates = { enabled: gates.enabled || "all", disabled: gates.disabled || [] };
 
-  // Not a fix-claim and no work-type -> nothing to re-verify (default trigger). Under the
-  // strict trigger we do NOT bail here: control falls through to the source-change check
-  // below (after the diff is computed), so an unclaimed code change still needs a receipt.
-  if (bodyProvided && !isFixClaim && !workType && !strict) emit("PASS", "not a fix-claim (no issue link) - nothing to re-verify");
+  // The PR's changed files - computed early so G6 can run on EVERY PR (fix-claim or not).
+  const diff = git(repo, ["diff", "--name-only", `${base}..${head}`]);
+  if (!diff.ok) emit("BLOCK", `cannot diff ${base}..${head}`, diff.out);
+  const changed = diff.out.split("\n").map((s) => s.trim()).filter(Boolean);
+  const changedSource = changed.filter((f) => !DOC_OR_META.test(f) && !TEST_PATH.test(f));
+  if (changed.includes("receipts.config.json"))
+    warn("this PR changes receipts.config.json - the enforcer ran with the BASE config (the change takes effect after merge); review the config change.");
+
+  // G6 surface coverage (the "sweep the twins" assist): a pattern applied to SOME sibling
+  // surfaces but not all - the "claimed app-wide, actually partial" failure. Runs on every PR
+  // with a diff (an incomplete rollout is often an unlinked feature), static over base/head -
+  // no checkout, no test run. Declared families (any language) + a JS/TS heuristic.
+  if (gateOn(gates, "G6")) {
+    const g6cfg = (gates && gates.G6) || {};
+    const listAt = (c) => git(repo, ["ls-tree", "-r", "--name-only", c]).out.split("\n").map((s) => s.trim()).filter(Boolean);
+    const readAt = (c, p) => { const r = git(repo, ["show", `${c}:${p}`]); return r.ok ? r.out : null; };
+    let g6res = { findings: [] };
+    try {
+      g6res = g6.computeG6({ base, head, changed, listAt, readAt, surfaces: g6cfg.surfaces, auto: g6cfg.auto });
+    } catch { g6res = { findings: [] }; }
+    if (g6res.findings.length) {
+      RECEIPT.gates.G6 = { findings: g6res.findings.map((f) => ({ kind: f.kind, name: f.name, marker: f.marker, uncovered: f.uncovered })) };
+      const detail = g6res.findings.map((f) =>
+        `'${f.marker}'${f.name ? ` (${f.name})` : ""} landed on ${(f.adopters || []).join(", ") || "some surfaces"} but these siblings still lack it: ${f.uncovered.slice(0, 12).join(", ")}${f.uncovered.length > 12 ? ` (+${f.uncovered.length - 12} more)` : ""}`).join(" | ");
+      const msg = `G6 incomplete rollout: a pattern landed on some sibling surfaces but not all - an "app-wide" change that is not yet app-wide. ${detail}. Apply it to the missing surfaces, or note the divergence.`;
+      if ((g6cfg.mode || "warn") === "block") emit("BLOCK", msg);
+      warn(msg);
+    }
+  }
+
+  // Strict trigger: an unclaimed code change that touched no PRODUCTION source (docs / tests /
+  // config only) has nothing to re-verify; otherwise it falls through and must carry a receipt.
+  if (strict && bodyProvided && !isFixClaim && !workType && !changedSource.length)
+    emit("PASS", "no production source changed (docs / tests / config only) - nothing to re-verify");
+  // Not a fix-claim and no work-type (default trigger) -> nothing to re-verify. finish() (not a
+  // bare PASS) so a G6 warning above still surfaces as WARN rather than being swallowed.
+  if (bodyProvided && !isFixClaim && !workType && !strict) finish("not a fix-claim (no issue link) - nothing to re-verify");
 
   // Honest downgrade -> tracked, not blocked (the honesty ladder).
   const tags = claim.downgrade_tags || ["unverified-reasoned", "speculative", "reverted"];
@@ -331,20 +365,6 @@ function main() {
 
   // G10 rollout compatibility.
   checkContracts(repo, base, head, gates);
-
-  const diff = git(repo, ["diff", "--name-only", `${base}..${head}`]);
-  if (!diff.ok) emit("BLOCK", `cannot diff ${base}..${head}`, diff.out);
-  const changed = diff.out.split("\n").map((s) => s.trim()).filter(Boolean);
-  if (changed.includes("receipts.config.json"))
-    warn("this PR changes receipts.config.json - the enforcer ran with the BASE config (the change takes effect after merge); review the config change.");
-
-  const changedSource = changed.filter((f) => !DOC_OR_META.test(f) && !TEST_PATH.test(f));
-  // Strict trigger: a non-fix-claim with no work-type only reaches here when
-  // require_receipt_for is "any-source-change". If it touched no PRODUCTION source (docs /
-  // tests / CI / config only) there is nothing to re-verify; otherwise it falls through and
-  // must carry a receipt below, exactly like a fix-claim.
-  if (strict && bodyProvided && !isFixClaim && !workType && !changedSource.length)
-    emit("PASS", "no production source changed (docs / tests / config only) - nothing to re-verify");
 
   // G7 dependent-test-selection: compute the NEW dependents of the changed source - consumers
   // that newly route through it (a freshly-added file, or a freshly-added import edge). Their
