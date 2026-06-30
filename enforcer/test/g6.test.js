@@ -84,10 +84,10 @@ test("heuristic: an import rolled out to >=2 siblings flags the twins that misse
   assert.deepEqual(names(r.findings, "heuristic"), ["src/InvoicesTable.tsx"]);
 });
 
-test("isDistinctive: structured affordances yes, flat words / keywords no", () => {
-  for (const t of ["Pagination", "ErrorBoundary", "useAuth", "rateLimit", "reportError", "aria-label", "data-testid", "MAX_RETRIES"])
+test("isDistinctive: any affordance (incl. flat props) yes, ubiquitous plumbing no", () => {
+  for (const t of ["Pagination", "ErrorBoundary", "useAuth", "rateLimit", "reportError", "aria-label", "data-testid", "MAX_RETRIES", "disabled", "loading", "selected", "subtotal"])
     assert.ok(isDistinctive(t), `${t} should be distinctive`);
-  for (const t of ["disabled", "loading", "value", "data", "if", "id", "return", "useState", "props"])
+  for (const t of ["value", "data", "item", "name", "error", "index", "if", "id", "return", "useState", "props", "div", "input"])
     assert.ok(!isDistinctive(t), `${t} should NOT be distinctive`);
 });
 
@@ -109,20 +109,20 @@ test("heuristic generalizes beyond imports: a CALL rolled out to siblings", () =
   assert.deepEqual(names(r.findings, "heuristic"), ["src/CartService.ts"]);
 });
 
-test("heuristic does NOT auto-flag a flat-lowercase marker - the declared surface does", () => {
+test("heuristic catches a flat-lowercase affordance (disabled), suppresses a ubiquitous word (value)", () => {
   const withDisabled = "<button disabled />";
   const plain = "<button />";
   const base = { "src/SaveButton.tsx": plain, "src/EditButton.tsx": plain, "src/DeleteButton.tsx": plain };
   const head = { "src/SaveButton.tsx": withDisabled, "src/EditButton.tsx": withDisabled, "src/DeleteButton.tsx": plain };
-  // `disabled` is a flat lowercase word -> excluded from the auto-heuristic (too noisy)...
+  // `disabled` is a real prop, not a stopword -> now auto-flagged (the broadened rule)
   const r = computeG6({ ...env(base, head), changed: ["src/SaveButton.tsx", "src/EditButton.tsx"] });
-  assert.equal(r.findings.length, 0);
-  // ...but a DECLARED surface catches it precisely.
-  const r2 = computeG6({
-    ...env(base, head), changed: ["src/SaveButton.tsx", "src/EditButton.tsx"],
-    surfaces: [{ glob: "src/**/*Button.tsx", marker: "disabled" }], auto: false,
-  });
-  assert.deepEqual(names(r2.findings, "declared"), ["src/DeleteButton.tsx"]);
+  assert.deepEqual(names(r.findings, "heuristic"), ["src/DeleteButton.tsx"]);
+  // a ubiquitous plumbing word rolled out the same way is suppressed (the noise floor)
+  const wv = "const value = 1;", pv = "const z = 1;";
+  const b2 = { "src/SaveButton.tsx": pv, "src/EditButton.tsx": pv, "src/DeleteButton.tsx": pv };
+  const h2 = { "src/SaveButton.tsx": wv, "src/EditButton.tsx": wv, "src/DeleteButton.tsx": pv };
+  const r2 = computeG6({ ...env(b2, h2), changed: ["src/SaveButton.tsx", "src/EditButton.tsx"] });
+  assert.equal(r2.findings.length, 0);
 });
 
 test("heuristic: a single adopter or no common family does NOT fire", () => {

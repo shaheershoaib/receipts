@@ -18,8 +18,8 @@ The verification engine learns to verify itself, ship a replayable proof, and ru
   pagination added to 2 of 4 `*Table` components). Declared families (`gates.G6.surfaces`: a
   glob + a required marker, any language) encode an app-wide claim as a re-checkable invariant;
   a built-in JS/TS heuristic flags same-named twins that missed an affordance (a component,
-  hook, attribute, call, or import) rolled out to >=2 siblings. Runs on every PR; default warn,
-  `gates.G6.mode` -> block.
+  hook, attribute, prop, call, or import - any identifier that is not a ubiquitous plumbing
+  word) rolled out to >=2 siblings. Runs on every PR; default warn, `gates.G6.mode` -> block.
 - **G7 dependent-test-selection.** The enforcer computes the NEW dependents of the changed
   source (a freshly-added consumer file, or a freshly-added import edge) and re-runs their
   co-located tests on head. Built-in JS/TS import scan + an explicit consumer graph
