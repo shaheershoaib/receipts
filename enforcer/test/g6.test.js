@@ -2,7 +2,7 @@
 /* Unit tests for G6 surface-coverage logic (pure, injected in-memory I/O). */
 const { test } = require("node:test");
 const assert = require("node:assert");
-const { globToRe, camelWords, commonTrailing, computeG6 } = require("../g6.js");
+const { globToRe, camelWords, commonTrailing, isDistinctive, computeG6 } = require("../g6.js");
 
 function env(baseTree, headTree) {
   const pick = (c) => (c === "BASE" ? baseTree : headTree);
@@ -82,6 +82,47 @@ test("heuristic: an import rolled out to >=2 siblings flags the twins that misse
     changed: ["src/OrdersTable.tsx", "src/UsersTable.tsx"],
   });
   assert.deepEqual(names(r.findings, "heuristic"), ["src/InvoicesTable.tsx"]);
+});
+
+test("isDistinctive: structured affordances yes, flat words / keywords no", () => {
+  for (const t of ["Pagination", "ErrorBoundary", "useAuth", "rateLimit", "reportError", "aria-label", "data-testid", "MAX_RETRIES"])
+    assert.ok(isDistinctive(t), `${t} should be distinctive`);
+  for (const t of ["disabled", "loading", "value", "data", "if", "id", "return", "useState", "props"])
+    assert.ok(!isDistinctive(t), `${t} should NOT be distinctive`);
+});
+
+test("heuristic generalizes beyond imports: a JSX ATTRIBUTE rolled out to siblings", () => {
+  const withAria = '<input aria-label="x" />';
+  const plain = "<input />";
+  const base = { "src/NameInput.tsx": plain, "src/EmailInput.tsx": plain, "src/PhoneInput.tsx": plain };
+  const head = { "src/NameInput.tsx": withAria, "src/EmailInput.tsx": withAria, "src/PhoneInput.tsx": plain };
+  const r = computeG6({ ...env(base, head), changed: ["src/NameInput.tsx", "src/EmailInput.tsx"] });
+  assert.deepEqual(names(r.findings, "heuristic"), ["src/PhoneInput.tsx"]);
+});
+
+test("heuristic generalizes beyond imports: a CALL rolled out to siblings", () => {
+  const withCall = 'export const s = () => { reportError("e"); };';
+  const plain = "export const s = () => {};";
+  const base = { "src/AuthService.ts": plain, "src/UserService.ts": plain, "src/CartService.ts": plain };
+  const head = { "src/AuthService.ts": withCall, "src/UserService.ts": withCall, "src/CartService.ts": plain };
+  const r = computeG6({ ...env(base, head), changed: ["src/AuthService.ts", "src/UserService.ts"] });
+  assert.deepEqual(names(r.findings, "heuristic"), ["src/CartService.ts"]);
+});
+
+test("heuristic does NOT auto-flag a flat-lowercase marker - the declared surface does", () => {
+  const withDisabled = "<button disabled />";
+  const plain = "<button />";
+  const base = { "src/SaveButton.tsx": plain, "src/EditButton.tsx": plain, "src/DeleteButton.tsx": plain };
+  const head = { "src/SaveButton.tsx": withDisabled, "src/EditButton.tsx": withDisabled, "src/DeleteButton.tsx": plain };
+  // `disabled` is a flat lowercase word -> excluded from the auto-heuristic (too noisy)...
+  const r = computeG6({ ...env(base, head), changed: ["src/SaveButton.tsx", "src/EditButton.tsx"] });
+  assert.equal(r.findings.length, 0);
+  // ...but a DECLARED surface catches it precisely.
+  const r2 = computeG6({
+    ...env(base, head), changed: ["src/SaveButton.tsx", "src/EditButton.tsx"],
+    surfaces: [{ glob: "src/**/*Button.tsx", marker: "disabled" }], auto: false,
+  });
+  assert.deepEqual(names(r2.findings, "declared"), ["src/DeleteButton.tsx"]);
 });
 
 test("heuristic: a single adopter or no common family does NOT fire", () => {
