@@ -66,18 +66,35 @@ function endsWithWords(file, trail) {
 
 const isJsSurface = (f) => JS_EXT.test(f) && !TEST_PATH.test(f) && !f.includes("node_modules/");
 
-// Language keywords + ubiquitous framework tokens - excluded from the auto-heuristic (a
-// rollout of `useState` or `return` is noise). A flat-lowercase marker like `disabled` is
-// also excluded here on purpose; declare it as a `surfaces` marker if you want it checked.
-const KEYWORDS = new Set([
+// The noise floor for the auto-heuristic: language keywords + UBIQUITOUS plumbing words +
+// common HTML tags. A token NOT in this set is treated as a meaningful affordance - including
+// a flat-lowercase prop/state word like `disabled` / `loading` / `selected`, which is exactly
+// the kind of "app-wide" change we want caught. Only the genuinely ubiquitous tokens (value,
+// data, id, error, ...) are suppressed, so the heuristic generalizes without crying wolf.
+const STOPWORDS = new Set([
+  // JS / TS keywords
   "const", "let", "var", "function", "return", "if", "else", "for", "while", "switch", "case",
   "break", "continue", "new", "this", "class", "extends", "super", "import", "export", "from",
   "default", "async", "await", "yield", "typeof", "instanceof", "void", "delete", "true",
   "false", "null", "undefined", "type", "interface", "enum", "namespace", "declare", "public",
-  "private", "protected", "readonly", "static", "abstract", "implements", "of", "in", "as",
-  "is", "keyof", "props", "state", "children", "classname", "style", "react", "fragment",
-  "usestate", "useeffect", "useref", "usememo", "usecallback", "usecontext", "string", "number",
-  "boolean", "object", "array", "promise", "any", "unknown", "never",
+  "private", "protected", "readonly", "static", "abstract", "implements", "of", "as", "in",
+  "is", "keyof", "string", "number", "boolean", "object", "array", "promise", "any", "unknown",
+  "never", "throw", "try", "catch", "finally",
+  // framework ubiquity
+  "props", "state", "children", "classname", "style", "react", "fragment", "usestate",
+  "useeffect", "useref", "usememo", "usecallback", "usecontext", "key", "ref",
+  // generic plumbing nouns (the real noise)
+  "value", "values", "val", "data", "item", "items", "name", "names", "error", "err", "errors",
+  "result", "results", "response", "res", "request", "req", "arg", "args", "argument",
+  "option", "options", "opts", "param", "params", "config", "context", "ctx", "index", "idx",
+  "count", "length", "size", "list", "map", "set", "obj", "arr", "str", "num", "len", "id",
+  "ids", "el", "els", "elem", "element", "node", "parent", "prev", "next", "current", "curr",
+  "acc", "fn", "func", "cb", "callback", "handler", "event", "evt", "msg", "message", "src",
+  "url", "uri", "path", "file", "dir", "temp", "tmp", "self", "window", "document", "console",
+  "json", "props",
+  // common HTML / JSX tags
+  "div", "span", "img", "svg", "input", "button", "form", "ul", "li", "ol", "nav", "header",
+  "footer", "section", "article", "aside", "table", "thead", "tbody", "tr", "td", "th",
 ]);
 
 // All identifier-ish tokens in a source (regex-level; '-' kept so JSX attributes like
@@ -90,16 +107,13 @@ function identifiers(src) {
   return out;
 }
 
-// A token distinctive enough to be a meaningful "affordance" the auto-heuristic tracks: a
-// component / type (PascalCase), a hook / call (camelCase), or an attribute (kebab). Flat
-// lowercase words and keywords are excluded (too noisy without a declaration).
+// A token meaningful enough to track as a rolled-out affordance: any identifier (>=3 chars)
+// that is NOT a keyword / ubiquitous plumbing word. This covers a component (PascalCase), a
+// hook or call (camelCase), an attribute (kebab), AND a flat-lowercase prop/state word
+// (`disabled`, `loading`, `selected`) - so the rule is general, not import- or case-specific.
 function isDistinctive(tok) {
   if (!tok || tok.length < 3) return false;
-  if (KEYWORDS.has(tok.toLowerCase())) return false;
-  if (tok.includes("-")) return true;        // kebab: aria-label, data-testid
-  if (/^[A-Z]/.test(tok)) return true;        // PascalCase / CONSTANT_CASE
-  if (/[a-z][A-Z]/.test(tok)) return true;    // camelCase: useAuth, rateLimit, reportError
-  return false;                                // flat lowercase -> declared territory
+  return !STOPWORDS.has(tok.toLowerCase());
 }
 
 /*
