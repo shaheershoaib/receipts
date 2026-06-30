@@ -1,6 +1,6 @@
 {
   "name": "receipts-cli",
-  "version": "0.1.10",
+  "version": "0.2.0",
   "description": "Verification gates for AI-written code - re-prove an agent's fix before you trust it.",
   "bin": {
     "receipts": "bin/receipts.js"
@@ -14,7 +14,7 @@
   "author": "Shaheer Shoaib <shaheershoaib11@gmail.com>",
   "license": "MIT",
   "repository": { "type": "git", "url": "git+https://github.com/shaheershoaib/receipts.git" },
-  "files": ["bin", "enforcer/verify.js", "enforcer/g7.js", "plugin/templates", "receipts.config.schema.json", "receipts.config.example.json", "README.md", "LICENSE"],
+  "files": ["bin", "enforcer/verify.js", "enforcer/g7.js", "plugin/templates", "receipts.config.schema.json", "receipts.config.example.json", "README.md", "CHANGELOG.md", "LICENSE"],
   "engines": {
     "node": ">=18"
   }
