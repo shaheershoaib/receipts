@@ -162,8 +162,9 @@ affordance, because the twins were never swept.
 pattern applied to SOME sibling surfaces but not all - the "claimed app-wide, actually
 partial" failure. Two mechanisms (`gates.G6`): a **declared family** (`surfaces`: a glob + a
 required marker substring, any language) that encodes the "app-wide" claim as a re-checkable
-invariant, and a **built-in JS/TS heuristic** (an import rolled out to >=2 same-named siblings
-flags the twins that missed it). Default warn (the heuristic is best-effort); `gates.G6.mode`
+invariant, and a **built-in JS/TS heuristic** - an affordance (a component, hook, attribute,
+call, or import) rolled out to >=2 same-named siblings flags the twins that missed it; flat
+lowercase markers are left to the declared form. Default warn (the heuristic is best-effort); `gates.G6.mode`
 -> block. Like every receipts check: it does not auto-fix the sweep, it turns it from
 guesswork into a named list.
 
