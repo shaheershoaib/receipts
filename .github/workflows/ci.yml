@@ -28,8 +28,8 @@ jobs:
       - uses: actions/setup-node@v4
         with:
           node-version: '20'
-      - name: Run the Stop-hook tests
-        run: node --test plugin/hooks/test/*.test.mjs
+      - name: Run the Stop-hook + plugin tests
+        run: node --test plugin/hooks/test/*.test.mjs plugin/mcp/trajectory-kb/test/*.test.mjs
 
   receipts:
     # Dogfood: the receipts enforcer gates receipts' OWN fix-claim PRs. A "looks

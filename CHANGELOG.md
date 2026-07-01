@@ -2,6 +2,21 @@
 
 ## Unreleased
 
+### Added
+- **G13 claim-scope congruence is now enforced** (opt-in). With
+  `gates.G13.coverage_command` configured, the enforcer runs the suite under coverage on
+  head, parses the lcov (`gates.G13.lcov_path`, default `coverage/lcov.info`), intersects
+  executed lines with the diff's ADDED production lines, and NAMES every changed line no
+  test executed - the 497 lines riding along behind a 3-line receipt. Warn default,
+  `gates.G13.mode` -> block; a failed coverage run or missing lcov degrades loudly
+  ("G13 not evaluated"), never silently. lcov because every ecosystem can emit it
+  (c8/nyc, coverage.py, SimpleCov, JaCoCo converters).
+- **Team-shared trajectory memory** (`agent.trajectory_store`). `home` (default) keeps
+  the store private and per-machine; `repo` moves it to `.receipts/trajectories.jsonl` -
+  committed, so the whole team inherits every recorded trap and dead end instead of each
+  laptop learning alone. Append-only JSONL merges trivially. `receipts init` asks;
+  `RECEIPTS_TRAJECTORY_STORE` overrides for tests/redirects.
+
 ### Changed (breaking for hook customizers only)
 - **The two python3 Stop hooks are now ONE Node hook** (`plugin/hooks/stop-gates.mjs`).
   Same backstops - the unverified-close-out block and the trajectory nudge - in a single
