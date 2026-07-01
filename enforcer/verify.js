@@ -34,6 +34,7 @@ const g7 = require("./g7.js");
 const g6 = require("./g6.js");
 const g11 = require("./g11.js");
 const g12 = require("./g12.js");
+const g13 = require("./g13.js");
 
 const TEST_PATH = /(\.test\.|\.spec\.|_test\.|(^|\/)test_|(^|\/)tests?\/|\/__tests__\/|_spec\.)/i;
 // JSON keys that are documentation, not contract surface - removing them is not breaking.
@@ -201,7 +202,7 @@ const KNOWN_KEYS = {
   "gates.G11": ["mode"],
   "gates.G12": ["mode"],
   "gates.G13": ["coverage_command", "lcov_path", "mode"],
-  agent: ["loop_skills", "staging_query_patterns", "closeout_fixed_statuses", "repo_name"],
+  agent: ["loop_skills", "staging_query_patterns", "closeout_fixed_statuses", "repo_name", "trajectory_store"],
 };
 function unknownConfigKeys(cfg) {
   const out = [];
@@ -592,11 +593,16 @@ function main() {
 
   const suiteCmd = verify.suite_command;
   const haveSuite = suiteCmd && !/REPLACE_ME/.test(suiteCmd);
+  // G13 claim-scope congruence is opt-in: only with a coverage command configured.
+  const g13cfg = (gates && gates.G13) || {};
+  const haveG13 = gateOn(gates, "G13") && g13cfg.coverage_command && !/REPLACE_ME/.test(g13cfg.coverage_command);
   // Mask-check only the commands that will now run: the receipt always, the suite if G9 is on.
   if (masksExit(testCmd))
     emit("BLOCK", "verify.test_command can mask its own exit code (; , || , pipe, background &, newline, or command substitution), so a green from it cannot be trusted (G9). Use a single command whose own exit is the test result, or wrap it in a script.");
   if (haveSuite && gateOn(gates, "G9") && masksExit(suiteCmd))
     emit("BLOCK", "verify.suite_command can mask its own exit code - a green cannot be trusted (G9). Use a clean command or a script.");
+  if (haveG13 && masksExit(g13cfg.coverage_command))
+    emit("BLOCK", "gates.G13.coverage_command can mask its own exit code - its coverage output cannot be trusted (G9). Use a clean command or a script.");
 
   // G7: the new dependents' co-located tests to re-run on head (path-safe, deduped), and the
   // new dependents that have NO test to re-run (surfaced as a warning, never a silent pass).
@@ -611,7 +617,7 @@ function main() {
   const runLabel = (name, i) => (receiptRuns > 1 ? `${name} [${i + 1}/${receiptRuns}]` : name);
   const original = originalRef(repo);
   const reds = [], greens = [];
-  let suite, g7run;
+  let suite, g7run, g13run;
   try {
     // RED: base source, with head's receipt test(s) overlaid on top.
     if (!git(repo, ["checkout", "-q", "-f", base]).ok) emit("BLOCK", `cannot checkout base ${base}`);
@@ -637,8 +643,41 @@ function main() {
       g7run = runCmd(repo, cmdFor(depTests), cmdTimeout);
       record("g7-dependents@head", cmdFor(depTests), g7run);
     }
+    // G13: run the coverage command on head (it needs the head tree); the lcov it wrote
+    // is read AFTER the checkout dance (an untracked file survives the restore).
+    if (RECEIPT.green && haveG13 && changedSource.length) {
+      g13run = runCmd(repo, g13cfg.coverage_command, cmdTimeout);
+      record("g13-coverage@head", g13cfg.coverage_command, g13run);
+    }
   } finally {
     git(repo, ["checkout", "-q", "-f", original]);
+  }
+
+  // G13 claim-scope congruence: intersect the lcov's executed lines with the diff's
+  // ADDED production lines. Changed lines no test executed are unverified changes -
+  // named, warn by default, gates.G13.mode -> block. Degradations are loud, not silent.
+  if (haveG13 && changedSource.length) {
+    if (!g13run || !g13run.ok) {
+      warn(`G13 not evaluated: the coverage command ${g13run ? "failed" : "did not run"} - fix gates.G13.coverage_command or disable the gate; unverified-changed-lines were NOT checked.`);
+    } else {
+      const lcovPath = path.join(repo, g13cfg.lcov_path || "coverage/lcov.info");
+      let lcovText = null;
+      try { lcovText = fs.readFileSync(lcovPath, "utf8"); } catch { /* handled below */ }
+      if (lcovText == null) {
+        warn(`G13 not evaluated: no lcov at ${g13cfg.lcov_path || "coverage/lcov.info"} after the coverage run - point gates.G13.lcov_path at where your tool writes it.`);
+      } else {
+        const diffU0 = git(repo, ["diff", "-U0", "--no-color", `${base}..${head}`, "--", ...changedSource]);
+        const res = g13.computeG13({ addedLines: g13.parseAddedLines(diffU0.out), lcov: g13.parseLcov(lcovText) });
+        if (res.findings.length) {
+          RECEIPT.gates.G13 = { findings: res.findings };
+          const detail = res.findings.slice(0, 8).map((f) =>
+            `${f.file}: ${f.uncovered.length}/${f.added} added line(s) never executed${f.no_data ? " (file not loaded by any test)" : ""} [${f.uncovered.slice(0, 12).join(",")}${f.uncovered.length > 12 ? ",…" : ""}]`).join("; ");
+          const msg = `G13 claim-scope congruence: the receipt does not EXERCISE the whole diff - ${detail}${res.findings.length > 8 ? ` (+${res.findings.length - 8} more file(s))` : ""}. These changed lines are unverified: cover them, split them out, or carry an honest tag.`;
+          if ((g13cfg.mode || "warn") === "block") emit("BLOCK", msg);
+          warn(msg);
+        }
+      }
+    }
   }
 
   const redPasses = reds.filter((r) => r.ok).length;

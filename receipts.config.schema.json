@@ -316,6 +316,12 @@
         "repo_name": {
           "type": "string",
           "description": "Default repo tag for trajectory-kb appends (the agent may override per append)."
+        },
+        "trajectory_store": {
+          "type": "string",
+          "description": "Where the trajectory memory lives - this decides WHO it serves. 'home' (default): ~/.claude/mcp-servers/trajectory-kb/data/trajectories.jsonl - private, per-machine, aggregates across your repos. 'repo': <repo>/.receipts/trajectories.jsonl - COMMIT it and the whole team inherits every recorded trap and dead end (append-only JSONL merges trivially). Any other value: an explicit path, resolved against this config's directory.",
+          "default": "home",
+          "examples": ["home", "repo", ".receipts/trajectories.jsonl"]
         }
       }
     }

@@ -11,9 +11,20 @@ with `npm run build` and commit the regenerated `server.bundle.mjs`. `node_modul
 build-time-only dependency and stays gitignored.
 
 ## Storage
-Append-only JSONL is the source of truth, human-readable and greppable:
-`~/.claude/mcp-servers/trajectory-kb/data/trajectories.jsonl`
-Global, with every entry tagged by `repo` so it aggregates across repos. Structured/keyword query for v1; semantic/embedding retrieval is a deliberate v2.
+Append-only JSONL is the source of truth, human-readable and greppable. **Where it
+lives decides WHO it serves** (`agent.trajectory_store` in `receipts.config.json`,
+resolved by walking up from the session cwd - see `store.mjs`):
+
+- **`home`** (default): `~/.claude/mcp-servers/trajectory-kb/data/trajectories.jsonl` -
+  private, per-machine, every entry tagged by `repo` so it aggregates across your repos.
+- **`repo`**: `<repo>/.receipts/trajectories.jsonl` - **commit it**, and the whole team
+  inherits every recorded trap and dead end (teammate B sees teammate A's wrong-surface
+  trap before repeating it). Append-only JSONL merges trivially - concurrent branches
+  appending entries never conflict beyond a trivial union.
+- any other value: an explicit path, resolved against the config's directory.
+- `RECEIPTS_TRAJECTORY_STORE` env var overrides everything (tests, one-off redirects).
+
+Structured/keyword query for v1; semantic/embedding retrieval is a deliberate v2.
 
 ## Tools
 | Tool | Purpose |

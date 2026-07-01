@@ -27,10 +27,13 @@ import {
 import { randomUUID } from "node:crypto";
 import fs from "fs/promises";
 import path from "path";
-import os from "os";
+import { resolveStore } from "./store.mjs";
 
-const STORE_DIR = path.join(os.homedir(), ".claude/mcp-servers/trajectory-kb/data");
-const STORE = path.join(STORE_DIR, "trajectories.jsonl");
+// Where the memory lives decides WHO it serves - home (private, per-machine, the
+// default) vs repo (.receipts/trajectories.jsonl, committed: the whole team inherits
+// every recorded trap). Resolution logic + rationale live in store.mjs.
+const STORE = resolveStore();
+const STORE_DIR = path.dirname(STORE);
 
 const VALID_OUTCOMES = ["fixed", "unverified-reasoned", "speculative", "reverted"];
 const VALID_TIERS = ["top", "cheap", "mixed"];

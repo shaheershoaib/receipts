@@ -191,6 +191,11 @@ function buildConfig(d, a) {
       repo_name: a.repo_name || d.repo_name,
     },
   };
+  // Team memory: only written when the project opts into the repo-local store ("home"
+  // is the default and needs no config).
+  if (a.trajectory_store && a.trajectory_store !== "home") {
+    cfg.agent.trajectory_store = a.trajectory_store;
+  }
   // Which gates apply here (by ID). Safe default = all on; the project disables what
   // does not fit. The skill reads this to know what to apply; the enforcer, which checks to run.
   cfg.gates = {
@@ -271,6 +276,9 @@ async function init(opts) {
         const yn = await ask(rl, `No project loop skill found. Scaffold one (${d.repo_name}-fix-loop) from the template?`, "Y");
         if (/^y(es)?$/i.test(yn)) a._scaffold = true;
       }
+      // Team memory: repo-local store = the whole team inherits every recorded trap.
+      const ts = await ask(rl, "Trajectory memory store? (home = private per-machine, repo = .receipts/ committed for team sharing)", "home");
+      if (ts && ts !== "home") a.trajectory_store = ts;
       const xh = list(await ask(rl, "Extra deploy/prod hosts beyond detected? (comma-separated, blank to skip)", ""));
       if (xh.length) a.extra_hosts = xh;
       const sq = list(await ask(rl, "By-value query hosts/tools (e.g. a DB proxy host)? (blank to skip)", ""));
