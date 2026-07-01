@@ -33,6 +33,7 @@ Usage:
   receipts replay <receipt>    Re-run the verification recorded in a receipt and check the
                                verdict reproduces (exit 1 on mismatch). [--repo <dir>]
   receipts explain <receipt>   Print a human-readable summary of a receipt artifact
+                               (--md: the same markdown report the GitHub Action posts)
 
 Options:
   --dir <path>   Target repo (default: current directory)
@@ -383,11 +384,17 @@ function replay(rest) {
 }
 
 // `receipts explain <receipt>` - human-readable summary of a receipt artifact.
+// `--md` renders the same markdown report the GitHub Action posts (one renderer, no drift).
 function explain(rest) {
   const receiptPath = firstPositional(rest);
-  if (!receiptPath) { console.error("usage: receipts explain <receipt.json>"); process.exit(1); }
+  if (!receiptPath) { console.error("usage: receipts explain <receipt.json> [--md]"); process.exit(1); }
   const rec = readJson(receiptPath);
   if (!rec) { console.error(`cannot read receipt: ${receiptPath}`); process.exit(1); }
+  if (rest.includes("--md")) {
+    const { renderMarkdown } = require("../enforcer/render.js");
+    process.stdout.write(renderMarkdown(rec));
+    return;
+  }
   const sha = (s) => String(s || "").slice(0, 12) || "?";
   const out = [];
   out.push(`receipt (${rec.schema || "?"}) - ${rec.verdict || "?"}`);
