@@ -2,6 +2,23 @@
 
 ## Unreleased
 
+### Changed (breaking for hook customizers only)
+- **The two python3 Stop hooks are now ONE Node hook** (`plugin/hooks/stop-gates.mjs`).
+  Same backstops - the unverified-close-out block and the trajectory nudge - in a single
+  transcript pass instead of two, and one runtime instead of two: the plugin already
+  requires Node for its MCP server, and python3 was never a given on Windows. If both
+  checks fire, one decision carries both reasons. Anyone who patched the old .py files
+  re-applies against the .mjs; behavior is 1:1 (the python test suite was ported, plus
+  regression cases) with one deliberate fix below.
+
+### Fixed
+- **A ticket comment mentioning a status no longer reads as a close-out.** The old hook
+  matched configured fixed-statuses as SUBSTRINGS of the whole tracker payload, so an
+  update whose comment said "moved to Pending Retest earlier" false-fired the
+  verification gate. Statuses are now matched as status VALUES (`: "Pending Retest"`),
+  which still covers flat and nested (Notion select) shapes. Spurious Stop-blocks are
+  how hook plugins get uninstalled.
+
 ### Added
 - **The verdict now explains itself.** Every enforcer run renders a markdown report -
   verdict, red/green evidence, every re-run command with exit code and duration, per-gate
