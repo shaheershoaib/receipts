@@ -55,19 +55,25 @@ They split into two kinds:
 | **G3** verify on the build that carries YOUR commit | verify | PR / CI |
 | **G5** drive the flow to its TERMINAL action | verify | PR / CI (re-run) |
 | **G9** trustworthy green: full-scope, unmasked, representative | verify | PR / CI (re-run) |
+| **G11** a green earned by shrinking the suite proves nothing | verify | PR / CI (static) |
+| **G13** the receipt must EXERCISE the diff (opt-in coverage) | verify | PR / CI (re-run) |
 | **G2** pin the EXACT flow / component | target | agent-side |
 | **G4** land on the surface the reporter SEES | target | agent-side |
 | **G6** sweep the changed pattern's parallel TWINS | target | agent-side |
 | **G7** verify the DEPENDENTS, esp. newly-pulled ones | target | agent-side (+ enforcer) |
 | **G8** verify on a base even with origin (fresh base) | target | agent-side (+ enforcer) |
 | **G10** a contract change survives the deploy window | target | agent-side (+ enforcer) |
+| **G12** fix the CAUSE, not the alarm (no silencing) | target | agent-side (+ enforcer) |
 
 The **verify** gates (did you actually prove it works) are enforceable at the one
 chokepoint every team shares regardless of which agent they use: the PR. The
 **target** gates (did you fix the *right* thing) live inside the agent's loop, and
 ship as adapters. G7, G8, and G10 are the **multi-dev gates**: the failures that
 only happen because other people are pushing in parallel and the codebase changes
-under you. G9 is amplified by the same reality.
+under you. G9 is amplified by the same reality. G11, G12, and G13 are the
+**optimizing-agent gates**: G0-G10 defend against an agent that is *wrong*; these
+defend against an agent that is *optimizing* - deleting the failing test, silencing
+the alarm instead of the cause, shielding a broad diff behind a narrow receipt.
 
 **What it is not:** a referee against self-deception and mistakes, not a security boundary
 against a hostile author. The enforcer re-runs the branch's own tests, so a PR could in

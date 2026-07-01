@@ -1,7 +1,7 @@
 {
   "name": "receipts",
-  "version": "0.2.0",
-  "description": "Agents need receipts: a verification layer that re-proves an AI fix before you trust it. The Gates standard (G0-G10, applied in any medium) + a Claude Code adapter + a CI enforcer + verification memory.",
+  "version": "0.2.1",
+  "description": "Agents need receipts: a verification layer that re-proves an AI fix before you trust it. The Gates standard (G0-G13, applied in any medium) + a Claude Code adapter + a CI enforcer + verification memory.",
   "repository": "https://github.com/shaheershoaib/receipts",
   "owner": {
     "name": "Shaheer Shoaib"
@@ -10,7 +10,7 @@
     {
       "name": "receipts",
       "source": "./plugin",
-      "description": "The Gates (G0-G10) agent adapter: teaches your agent to carry a red->green receipt, fix the surface the reporter sees, sweep twins + dependents, build on a fresh base, and stay compatible across the deploy window - applied in any medium (web / API / library / CLI / data / ...) - plus a Stop-hook verification backstop and verification memory."
+      "description": "The Gates (G0-G13) agent adapter: teaches your agent to carry a red->green receipt, fix the surface the reporter sees, sweep twins + dependents, build on a fresh base, stay compatible across the deploy window, and never game the referee - applied in any medium (web / API / library / CLI / data / ...) - plus a Stop-hook verification backstop and verification memory."
     }
   ]
 }

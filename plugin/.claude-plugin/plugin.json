@@ -1,8 +1,8 @@
 {
   "name": "receipts",
   "displayName": "receipts",
-  "version": "0.2.0",
-  "description": "The Gates (G0-G10) agent adapter: make an AI fix verifiable, not just claimed. The agent carries a red->green receipt and fixes the surface the reporter sees, sweeps the twins, verifies dependents, builds on a fresh base, and stays compatible across the deploy window - applied in any medium (web / API / library / CLI / data / ...). Pairs with a Stop-hook backstop and verification memory.",
+  "version": "0.2.1",
+  "description": "The Gates (G0-G13) agent adapter: make an AI fix verifiable, not just claimed. The agent carries a red->green receipt and fixes the surface the reporter sees, sweeps the twins, verifies dependents, builds on a fresh base, stays compatible across the deploy window, and never games the referee (no deleted/skipped tests, no silenced alarms) - applied in any medium (web / API / library / CLI / data / ...). Pairs with a Stop-hook backstop and verification memory.",
   "author": {
     "name": "Shaheer Shoaib",
     "email": "shaheershoaib11@gmail.com"

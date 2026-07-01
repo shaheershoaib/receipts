@@ -28,20 +28,28 @@ existing suite stays green" (no behavior change). See `references/WORK-TYPES.md`
 
 ## Two kinds of gate
 
-- **Verify gates (G0, G1, G3, G5, G9)** answer *"did you actually prove it works?"* They
-  produce receipts, and they are enforceable at the one chokepoint every team shares
-  regardless of which agent they use: the pull request. An enforcer can re-run them.
-- **Target gates (G2, G4, G6, G7, G8, G10)** answer *"did you fix the right thing, all of
-  it - including what depends on it, and against the code that will actually ship?"* There
-  is mostly no artifact for "you fixed the right component," so these live inside the
-  agent's loop and ship as adapters. Several are bridge cases with an enforcer assist: the
-  agent does the selection/judgment, and the enforcer re-checks what it can at the PR (G7
-  the dependents' tests, G8 the base is current, G10 the contract is back-compatible).
+- **Verify gates (G0, G1, G3, G5, G9, G11, G13)** answer *"did you actually prove it
+  works?"* They produce receipts, and they are enforceable at the one chokepoint every
+  team shares regardless of which agent they use: the pull request. An enforcer can
+  re-run them.
+- **Target gates (G2, G4, G6, G7, G8, G10, G12)** answer *"did you fix the right thing,
+  all of it - including what depends on it, and against the code that will actually
+  ship?"* There is mostly no artifact for "you fixed the right component," so these live
+  inside the agent's loop and ship as adapters. Several are bridge cases with an enforcer
+  assist: the agent does the selection/judgment, and the enforcer re-checks what it can
+  at the PR (G7 the dependents' tests, G8 the base is current, G10 the contract is
+  back-compatible, G12 the silencing shapes).
 
 G7, G8, and G10 are the **multi-dev gates** - the ones that only bite because other people
 are working in parallel and the codebase changes under you (a consumer is pulled in, the
 base moves, the two halves of a contract deploy out of order). G9 is amplified by the same
 reality: the regression is often in code you never touched.
+
+G11, G12, and G13 are the **optimizing-agent gates**: G0-G10 defend against an agent that
+is *wrong*; these defend against an agent that is *optimizing* - making the check green
+rather than the code right. They exist because agents reward-hack: delete the failing test
+(G11), silence the alarm instead of fixing the cause (G12), shield a broad diff behind a
+narrow receipt (G13).
 
 ---
 
@@ -89,6 +97,12 @@ EVERY hop it crosses. A picked charge date was dropped twice - the client mutati
 only the record id, and the proxy route forwarded no body - so it reverted to a default
 while every layer painted correctly; only the by-value read at the far end caught it.
 
+**Corollary: assert the POSITIVE invariant, not the absence of the complaint.** A receipt
+asserting "the error no longer appears" is structurally weaker than one asserting "the
+value arrived / the action succeeded for the right principal" - a fix that SILENCED the
+symptom (G12) passes the first and fails the second. Make the receipt assert what should
+be true, not what should be gone.
+
 **Receipt.** A by-value read of the rendered or persisted state on the deployed build,
 taken at the far end of the path (not the layer you changed).
 
@@ -100,6 +114,12 @@ taken at the far end of the path (not the layer you changed).
 wizard AND a detail-page dialog, a summary card AND a drill-in page - each with its
 own copy of the logic. Fixing or verifying the wrong one looks like progress and
 ships nothing. Reproduce the reporter's path before touching code.
+
+The path includes WHO: the reporter's **runtime context** - role/permissions, tenant,
+feature-flag bucket, locale/timezone, device - is part of the flow. The classic miss:
+the agent reproduces as an admin while the bug only manifests for a regular user, or
+verifies on a staging box where the flag is ON while the reporter's bucket has it OFF.
+Pin the context alongside the component.
 
 **Scar.** Two flows rendered the "same" feature from two different components; the fix
 went into the one the reporter never used.
@@ -113,6 +133,11 @@ makes the parallel flows visible before you pin the fix.)
 
 **Mandate.** Confirm the deployed artifact's commit sha matches your push before you
 trust anything you observe. A green check on the old build proves nothing.
+
+The artifact users experience is **code + config**: a sha can match while the runtime
+config universe differs - feature flags, environment variables, the A/B bucket. "The
+right build" means the right code UNDER the reporter's configuration (which flags G2
+pins as part of the reporter's context).
 
 **Scar.** A fix "verified" against a deploy that had not yet rebuilt - the old bundle
 was still being served.
@@ -255,6 +280,12 @@ leak; a jsdom test passed only by shimming the real component away.
 **Receipt.** The full suite, green on head, after the narrow red->green receipt - run by the
 enforcer itself, so a user-supplied masking wrapper cannot stand in for it.
 
+**Determinism corollary.** A trustworthy green is also a REPEATABLE one: a flaky receipt
+can manufacture a fake red (a green test that flaked red on base) or pass a broken fix (a
+red that flaked green on head), and the enforcer runs each side once by default. Where
+flakes are a live risk, `verify.receipt_runs: N` requires red N/N on base and green N/N on
+head - a mixed result is a flaky-receipt block, not evidence.
+
 *Kind: verify (re-runnable at the PR).*
 
 ## G10 - A contract change must survive the deploy window (the rollout-compatibility gate)
@@ -280,6 +311,76 @@ expectations; a deploy-order assertion when the units are coupled); agent-side f
 the contract pair and the safe order.
 
 *Kind: target + verify (agent-side sequencing; enforcer back-compat contract test).*
+
+## G11 - A green earned by shrinking the suite proves nothing (referee integrity)
+
+**Mandate.** The receipt and the suite are the referee; the fix must not weaken the
+referee to win the game. Do not delete the failing test, skip it (`.skip` / `xit` /
+`@pytest.mark.skip` / `t.Skip` / `@Disabled`), focus past it (`.only` silently benches
+every other test in the file), loosen its assertions, or regenerate snapshots wholesale so
+that whatever the code now does IS the expectation. If a test genuinely must go (a dead
+feature, a consolidation), say so explicitly - an honest `test-removal: <why>` in the PR -
+so the removal is a reviewed decision, not a quiet one. G9 verifies the suite passes; G11
+verifies it kept its teeth.
+
+**Scar.** The ecosystem's, in bulk: "make the test pass" is the most-documented agent
+reward-hack - the failing test deleted, skipped, or its snapshot regenerated, suite green,
+bug shipped. The weak-receipt check catches a weakened test only when it IS the receipt;
+an unrelated failing test deleted to get the G9 suite green was invisible to every other
+gate.
+
+**Enforcement.** Enforcer, statically, on every PR (like G6): deleted test files from the
+rename-aware diff (a rename is not a deletion), added skip/focus markers in changed tests
+(multi-framework), and snapshot-artifact churn (always warn-only - snapshots also update
+legitimately; the warning asks whether the new expectation is the INTENDED one). Default
+warn; `gates.G11.mode` -> block. The `test-removal:` acknowledgment is tracked, never
+blocked - the honesty ladder applied to the referee itself.
+
+*Kind: verify (statically checkable at the PR).*
+
+## G12 - Fix the CAUSE, not the alarm (the silencing gate)
+
+**Mandate.** A symptom can be made to disappear by removing its DETECTOR: the 403 "fixed"
+by deleting the permission check, the error toast "fixed" by swallowing the exception, the
+rejected input "fixed" by loosening the validator, the crash "fixed" by an empty catch.
+The receipt goes red->green honestly - the reporter's symptom IS observably gone - and the
+system is now broken silently, which is strictly worse than broken loudly. Before closing,
+answer: did I repair the invariant, or mute the alarm? If the check itself was the bug
+(an over-strict validator), that is a legitimate fix - SAY SO in the PR, and prefer a
+receipt asserting the positive behavior (G1's corollary) so the distinction is testable.
+
+**Scar.** The class ships constantly from agents under pull-to-finish: an exception
+swallowed to clear an error report, an authorization check deleted because the reporter
+"couldn't access" something. Each passes every green-based gate - the alarm is gone, and
+that was the ticket.
+
+**Enforcement.** Agent-side judgment (the skill asks the question at fix time), with a
+narrow enforcer assist on fix-claims: a diff that REMOVES throw/raise statements or ADDS
+empty/swallowing catches is flagged, warn-only by default (`gates.G12.mode` -> block) -
+some fixes legitimately remove an over-strict check, so the heuristic asks rather than
+answers.
+
+*Kind: target (agent-side judgment; enforcer flags the silencing shapes).*
+
+## G13 - The receipt must EXERCISE the diff (claim-scope congruence)
+
+**Mandate.** Red->green proves the receipt RELATES to the change - it can flip on 3 of
+the 500 changed lines while the other 497 ride along unverified, shielded by one narrow
+receipt. The claim ("this PR is verified") must be congruent with the diff's scope:
+changed production lines the receipt (or suite) never executes are UNVERIFIED changes,
+and should be named as such - split them out, cover them, or carry an honest tag.
+
+**Scar.** A fix-claim PR that "fixes the bug" and refactors half the module in the same
+diff: the receipt proved the bug gone and nothing else. The regression rode in the
+unexercised 497.
+
+**Enforcement.** Enforcer, opt-in (coverage tooling is stack-specific and slower): with
+`gates.G13.coverage_command` configured, run the suite under coverage on head, parse the
+lcov, intersect executed lines with the diff's added/changed production lines, and name
+every changed line no test executed. Default warn; `gates.G13.mode` -> block. No coverage
+command, no check - and no false all-clear.
+
+*Kind: verify (re-runnable at the PR; opt-in).*
 
 ---
 
@@ -308,14 +409,17 @@ not.
   the symptom's acceptance test against the build that carries the commit and
   confirms it is gone. A pasted artifact is not accepted; a re-run is. G9 extends this
   to the full suite on head (so a regression outside the changed test is caught), run
-  by the enforcer itself so a masked or narrow command cannot stand in for it.
+  by the enforcer itself so a masked or narrow command cannot stand in for it. G11
+  watches the suite's assertion power (deleted/skipped tests, snapshot regeneration),
+  and G13 (opt-in) checks the receipt actually exercises the diff.
 - The **target gates** are carried by the agent adapter (e.g. the Claude Code
   plugin), which makes the agent pin the right surface, fix the surface the reporter
   sees, sweep the twins, and verify the dependents (especially freshly-pulled ones)
-  before it ever opens the PR. Three get an enforcer assist at the PR: G7 runs the
+  before it ever opens the PR. Four get an enforcer assist at the PR: G7 runs the
   changed files' newly-arrived dependents' tests, G8 asserts the branch's base is the
-  current tip (a green on a stale base is flagged or blocked), and G10 checks a
-  contract change is backward-compatible across the deploy window.
+  current tip (a green on a stale base is flagged or blocked), G10 checks a
+  contract change is backward-compatible across the deploy window, and G12 flags a
+  fix-claim whose diff removes throws or swallows exceptions (silencing shapes).
 - The **memory layer** records what was tried on each surface and how it turned out,
   so a surface with a bad track record is flagged before the next fix, and the team
   stops paying for the same trap twice.

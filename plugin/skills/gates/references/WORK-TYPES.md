@@ -4,7 +4,7 @@ The Gates read as if every change is a bug fix - "reproduce the reported symptom
 reporter," "the bug." That framing is just the most common case. The underlying mechanic -
 a red-before / green-after test asserting the acceptance criterion - is TDD, and it applies
 to any kind of change. What varies by work type is (1) what the receipt ASSERTS and (2)
-which gates carry the weight. The eleven gates are the invariant.
+which gates carry the weight. The fourteen gates are the invariant.
 
 This composes with the medium dimension (`references/MEDIA.md`): work type sets WHAT is
 asserted; medium sets what the surface / value / build ARE. The receipt is the intersection

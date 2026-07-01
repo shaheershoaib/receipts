@@ -68,20 +68,33 @@ suite, is not.
 - **G0 Reproduce first.** Observe and record the reported symptom before choosing a
   fix; that observation is the acceptance test it must later show GONE.
 - **G1 Assert the VALUE.** Read the actual rendered value (not "an element exists,"
-  not a placeholder painting the expected text).
+  not a placeholder painting the expected text). Corollary: assert the POSITIVE
+  behavior (the value arrives, the action succeeds) - "the error no longer appears"
+  is a receipt a silencing fix (G12) passes.
 - **G3 Right build.** Verify on the build that carries YOUR commit (sha-match), never
-  a stale deploy.
+  a stale deploy. The artifact is code + CONFIG: the right sha under the wrong
+  feature-flag bucket is still the wrong build.
 - **G5 Terminal action.** Drive a multi-step flow to its final action (submit /
   activate / save), accepting pre-filled defaults; the state seams between steps are
   where fixed-one-broke-another hides.
 - **G9 Trustworthy green.** The receipt's green must be full-scope (the whole suite on
   head, not just the changed test), unmasked (no `cmd; echo; tail` that exits 0 and
-  hides a failure), and run on a prod-representative engine (real DB / browser, not a
-  substitute that passes where prod fails).
+  hides a failure), run on a prod-representative engine (real DB / browser, not a
+  substitute that passes where prod fails), and repeatable (a flaky red/green proves
+  nothing - deflake before you trust it).
+- **G11 Don't shoot the referee.** Never delete a failing test, add `.skip`/`.only`,
+  loosen an assertion, or regenerate snapshots to get green - the suite must keep its
+  assertion power. A test that genuinely must go is declared honestly
+  (`test-removal: <why>` in the PR), never removed quietly.
+- **G13 The receipt must exercise the diff.** One narrow receipt does not verify 500
+  changed lines. Keep the diff congruent with the claim: split unrelated changes out,
+  or cover them - changed lines no test executes are UNVERIFIED changes.
 
 **Target gates - did you fix the RIGHT thing, all of it?** (your judgment, as you work)
 - **G2 Pin the exact flow.** Apps grow parallel copies of the "same" feature; fix the
-  one the reporter actually used.
+  one the reporter actually used - including the reporter's CONTEXT: role/permissions,
+  tenant, feature-flag bucket, locale. Reproducing as admin when the bug is
+  user-only is the wrong flow.
 - **G4 Right surface.** Land on the surface the reporter SEES; if your change is not
   visible there, you fixed the wrong one - revert it.
 - **G6 Sweep the twins.** A pattern changed on one surface leaves every sibling
@@ -99,9 +112,16 @@ suite, is not.
   (BE/FE, two services), make the contract backward-compatible or sequence the deploys -
   the system must not break in the window where one half is new and the other is old. A
   new endpoint is unreachable until its proxy ships too.
+- **G12 Fix the cause, not the alarm.** A symptom can be SILENCED: the 403 "fixed" by
+  deleting the permission check, the error toast by an empty catch, the rejected input
+  by loosening the validator. Before closing, answer: did I repair the invariant or
+  mute its detector? If the check itself was the bug, say so explicitly in the PR.
 
 G7, G8, and G10 are the multi-dev gates: they only bite because other people push in
-parallel and the codebase changes under you.
+parallel and the codebase changes under you. G11, G12, and G13 are the
+optimizing-agent gates: they exist because "make the check green" and "make the code
+right" are different objectives - never optimize the first at the expense of the
+second.
 
 ## The honesty ladder (when you cannot clear a gate)
 

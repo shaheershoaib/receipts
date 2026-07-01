@@ -8,7 +8,7 @@ and gives a template for any type not listed.
 
 The agent picks the right column from `receipts.config.json` `gates.medium` (a hint, not a
 hard switch) plus the project's stack and config; an unknown medium falls back to the
-principle. The point is universality: the same eleven gates, applied in the terms of
+principle. The point is universality: the same fourteen gates, applied in the terms of
 whatever you ship.
 
 ## The observation contract (what every medium must answer)
