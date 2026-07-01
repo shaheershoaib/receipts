@@ -4,6 +4,8 @@ __pycache__/
 *.log
 .DS_Store
 .playwright-mcp/
+# npm pack output (the pack smoke test writes to a tmpdir, but a manual `npm pack` lands here)
+*.tgz
 
 # The trajectory store is LOCAL data, never shipped - only the sample is tracked.
 plugin/mcp/trajectory-kb/data/*.jsonl

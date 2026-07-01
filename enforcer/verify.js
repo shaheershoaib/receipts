@@ -143,6 +143,25 @@ function emit(verdict, reason, detail) {
 function warn(reason) { WARNINGS.push(reason); }
 function finish(reason) { emit(WARNINGS.length ? "WARN" : "PASS", reason); }
 
+// Substitute the changed-test set into the project's test command. Three placeholder
+// forms, because runners SELECT differently: {test} = the file path(s), quoted - jest /
+// pytest / rspec / mix take paths; {test_dirs} = the unique "./dir"s of those files -
+// `go test` selects by package, not file; {test_classes} = the basenames sans extension,
+// comma-joined - Maven surefire's -Dtest= takes class names. A file path fed to a
+// name-selector (-run / -Dtest= / --filter) matches NOTHING and exits 0: a "red" phase
+// that ran no test at all, misread as a weak receipt (or worse, trusted as green).
+function expandTestPlaceholders(cmd, files) {
+  const dirs = [...new Set(files.map((f) => {
+    const d = path.posix.dirname(f);
+    return d === "." ? "./" : "./" + d;
+  }))];
+  const classes = [...new Set(files.map((f) => path.posix.basename(f).replace(/\.[^.]+$/, "")))];
+  return String(cmd || "")
+    .split("{test}").join(files.map((f) => `"${f}"`).join(" "))
+    .split("{test_dirs}").join(dirs.map((d) => `"${d}"`).join(" "))
+    .split("{test_classes}").join(classes.join(","));
+}
+
 function gateOn(gates, id) {
   if (!gates) return true;
   if ((gates.disabled || []).includes(id)) return false;
@@ -429,7 +448,7 @@ function main() {
 
   if (!testCmd || /REPLACE_ME/.test(testCmd))
     emit("BLOCK", "verify.test_command is not set in receipts.config.json (run `receipts init`)");
-  const cmdFor = (files) => testCmd.replace("{test}", files.map((f) => `"${f}"`).join(" "));
+  const cmdFor = (files) => expandTestPlaceholders(testCmd, files);
 
   const suiteCmd = verify.suite_command;
   const haveSuite = suiteCmd && !/REPLACE_ME/.test(suiteCmd);
@@ -524,4 +543,4 @@ if (require.main === module) {
   catch (e) { console.error("receipts enforcer error: " + (e && e.message ? e.message : e)); process.exit(1); }
 }
 
-module.exports = { masksExit, gateOn, globToRe, isContractFile, typeSet, walkBreaks, contractBreaks };
+module.exports = { masksExit, gateOn, globToRe, isContractFile, typeSet, walkBreaks, contractBreaks, expandTestPlaceholders };
