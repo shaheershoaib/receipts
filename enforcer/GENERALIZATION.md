@@ -132,15 +132,34 @@ Default scope is the NEW dependents only; a `verify_all_dependents` config knob 
 it to every consumer for high-blast-radius changes, and any cap on the set is logged,
 never silent.
 
-**Status (what ships today).** Implemented in `enforcer/g7.js`: a built-in **JS/TS import
-scan** (new-file AND new-edge detection) and an explicit **consumer graph** (`gates.G7.graph`,
-a JSON map of importer -> imported, for any stack). New dependents map to their co-located
-tests (`x.ts` -> `x.test.ts` / `__tests__/x.spec.tsx`), which are re-run on head: a failure is
-a **warn** by default (the reverse-dep set is heuristic) or a **block** via `gates.G7.mode`,
-and a new dependent with no test is surfaced as a warning, never a silent pass. A stack with
-no JS/TS changes and no graph degrades to "not computed" rather than a false all-clear. The
-stack-native graphers in the design above (`dependency-cruiser` / `grimp` / `go list`) are not
-yet wired - point `gates.G7.graph` at a precomputed graph to cover those stacks meanwhile.
+**Status (what ships today).** Implemented in `enforcer/g7.js`: built-in **JS/TS and
+Python import scans** (new-file AND new-edge detection) and an explicit **consumer graph**
+(`gates.G7.graph`, a JSON map of importer -> imported, for any stack). The Python scan
+resolves repo-relative absolute imports (`a.b.c` -> `a/b/c.py` / `a/b/c/__init__.py`) and
+relative imports (`from ..shared import x`); src/-layouts, namespace packages, and
+sys.path tricks are honestly out of scope - use the graph there. New dependents map to
+their co-located tests (`x.ts` -> `x.test.ts` / `__tests__/x.spec.tsx`; `mod.py` ->
+`test_mod.py` / `mod_test.py` / `tests/test_mod.py`), which are re-run on head: a failure
+is a **warn** by default (the reverse-dep set is heuristic) or a **block** via
+`gates.G7.mode`, and a new dependent with no test is surfaced as a warning, never a
+silent pass. A stack with no JS/TS/Python changes and no graph degrades to "not computed"
+rather than a false all-clear. Go/Rust/JVM stay graph-only for now (`go list -deps` /
+`dependency-cruiser`-style exports feed `gates.G7.graph`).
+
+## Monorepos (per-package runners, one policy)
+
+A monorepo does not have ONE test command. The enforcer discovers every nested
+`receipts.config.json` at the trusted **base** commit; each contributes its `verify`
+block for the tests under its directory. The receipt's red/green then runs **per
+group** - each changed test with its nearest config's `test_command`, cwd'd to that
+package, paths relativized - and the aggregate is red/green only when every group is.
+G9 runs the root `suite_command` when set, else the **affected** packages' suites (a
+refactor's inverted receipt with no root suite runs EVERY package suite). The policy
+surface - `claim`, `degrade`, `gates` - stays root-only: one gate, many runners. A
+package whose config is missing a usable `test_command` blocks by name, and dependent
+tests (G7) grouped into a runner-less package are skipped loudly, never silently.
+`receipts init` stays per-package: run it in each package; the enforcer wires them
+together automatically.
 
 ## The promise to put in the README
 

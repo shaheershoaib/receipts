@@ -8,9 +8,14 @@
  * files and maps each to its co-located tests, so the enforcer can re-run those at the PR.
  *
  * I/O is INJECTED (listAt / readAt over a commit) so the graph logic is unit-testable
- * without git. Scope (honest): a built-in JS/TS import scanner, plus an explicit consumer
- * graph (gates.G7.graph) for any stack. Other languages degrade to "not computed" rather
- * than a false all-clear.
+ * without git. Scope (honest): built-in JS/TS and Python import scanners, plus an
+ * explicit consumer graph (gates.G7.graph) for any stack. Other languages degrade to
+ * "not computed" rather than a false all-clear.
+ *
+ * Python scope (honest): repo-relative resolution - absolute imports that map onto
+ * package dirs present in the repo (`a.b.c` -> a/b/c.py or a/b/c/__init__.py) and
+ * relative imports (`from ..util import x`). src/-layout indirection, namespace
+ * packages, and sys.path tricks are NOT modeled - those repos use gates.G7.graph.
  */
 const path = require("path");
 
@@ -65,6 +70,84 @@ function addDep(map, importer, changedFile) {
   if (changedFile) map.get(importer).add(changedFile);
 }
 
+// ------------------------------------------------------------------------ python
+
+const PY_EXT = /\.py$/;
+// Vendored / environment python that is never a project consumer.
+const PY_VENDOR = /(^|\/)(\.venv|venv|env|site-packages|__pycache__|\.tox)\//;
+
+// Module key: "pkg/mod.py" -> "pkg/mod"; a package's __init__.py -> the package dir.
+function pyKey(p) { return String(p || "").replace(PY_EXT, "").replace(/\/__init__$/, ""); }
+
+/*
+ * All candidate module KEYS a python source imports, resolved against the importer's
+ * location. `from PKG import name` emits both PKG and PKG.name (the latter covers the
+ * import-a-submodule form; when `name` is a mere symbol the extra key matches nothing
+ * and is harmless). Regex-level, like the JS scanner.
+ */
+function pyImportKeys(importerPath, src) {
+  const keys = new Set();
+  const dir = path.posix.dirname(importerPath);
+  const fromDots = (dots) => {
+    // 1 dot = the importer's own package dir; each extra dot walks one level up.
+    let d = dir === "." ? "" : dir;
+    for (let i = 1; i < dots; i++) d = d.includes("/") ? d.slice(0, d.lastIndexOf("/")) : "";
+    return d;
+  };
+  const add = (baseDir, moduleDotted) => {
+    const rel = moduleDotted ? moduleDotted.split(".").join("/") : "";
+    const joined = baseDir && rel ? `${baseDir}/${rel}` : baseDir || rel;
+    if (joined) keys.add(path.posix.normalize(joined));
+  };
+  const text = String(src || "");
+  let m;
+  // from <dots><module> import a, b as c
+  const fromRe = /^[ \t]*from[ \t]+(\.*)([\w.]*)[ \t]+import[ \t]+([^\n#]+)/gm;
+  while ((m = fromRe.exec(text))) {
+    const dots = m[1].length;
+    const mod = m[2];
+    const baseDir = dots > 0 ? fromDots(dots) : "";
+    if (dots > 0) {
+      if (mod) add(baseDir, mod);
+      // from . import sib  /  from .pkg import sub - each name may be a module.
+      for (const name of m[3].split(",")) {
+        const n = name.trim().split(/[ \t]+as[ \t]+/)[0].trim();
+        if (/^\w+$/.test(n)) add(baseDir, mod ? `${mod}.${n}` : n);
+      }
+    } else if (mod) {
+      add("", mod);
+      for (const name of m[3].split(",")) {
+        const n = name.trim().split(/[ \t]+as[ \t]+/)[0].trim();
+        if (/^\w+$/.test(n)) add("", `${mod}.${n}`);
+      }
+    }
+  }
+  // import a.b, c as d
+  const impRe = /^[ \t]*import[ \t]+([\w.]+(?:[ \t]+as[ \t]+\w+)?(?:[ \t]*,[ \t]*[\w.]+(?:[ \t]+as[ \t]+\w+)?)*)/gm;
+  while ((m = impRe.exec(text))) {
+    for (const part of m[1].split(",")) {
+      const mod = part.trim().split(/[ \t]+as[ \t]+/)[0].trim();
+      if (mod) add("", mod);
+    }
+  }
+  return [...keys];
+}
+
+// Co-located tests for a python source that exist at head: pkg/test_x.py, pkg/x_test.py,
+// pkg/tests/test_x.py, and a root-level tests/test_x.py.
+function pyCoLocatedTests(file, headSet) {
+  const dir = path.posix.dirname(file);
+  const stem = path.posix.basename(file).replace(PY_EXT, "");
+  const at = (d, name) => (d === "." || d === "" ? name : `${d}/${name}`);
+  const candidates = [
+    at(dir, `test_${stem}.py`),
+    at(dir, `${stem}_test.py`),
+    at(dir, `tests/test_${stem}.py`),
+    `tests/test_${stem}.py`,
+  ];
+  return [...new Set(candidates.filter((c) => headSet.has(c)))];
+}
+
 /*
  * computeNewDependents({ base, head, changedSource, listAt, readAt, graph, allDependents })
  *   -> { computed, supported, newDependents: [{ file, imports, tests, reason }], note }
@@ -75,15 +158,33 @@ function addDep(map, importer, changedFile) {
  * - built-in JS/TS scan otherwise: detects both a NEW file and a NEW edge (an importer that
  *   did not import the changed file at base but does at head) - the freshly-routed consumer.
  */
+// Per-ecosystem dispatch: what keys a source imports, a changed file's key, its tests.
+function importKeysOf(file, src) {
+  if (JS_EXT.test(file)) return jsImports(src).map((s) => resolveJsKey(file, s)).filter(Boolean);
+  if (PY_EXT.test(file)) return pyImportKeys(file, src);
+  return [];
+}
+function keyOf(file) {
+  if (JS_EXT.test(file)) return jsKey(file);
+  if (PY_EXT.test(file)) return pyKey(file);
+  return file;
+}
+function testsOf(file, headSet) {
+  if (PY_EXT.test(file)) return pyCoLocatedTests(file, headSet);
+  return coLocatedTests(file, headSet);
+}
+const isScannable = (f) =>
+  (JS_EXT.test(f) && !f.includes("node_modules/")) || (PY_EXT.test(f) && !PY_VENDOR.test(f));
+
 function computeNewDependents(opts) {
   const { base, head, changedSource, listAt, readAt, graph, allDependents } = opts;
   const haveGraph = graph && typeof graph === "object";
-  const jsChanged = (changedSource || []).filter((f) => JS_EXT.test(f));
-  if (!haveGraph && !jsChanged.length) {
-    return { computed: false, supported: false, newDependents: [], note: "no JS/TS changes and no gates.G7.graph - dependents not computed for this stack" };
+  const scannableChanged = (changedSource || []).filter((f) => JS_EXT.test(f) || PY_EXT.test(f));
+  if (!haveGraph && !scannableChanged.length) {
+    return { computed: false, supported: false, newDependents: [], note: "no JS/TS or Python changes and no gates.G7.graph - dependents not computed for this stack" };
   }
 
-  const changedKeys = new Set(jsChanged.map(jsKey));
+  const changedByKey = new Map(scannableChanged.map((f) => [keyOf(f), f]));
   const headFiles = listAt(head) || [];
   const headSet = new Set(headFiles);
   const deps = new Map(); // importer -> Set(changed file it imports)
@@ -92,19 +193,18 @@ function computeNewDependents(opts) {
     for (const [importer, imported] of Object.entries(graph)) {
       if (TEST_PATH.test(importer)) continue; // a test is not a production consumer
       for (const imp of imported || []) {
-        const k = jsKey(imp);
-        const hit = (changedSource || []).find((c) => c === imp || jsKey(c) === k);
+        const k = keyOf(imp);
+        const hit = (changedSource || []).find((c) => c === imp || keyOf(c) === k);
         if (hit) addDep(deps, importer, hit);
       }
     }
   } else {
     for (const f of headFiles) {
-      if (!JS_EXT.test(f) || f.includes("node_modules/") || TEST_PATH.test(f)) continue;
+      if (!isScannable(f) || TEST_PATH.test(f)) continue;
       const src = readAt(head, f);
       if (!src) continue;
-      for (const spec of jsImports(src)) {
-        const key = resolveJsKey(f, spec);
-        if (key && changedKeys.has(key)) addDep(deps, f, jsChanged.find((c) => jsKey(c) === key));
+      for (const key of importKeysOf(f, src)) {
+        if (changedByKey.has(key)) addDep(deps, f, changedByKey.get(key));
       }
     }
   }
@@ -117,11 +217,10 @@ function computeNewDependents(opts) {
     if (!isNew) {
       if (!baseSet.has(importer)) { isNew = true; reason = "new-file"; }
       else if (!haveGraph) {
-        // new-edge: did this importer import the changed file at base? (JS scan only)
-        const baseSrc = readAt(base, importer) || "";
-        const baseKeys = new Set(jsImports(baseSrc).map((s) => resolveJsKey(importer, s)).filter(Boolean));
+        // new-edge: did this importer import the changed file at base? (scan mode only)
+        const baseKeys = new Set(importKeysOf(importer, readAt(base, importer) || ""));
         for (const c of changedImports) {
-          if (!baseKeys.has(jsKey(c))) { isNew = true; reason = "new-edge"; break; }
+          if (!baseKeys.has(keyOf(c))) { isNew = true; reason = "new-edge"; break; }
         }
       }
     }
@@ -129,7 +228,7 @@ function computeNewDependents(opts) {
     newDependents.push({
       file: importer,
       imports: [...changedImports],
-      tests: coLocatedTests(importer, headSet),
+      tests: testsOf(importer, headSet),
       reason,
     });
   }
@@ -137,4 +236,4 @@ function computeNewDependents(opts) {
   return { computed: true, supported: true, newDependents, note: null };
 }
 
-module.exports = { jsKey, jsImports, resolveJsKey, coLocatedTests, computeNewDependents };
+module.exports = { jsKey, jsImports, resolveJsKey, coLocatedTests, pyKey, pyImportKeys, pyCoLocatedTests, computeNewDependents };
