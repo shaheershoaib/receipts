@@ -32,6 +32,8 @@ const fs = require("fs");
 const path = require("path");
 const g7 = require("./g7.js");
 const g6 = require("./g6.js");
+const g11 = require("./g11.js");
+const g12 = require("./g12.js");
 
 const TEST_PATH = /(\.test\.|\.spec\.|_test\.|(^|\/)test_|(^|\/)tests?\/|\/__tests__\/|_spec\.)/i;
 // JSON keys that are documentation, not contract surface - removing them is not breaking.
@@ -191,11 +193,14 @@ const KNOWN_KEYS = {
   build: ["sha_source", "platform", "deploy_host_patterns", "environments", "verify_against"],
   verify: ["test_command", "suite_command", "require_fresh_base", "on_load_error_red", "command_timeout_ms", "receipt_runs", "live_drive"],
   degrade: ["on_no_receipt", "on_unreachable_build"],
-  gates: ["medium", "work_type", "enabled", "disabled", "G6", "G7", "G8", "G10"],
+  gates: ["medium", "work_type", "enabled", "disabled", "G6", "G7", "G8", "G10", "G11", "G12", "G13"],
   "gates.G6": ["mode", "auto", "surfaces"],
   "gates.G7": ["mode", "graph", "verify_all_dependents"],
   "gates.G8": ["integration_branch"],
   "gates.G10": ["contract_paths", "mode", "contract_pairs"],
+  "gates.G11": ["mode"],
+  "gates.G12": ["mode"],
+  "gates.G13": ["coverage_command", "lcov_path", "mode"],
   agent: ["loop_skills", "staging_query_patterns", "closeout_fixed_statuses", "repo_name"],
 };
 function unknownConfigKeys(cfg) {
@@ -408,6 +413,42 @@ function main() {
     }
   }
 
+  // G11 referee-integrity (the "don't shoot the referee" gate): a green earned by DELETING
+  // the failing test, SKIPPING it, or regenerating snapshots wholesale is a suite that lost
+  // its teeth - G9 verifies the suite passes, G11 watches that it kept its assertion power.
+  // Static over the -M name-status diff (renames are not deletions), every PR, like G6.
+  if (gateOn(gates, "G11")) {
+    const g11cfg = (gates && gates.G11) || {};
+    const ns = git(repo, ["diff", "--name-status", "-M", `${base}..${head}`]);
+    const nameStatus = !ns.ok ? [] : ns.out.split("\n").map((l) => l.trim()).filter(Boolean).map((l) => {
+      const parts = l.split(/\t/);
+      const status = parts[0][0]; // "R100" -> "R"
+      return status === "R" ? { status, file: parts[1], to: parts[2] } : { status, file: parts[1] };
+    });
+    const readAt = (c, p) => { const r = git(repo, ["show", `${c}:${p}`]); return r.ok ? r.out : null; };
+    let g11res = { deletions: [], skips: [], snapshots: [] };
+    try { g11res = g11.computeG11({ nameStatus, readAt, base, head }); } catch { /* keep empty */ }
+    const acknowledged = g11.testRemovalAcknowledged(prBody);
+    if (g11res.deletions.length || g11res.skips.length || g11res.snapshots.length)
+      RECEIPT.gates.G11 = { deletions: g11res.deletions, skips: g11res.skips, snapshots: g11res.snapshots, acknowledged };
+    const hard = [];
+    if (g11res.deletions.length) hard.push(`deleted test file(s): ${g11res.deletions.join(", ")}`);
+    if (g11res.skips.length) hard.push(`skip/focus marker(s) added: ${g11res.skips.map((s) => `${s.file} (${s.marker} +${s.added})`).join(", ")}`);
+    if (hard.length) {
+      if (acknowledged) {
+        warn(`G11: test removal/skip acknowledged via 'test-removal:' - ${hard.join("; ")} (tracked, not blocked).`);
+      } else {
+        const msg = `G11 referee integrity: this PR removes or mutes tests - ${hard.join("; ")}. A green earned by shrinking the suite proves nothing: G9 checks that the suite passes, G11 that it kept its teeth. Restore them, or acknowledge honestly with a 'test-removal: <why>' line in the PR body.`;
+        if ((g11cfg.mode || "warn") === "block") emit("BLOCK", msg);
+        warn(msg);
+      }
+    }
+    if (g11res.snapshots.length)
+      // Snapshots update legitimately with intended changes - always warn-only, framed as
+      // the question it is.
+      warn(`G11: ${g11res.snapshots.length} snapshot file(s) rewritten (${g11res.snapshots.slice(0, 6).join(", ")}${g11res.snapshots.length > 6 ? ` +${g11res.snapshots.length - 6} more` : ""}) - confirm they encode the INTENDED behavior, not a regeneration that makes whatever the code now does the expectation.`);
+  }
+
   // Strict trigger: an unclaimed code change that touched no PRODUCTION source (docs / tests /
   // config only) has nothing to re-verify; otherwise it falls through and must carry a receipt.
   if (strict && bodyProvided && !isFixClaim && !workType && !changedSource.length)
@@ -440,6 +481,26 @@ function main() {
 
   // G10 rollout compatibility.
   checkContracts(repo, base, head, gates);
+
+  // G12 fix-the-cause-not-the-alarm (the silencing assist): a fix-claim whose diff REMOVES
+  // throw/raise statements or ADDS empty catches may have silenced the symptom rather than
+  // repaired the invariant - the receipt goes red->green honestly (the alarm IS gone) and
+  // the fix is wrong in the worst way. Heuristic, so it ASKS; the judgment is the agent's
+  // and the reviewer's (some fixes legitimately remove an over-strict check).
+  if (isFixClaim && gateOn(gates, "G12") && changedSource.length) {
+    const g12cfg = (gates && gates.G12) || {};
+    const readAt = (c, p) => { const r = git(repo, ["show", `${c}:${p}`]); return r.ok ? r.out : null; };
+    let g12res = { findings: [] };
+    try { g12res = g12.computeG12({ changedSource, readAt, base, head }); } catch { /* keep empty */ }
+    if (g12res.findings.length) {
+      RECEIPT.gates.G12 = { findings: g12res.findings };
+      const detail = g12res.findings.map((f) =>
+        f.kind === "removed-throw" ? `${f.file}: ${f.removed} throw/raise removed` : `${f.file}: ${f.name} added`).join("; ");
+      const msg = `G12 fix the cause, not the alarm: this fix ${detail}. If the symptom disappeared because its DETECTOR did (a permission check deleted to cure a 403, an exception swallowed to cure an error toast), the bug is still there - now unreported. If the check itself was the bug, say so in the PR; a receipt asserting the POSITIVE behavior (the value arrives, the action succeeds) beats one asserting the complaint is gone.`;
+      if ((g12cfg.mode || "warn") === "block") emit("BLOCK", msg);
+      warn(msg);
+    }
+  }
 
   // G7 dependent-test-selection: compute the NEW dependents of the changed source - consumers
   // that newly route through it (a freshly-added file, or a freshly-added import edge). Their
@@ -495,7 +556,11 @@ function main() {
   // UNCHANGED test - the legitimate "my fix makes existing test X flip red->green" case.
   // Parsing is strict-but-forgiving: a single path-looking token is a pin (and is blocked
   // if invalid); a line with prose after the colon is ignored.
-  const changedTests = changed.filter((f) => TEST_PATH.test(f));
+  // Excluded from the receipt set: a test DELETED by the PR (it cannot run on head; its
+  // absence is G11's finding, not a receipt) and snapshot ARTIFACTS (.snap matches the
+  // test-path shape but is not runnable - churn is G11's finding too).
+  const changedTests = changed.filter((f) =>
+    TEST_PATH.test(f) && !g11.SNAPSHOT_PATH.test(f) && git(repo, ["cat-file", "-e", `${head}:${f}`]).ok);
   const pins = [];
   const pinRe = /^\s*receipt\s*:\s*(\S+)\s*$/gim;
   let pm;

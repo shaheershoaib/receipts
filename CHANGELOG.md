@@ -3,6 +3,29 @@
 ## Unreleased
 
 ### Added
+- **Three new gates - the optimizing-agent gates.** G0-G10 defend against an agent that is
+  *wrong*; these defend against an agent that is *optimizing* (making the check green
+  rather than the code right):
+  - **G11 referee integrity** ("don't shoot the referee"): flags a PR that DELETES test
+    files (rename-aware), adds skip/focus markers (`.skip` / `xit` / `@pytest.mark.skip` /
+    `t.Skip` / `@Disabled` / `.only` - multi-framework), or rewrites snapshot artifacts.
+    A green earned by shrinking the suite's assertion power proves nothing: G9 checks the
+    suite passes, G11 that it kept its teeth. Honest escape hatch: a `test-removal: <why>`
+    line acknowledges intentional removals (tracked, never blocked). Default warn,
+    `gates.G11.mode` -> block; snapshot churn always warn-only. Runs statically on every PR.
+  - **G12 fix the cause, not the alarm** (the silencing gate): on a fix-claim, flags a diff
+    that REMOVES throw/raise statements or ADDS empty/swallowing catches - the 403 "fixed"
+    by deleting the permission check, the error toast by an empty catch. The receipt goes
+    red->green honestly (the alarm IS gone) and the system is broken silently. Heuristic,
+    so it asks rather than answers: warn default, `gates.G12.mode` -> block. Spec adds
+    G1's corollary: assert the POSITIVE invariant, not the absence of the complaint.
+  - **G13 claim-scope congruence** (spec + config now; enforcer coverage-run ships next):
+    the receipt must EXERCISE the diff - changed production lines no test executes are
+    unverified changes shielded by a narrow receipt.
+- **Spec amendments:** G2 now pins the reporter's RUNTIME CONTEXT (role/permissions,
+  tenant, feature-flag bucket, locale) as part of the flow; G3 notes the artifact is
+  code + CONFIG (the right sha under the wrong flag bucket is the wrong build); G9 gains
+  the determinism corollary (`verify.receipt_runs`).
 - **`receipt:` pin.** A `receipt: path/to/the.test.ts` line in the PR body names the
   acceptance test explicitly, separating the real receipt from incidental test churn (a
   snapshot refresh, a rename) that used to pollute the red run and mis-read as "weak
@@ -18,6 +41,10 @@
   key (never blocks: an older enforcer meeting a newer config keeps working, loudly).
 
 ### Fixed
+- **Deleted tests and snapshot artifacts polluted the receipt set.** A test file deleted
+  by the PR (which cannot run on head) and `.snap` artifacts (which match the test-path
+  shape but are not runnable) were included in the red/green receipt run, failing the
+  green phase spuriously. Both are now excluded - their churn is G11's finding instead.
 - **Local `receipts verify` left the repo on a detached HEAD.** The base/head checkout
   dance restored the original SHA, not the original BRANCH - so a commit made after a
   local verify silently missed the branch (found the hard way: an amend after a verify

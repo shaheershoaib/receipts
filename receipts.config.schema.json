@@ -126,7 +126,7 @@
     },
     "gates": {
       "type": "object",
-      "description": "Which gates apply to this project, and per-gate selectors. Gates are referenced by ID (G0-G10) - the shared vocabulary across the spec, the `gates` skill, the Stop hooks, and the enforcer. `receipts init` writes a safe default (all on); disable the gates that do not fit (e.g. G10 in a single repo with no split deploy, or the deploy-surface gates in a library with no deploy). The skill reads this to know which gates to apply; the enforcer reads it to know which checks to run.",
+      "description": "Which gates apply to this project, and per-gate selectors. Gates are referenced by ID (G0-G13) - the shared vocabulary across the spec, the `gates` skill, the Stop hooks, and the enforcer. `receipts init` writes a safe default (all on); disable the gates that do not fit (e.g. G10 in a single repo with no split deploy, or the deploy-surface gates in a library with no deploy). The skill reads this to know which gates to apply; the enforcer reads it to know which checks to run.",
       "additionalProperties": false,
       "properties": {
         "medium": {
@@ -138,16 +138,16 @@
           "description": "OPTIONAL default work type (fix / feature / migration / refactor / chore). Usually LEFT UNSET - work type is per-PR, not per-project (most repos mix), so the agent determines it per task and a PR signals it with a `work-type:` line in its body. It sets what the receipt asserts (the acceptance criterion), and for refactor/chore it inverts the receipt to 'the full suite stays green' (no behavior change). See references/WORK-TYPES.md."
         },
         "enabled": {
-          "description": "Which gates run here: \"all\", or an explicit array of gate IDs (G0-G10).",
+          "description": "Which gates run here: \"all\", or an explicit array of gate IDs (G0-G13).",
           "default": "all",
           "oneOf": [
             { "const": "all" },
-            { "type": "array", "items": { "type": "string", "pattern": "^G(10|[0-9])$" } }
+            { "type": "array", "items": { "type": "string", "pattern": "^G(1[0-3]|[0-9])$" } }
           ]
         },
         "disabled": {
           "type": "array",
-          "items": { "type": "string", "pattern": "^G(10|[0-9])$" },
+          "items": { "type": "string", "pattern": "^G(1[0-3]|[0-9])$" },
           "description": "Gate IDs to turn off even if `enabled` includes them; takes precedence over `enabled`.",
           "default": []
         },
@@ -241,6 +241,51 @@
                   "consumer": { "type": "string" }
                 }
               }
+            }
+          }
+        },
+        "G11": {
+          "type": "object",
+          "additionalProperties": false,
+          "description": "Referee integrity - the 'don't shoot the referee' gate. Flags a PR that DELETES test files, adds skip/focus markers (.skip / xit / @pytest.mark.skip / t.Skip / @Disabled / .only), or rewrites snapshot artifacts: a green earned by shrinking the suite's assertion power proves nothing. An honest `test-removal: <why>` line in the PR body acknowledges intentional removals (tracked, never blocked). Runs statically on every PR.",
+          "properties": {
+            "mode": {
+              "enum": ["warn", "block"],
+              "description": "What an unacknowledged test deletion / added skip does: warn (default) or block. Snapshot churn always warns only.",
+              "default": "warn"
+            }
+          }
+        },
+        "G12": {
+          "type": "object",
+          "additionalProperties": false,
+          "description": "Fix the cause, not the alarm - the silencing assist. On a fix-claim, flags a diff that REMOVES throw/raise statements or ADDS empty/swallowing catches: the symptom may be gone because its DETECTOR is (a permission check deleted to cure a 403, an exception swallowed to cure an error toast). Heuristic - some fixes legitimately remove an over-strict check - so it asks; the judgment is agent-side (the skill).",
+          "properties": {
+            "mode": {
+              "enum": ["warn", "block"],
+              "description": "What a silencing-shaped diff does: warn (default - the heuristic asks a question) or block.",
+              "default": "warn"
+            }
+          }
+        },
+        "G13": {
+          "type": "object",
+          "additionalProperties": false,
+          "description": "Claim-scope congruence - the receipt must EXERCISE the diff. The red->green proves the receipt relates to the change; it says nothing about the other changed lines riding along. With a coverage command configured, the enforcer runs it on head, parses lcov, and lists changed production lines never executed by any test. OPT-IN (coverage tooling is stack-specific and slower); no coverage_command = the gate does not run.",
+          "properties": {
+            "coverage_command": {
+              "type": "string",
+              "description": "Command that runs the suite with coverage and writes an lcov file (e.g. `npx c8 --reporter=lcov npm test`, `coverage run -m pytest && coverage lcov`)."
+            },
+            "lcov_path": {
+              "type": "string",
+              "description": "Where the lcov file lands, relative to the repo root (default: coverage/lcov.info).",
+              "default": "coverage/lcov.info"
+            },
+            "mode": {
+              "enum": ["warn", "block"],
+              "description": "What uncovered changed lines do: warn (default) or block.",
+              "default": "warn"
             }
           }
         }
