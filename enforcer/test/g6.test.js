@@ -2,7 +2,49 @@
 /* Unit tests for G6 surface-coverage logic (pure, injected in-memory I/O). */
 const { test } = require("node:test");
 const assert = require("node:assert");
-const { globToRe, camelWords, commonTrailing, isDistinctive, computeG6 } = require("../g6.js");
+const { globToRe, camelWords, commonTrailing, isDistinctive, stripComments, computeG6 } = require("../g6.js");
+
+test("stripComments: comments go, URLs in strings survive", () => {
+  assert.equal(stripComments("a; // trailing\nb;"), "a; \nb;");
+  assert.equal(stripComments("/* block\nspans */x"), " x");
+  assert.ok(stripComments('const u = "https://x.dev/y"; z;').includes("https://x.dev/y"),
+    "a protocol-relative // inside a URL string is not a comment");
+});
+
+test("heuristic: an affordance added only in COMMENTS is not a rollout (no false positive)", () => {
+  const PLAIN = "export const T=()=>null;";
+  const COMMENTED = "// TODO: wire Pagination here someday\nexport const T=()=>null;";
+  const base = {
+    "src/OrdersTable.tsx": PLAIN, "src/UsersTable.tsx": PLAIN, "src/InvoicesTable.tsx": PLAIN,
+  };
+  const head = {
+    "src/OrdersTable.tsx": COMMENTED, "src/UsersTable.tsx": COMMENTED, "src/InvoicesTable.tsx": PLAIN,
+  };
+  const { findings } = computeG6({
+    ...env(base, head),
+    changed: ["src/OrdersTable.tsx", "src/UsersTable.tsx"],
+  });
+  assert.equal(findings.length, 0, "a comment-only 'rollout' must not flag the twins");
+});
+
+test("heuristic: a twin carrying the marker ONLY in a comment counts as uncovered", () => {
+  const REAL = 'import {Pagination} from "./Pagination"; export const T=()=><Pagination/>;';
+  const PLAIN = "export const T=()=>null;";
+  const TODO = "// Pagination: add later\nexport const T=()=>null;";
+  const base = {
+    "src/OrdersTable.tsx": PLAIN, "src/UsersTable.tsx": PLAIN, "src/InvoicesTable.tsx": TODO,
+  };
+  const head = {
+    "src/OrdersTable.tsx": REAL, "src/UsersTable.tsx": REAL, "src/InvoicesTable.tsx": TODO,
+  };
+  const { findings } = computeG6({
+    ...env(base, head),
+    changed: ["src/OrdersTable.tsx", "src/UsersTable.tsx"],
+  });
+  assert.ok(findings.length >= 1, "the rollout is real; the TODO twin must be flagged");
+  assert.ok(names(findings).includes("src/InvoicesTable.tsx"),
+    "a comment mention is not adoption - the twin is uncovered");
+});
 
 function env(baseTree, headTree) {
   const pick = (c) => (c === "BASE" ? baseTree : headTree);

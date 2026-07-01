@@ -97,6 +97,17 @@ const STOPWORDS = new Set([
   "footer", "section", "article", "aside", "table", "thead", "tbody", "tr", "td", "th",
 ]);
 
+// Strip comments before the heuristic tokenizes: an affordance named only in a COMMENT is
+// not a rollout (a license-header sweep across two `*Table.tsx` files is not pagination),
+// and a commented-out import is not an edge. The `[^:]` guard keeps a URL in a string
+// ("https://...") from being clipped as a line comment. Regex-level like everything here -
+// a `//` inside a non-URL string is mis-stripped, an acceptable trade for the FP class.
+function stripComments(src) {
+  return String(src || "")
+    .replace(/\/\*[\s\S]*?\*\//g, " ")
+    .replace(/(^|[^:])\/\/.*$/gm, "$1");
+}
+
 // All identifier-ish tokens in a source (regex-level; '-' kept so JSX attributes like
 // `aria-label` are single tokens). Not an AST - good enough to spot a rolled-out affordance.
 function identifiers(src) {
@@ -165,9 +176,11 @@ function computeG6(opts) {
     };
     for (const f of changed || []) {
       if (!isJsSurface(f)) continue;
-      const head_ = readAt(head, f);
-      if (head_ == null) continue;
-      const base_ = readAt(base, f) || "";
+      const headRaw = readAt(head, f);
+      if (headRaw == null) continue;
+      // Comment-stripped views: a token or import added only in a comment is not a rollout.
+      const head_ = stripComments(headRaw);
+      const base_ = stripComments(readAt(base, f) || "");
       const beforeImp = new Set(jsImports(base_));
       for (const spec of jsImports(head_)) if (!beforeImp.has(spec)) note(spec, "import", f);
       const beforeTok = identifiers(base_);
@@ -182,7 +195,9 @@ function computeG6(opts) {
       const family = headFiles.filter(isJsSurface).filter((f) => endsWithWords(f, trail));
       const adopterSet = new Set(adopters);
       const has = (f) => {
-        const s = readAt(head, f) || "";
+        // Stripped here too: a twin whose only mention of the marker is a comment
+        // ("TODO: add Pagination") has NOT adopted it - it belongs in `uncovered`.
+        const s = stripComments(readAt(head, f) || "");
         return kind === "import" ? jsImports(s).includes(marker) : s.includes(marker);
       };
       const uncovered = family.filter((f) => !adopterSet.has(f) && !has(f));
@@ -202,4 +217,4 @@ function computeG6(opts) {
   return { findings };
 }
 
-module.exports = { globToRe, camelWords, commonTrailing, endsWithWords, identifiers, isDistinctive, computeG6 };
+module.exports = { globToRe, camelWords, commonTrailing, endsWithWords, identifiers, isDistinctive, stripComments, computeG6 };

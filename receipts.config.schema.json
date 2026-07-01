@@ -91,8 +91,14 @@
         "command_timeout_ms": {
           "type": "integer",
           "minimum": 0,
-          "description": "Optional per-command timeout (milliseconds) for the test/suite commands the enforcer runs. A hung test is killed and reported rather than hanging the whole job. 0 / unset = no timeout (the CI job's own timeout still applies).",
-          "default": 0
+          "description": "Per-command timeout (milliseconds) for the test/suite commands the enforcer runs. A hung test is killed and reported (timed_out in the receipt) rather than holding the CI job to its own ceiling. DEFAULT: 20 minutes (1200000). An explicit 0 disables (the job's timeout still applies).",
+          "default": 1200000
+        },
+        "receipt_runs": {
+          "type": "integer",
+          "minimum": 1,
+          "description": "Run the receipt N times on each side: the red must be red N/N on base and the green green N/N on head. A FLAKY receipt can manufacture a fake red (a green test that flaked red on base) or pass a broken fix (a red that flaked green on head) - N > 1 rejects nondeterministic receipts as unproven (G0/G9). Default 1 (single run, prior behavior).",
+          "default": 1
         },
         "live_drive": {
           "type": ["string", "null"],

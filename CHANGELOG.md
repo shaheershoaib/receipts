@@ -1,5 +1,37 @@
 # Changelog
 
+## Unreleased
+
+### Added
+- **`receipt:` pin.** A `receipt: path/to/the.test.ts` line in the PR body names the
+  acceptance test explicitly, separating the real receipt from incidental test churn (a
+  snapshot refresh, a rename) that used to pollute the red run and mis-read as "weak
+  receipt". A pin may name an UNCHANGED test - the legitimate "my fix makes existing test
+  X flip red->green" case. An invalid pin (not a test file / absent at head) blocks.
+- **Receipt determinism** (`verify.receipt_runs`, default 1). Run the receipt N times per
+  side: red must be red N/N on base, green green N/N on head. A flaky receipt can
+  manufacture a fake red or pass a broken fix; a mixed result is now a distinct
+  `flaky receipt` / `flaky green` BLOCK instead of silently counting.
+- **Config key validation.** Unknown keys in `receipts.config.json` (a typo'd `gatez` /
+  `test_comand`) used to silently mean "default behavior" - the quietest possible
+  misconfiguration of a verification tool. The enforcer now WARNS, naming each unknown
+  key (never blocks: an older enforcer meeting a newer config keeps working, loudly).
+
+### Fixed
+- **Local `receipts verify` left the repo on a detached HEAD.** The base/head checkout
+  dance restored the original SHA, not the original BRANCH - so a commit made after a
+  local verify silently missed the branch (found the hard way: an amend after a verify
+  left a PR pointing at the pre-amend commit). The enforcer now restores the branch.
+
+### Changed
+- **Test/suite commands now default to a 20-minute timeout** (`verify.command_timeout_ms`;
+  explicit `0` restores no-timeout). A hung test used to hold the CI job to its own
+  multi-hour ceiling.
+- **G6's heuristic ignores comments.** An affordance mentioned only in a comment is not a
+  rollout (a license-header sweep is not pagination), a commented-out import is not an
+  edge, and a twin whose only mention of the marker is a "TODO: add it" comment counts as
+  UNCOVERED rather than adopted.
+
 ## 0.2.1
 
 The distribution release: the published artifact now proves itself the way the tool

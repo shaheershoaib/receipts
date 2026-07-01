@@ -162,6 +162,57 @@ function expandTestPlaceholders(cmd, files) {
     .split("{test_classes}").join(classes.join(","));
 }
 
+// What to restore after the base/head checkout dance: the BRANCH when on one, else the
+// sha. Restoring the sha alone leaves a local `receipts verify` run on a detached HEAD -
+// the user's next commit then silently misses their branch (found the hard way: an amend
+// after a local verify left a PR pointing at the pre-amend commit).
+function originalRef(repo) {
+  const branch = git(repo, ["symbolic-ref", "--short", "-q", "HEAD"]);
+  return branch.ok && branch.out.trim() ? branch.out.trim() : git(repo, ["rev-parse", "HEAD"]).out.trim();
+}
+
+// Per-command timeout resolution: DEFAULT 20 minutes - a hung test must not hold the CI
+// job to its own multi-hour ceiling. An explicit 0 opts out (the job's timeout still
+// applies); any positive number is honored as-is.
+function resolveTimeout(verify) {
+  if (verify && verify.command_timeout_ms === 0) return 0;
+  const n = Number(verify && verify.command_timeout_ms);
+  return n > 0 ? n : 1200000;
+}
+
+// Schema-lite key validation. The repo ships a real JSON schema, but validating against
+// it would need a dependency - so this mirrors just the KEY SETS. A typo'd key ("gatez",
+// "test_comand") silently meaning "default behavior" is exactly the quiet
+// misconfiguration a verification tool must not allow. Unknown keys WARN, never block
+// (forward-compat: an older enforcer meeting a newer config keeps working, loudly).
+const KNOWN_KEYS = {
+  "": ["$schema", "version", "claim", "build", "verify", "degrade", "gates", "agent"],
+  claim: ["issue_link", "require_receipt_for", "downgrade_tags"],
+  build: ["sha_source", "platform", "deploy_host_patterns", "environments", "verify_against"],
+  verify: ["test_command", "suite_command", "require_fresh_base", "on_load_error_red", "command_timeout_ms", "receipt_runs", "live_drive"],
+  degrade: ["on_no_receipt", "on_unreachable_build"],
+  gates: ["medium", "work_type", "enabled", "disabled", "G6", "G7", "G8", "G10"],
+  "gates.G6": ["mode", "auto", "surfaces"],
+  "gates.G7": ["mode", "graph", "verify_all_dependents"],
+  "gates.G8": ["integration_branch"],
+  "gates.G10": ["contract_paths", "mode", "contract_pairs"],
+  agent: ["loop_skills", "staging_query_patterns", "closeout_fixed_statuses", "repo_name"],
+};
+function unknownConfigKeys(cfg) {
+  const out = [];
+  const walk = (obj, prefix) => {
+    const known = KNOWN_KEYS[prefix];
+    if (!known || !obj || typeof obj !== "object" || Array.isArray(obj)) return;
+    for (const k of Object.keys(obj)) {
+      if (!known.includes(k)) { out.push(prefix ? `${prefix}.${k}` : k); continue; }
+      const next = prefix ? `${prefix}.${k}` : k;
+      if (KNOWN_KEYS[next]) walk(obj[k], next);
+    }
+  };
+  walk(cfg, "");
+  return out;
+}
+
 function gateOn(gates, id) {
   if (!gates) return true;
   if ((gates.disabled || []).includes(id)) return false;
@@ -292,14 +343,19 @@ function main() {
     cfg.claim = {}; cfg.degrade = {}; cfg.gates = {};
   }
 
+  // A typo'd key silently becoming default behavior is a quiet misconfiguration - warn.
+  const badKeys = unknownConfigKeys(cfg);
+  if (badKeys.length)
+    warn(`config: unknown key(s) not read by the enforcer: ${badKeys.join(", ")} - a typo here silently becomes default behavior; check receipts.config.schema.json for the valid keys.`);
+
   const claim = cfg.claim || {};
   const degrade = cfg.degrade || {};
   const verify = cfg.verify || {};
   const gates = cfg.gates || {};
   const noReceiptMode = degrade.on_no_receipt || "require-downgrade-tag";
-  // Optional per-command timeout (ms) for the test/suite commands; 0 / unset = no timeout
-  // (preserves prior behavior). Guards a hung test from hanging the whole job.
-  const cmdTimeout = Number(verify.command_timeout_ms) || 0;
+  // Per-command timeout for the test/suite commands: default 20 min (a hung test must not
+  // hold the CI job to its ceiling); verify.command_timeout_ms overrides, explicit 0 disables.
+  const cmdTimeout = resolveTimeout(verify);
   // Trigger scope. Default ("issue-link"): only a fix-claim (closes #N) must carry a receipt.
   // Opt-in ("any-source-change"): a PR that touches production source without a receipt, an
   // honest downgrade tag, or an explicit work-type is also blocked - closing the "omit the
@@ -418,7 +474,7 @@ function main() {
     if (masksExit(suiteCmd))
       emit("BLOCK", "verify.suite_command can mask its own exit code - a green cannot be trusted (G9). Use a clean command or a script.");
     RECEIPT.gates.work_type_inverted = workType;
-    const original = git(repo, ["rev-parse", "HEAD"]).out.trim();
+    const original = originalRef(repo);
     let suite;
     try {
       if (!git(repo, ["checkout", "-q", "-f", head]).ok) emit("BLOCK", `cannot checkout head ${head}`);
@@ -432,9 +488,28 @@ function main() {
     finish(`${workType} verified: the full suite is green on head (no behavior change) - G9`);
   }
 
-  // The receipt = test files added/changed between base and head.
-  const tests = changed.filter((f) => TEST_PATH.test(f));
+  // The receipt = test files added/changed between base and head - unless the PR PINS it:
+  // a `receipt: <path>` line in the body names the acceptance test explicitly, separating
+  // the real receipt from incidental test churn (a snapshot refresh, a rename) that would
+  // otherwise pollute the red run and mis-read as "weak receipt". A pin may also name an
+  // UNCHANGED test - the legitimate "my fix makes existing test X flip red->green" case.
+  // Parsing is strict-but-forgiving: a single path-looking token is a pin (and is blocked
+  // if invalid); a line with prose after the colon is ignored.
+  const changedTests = changed.filter((f) => TEST_PATH.test(f));
+  const pins = [];
+  const pinRe = /^\s*receipt\s*:\s*(\S+)\s*$/gim;
+  let pm;
+  while ((pm = pinRe.exec(prBody))) pins.push(pm[1]);
+  const pathish = [...new Set(pins.filter((p) => /[/.]/.test(p)))];
+  for (const p of pathish) {
+    if (!TEST_PATH.test(p))
+      emit("BLOCK", `pinned receipt '${p}' is not a test file - \`receipt:\` must name the acceptance test that flips red->green`);
+    if (!git(repo, ["cat-file", "-e", `${head}:${p}`]).ok)
+      emit("BLOCK", `pinned receipt '${p}' does not exist at head`);
+  }
+  const tests = pathish.length ? pathish : changedTests;
   RECEIPT.tests = tests;
+  RECEIPT.pinned = pathish.length > 0;
   if (!tests.length) {
     if (noReceiptMode === "warn") emit("WARN", "no receipt (no test added/changed) - allowed by config, but unverified");
     emit("BLOCK", "no receipt: this change adds no acceptance test. Add a test that FAILS before and PASSES after the change, or tag the PR 'unverified-reasoned' / 'speculative'. (A behavior-preserving change: tag it `work-type: refactor`.)");
@@ -464,24 +539,36 @@ function main() {
     .filter((f) => !(UNSAFE_PATH.test(f) || /^[-:]/.test(f)));
   const depNoTest = g7res.newDependents.filter((d) => !d.tests.length);
 
-  const original = git(repo, ["rev-parse", "HEAD"]).out.trim();
-  let red, green, suite, g7run;
+  // Determinism (verify.receipt_runs, default 1): a FLAKY receipt can manufacture a fake
+  // red (a green test that flaked red on base) or pass a broken fix (a red that flaked
+  // green on head). With N > 1, the red must be red N/N and the green green N/N.
+  const receiptRuns = Math.max(1, Math.floor(Number(verify.receipt_runs) || 1));
+  const runLabel = (name, i) => (receiptRuns > 1 ? `${name} [${i + 1}/${receiptRuns}]` : name);
+  const original = originalRef(repo);
+  const reds = [], greens = [];
+  let suite, g7run;
   try {
     // RED: base source, with head's receipt test(s) overlaid on top.
     if (!git(repo, ["checkout", "-q", "-f", base]).ok) emit("BLOCK", `cannot checkout base ${base}`);
     git(repo, ["checkout", "-q", head, "--", ...tests]);
-    red = runCmd(repo, cmdFor(tests), cmdTimeout); // expect FAIL = reproduces the bug
-    record("receipt-red@base", cmdFor(tests), red);
-    RECEIPT.red = !red.ok; // red = the receipt reproduced the symptom on base (it FAILED there)
+    for (let i = 0; i < receiptRuns; i++) {
+      const r = runCmd(repo, cmdFor(tests), cmdTimeout); // expect FAIL = reproduces the bug
+      record(runLabel("receipt-red@base", i), cmdFor(tests), r);
+      reds.push(r);
+    }
+    RECEIPT.red = reds.every((r) => !r.ok); // red = reproduced on base (FAILED there, every run)
     // GREEN: full head.
     git(repo, ["checkout", "-q", "-f", head]);
-    green = runCmd(repo, cmdFor(tests), cmdTimeout); // expect PASS = bug gone
-    record("receipt-green@head", cmdFor(tests), green);
-    RECEIPT.green = green.ok; // green = the symptom is gone on head (it PASSED there)
-    if (green.ok && haveSuite && gateOn(gates, "G9")) { suite = runCmd(repo, suiteCmd, cmdTimeout); record("suite@head", suiteCmd, suite); }
+    for (let i = 0; i < receiptRuns; i++) {
+      const g = runCmd(repo, cmdFor(tests), cmdTimeout); // expect PASS = bug gone
+      record(runLabel("receipt-green@head", i), cmdFor(tests), g);
+      greens.push(g);
+    }
+    RECEIPT.green = greens.every((g) => g.ok); // green = gone on head (PASSED there, every run)
+    if (RECEIPT.green && haveSuite && gateOn(gates, "G9")) { suite = runCmd(repo, suiteCmd, cmdTimeout); record("suite@head", suiteCmd, suite); }
     // G7: re-run the new dependents' tests on head - unless a green full suite already covered
     // them (it runs every test, so re-running the subset would be waste).
-    if (green.ok && gateOn(gates, "G7") && depTests.length && !(suite && suite.ok)) {
+    if (RECEIPT.green && gateOn(gates, "G7") && depTests.length && !(suite && suite.ok)) {
       g7run = runCmd(repo, cmdFor(depTests), cmdTimeout);
       record("g7-dependents@head", cmdFor(depTests), g7run);
     }
@@ -489,12 +576,18 @@ function main() {
     git(repo, ["checkout", "-q", "-f", original]);
   }
 
-  if (red.ok)
+  const redPasses = reds.filter((r) => r.ok).length;
+  if (redPasses === reds.length)
     // A test that passes on base did not reproduce the symptom - for a fix-claim that is an
     // unproven receipt, not a clean pass. (A behavior-preserving change uses work-type.)
     emit(noReceiptMode === "warn" ? "WARN" : "BLOCK",
       "weak receipt: the test PASSES on the base commit, so it does not prove it reproduced the reported symptom (G0/G1). Make the test assert the actual symptom, tag the PR honestly, or - if no behavior changes - mark it `work-type: refactor`.");
-  if (LOAD_ERROR.test(red.out || "")) {
+  if (redPasses > 0)
+    // Mixed red = nondeterministic. Never "allowed by config" - a flake proves nothing.
+    emit("BLOCK",
+      `flaky receipt: the test passed on the base commit in ${redPasses}/${reds.length} run(s) and failed in the rest - a nondeterministic red cannot prove it reproduced the symptom (G0/G9). Deflake it (pin time / network / ordering), then re-run.`);
+  const redOut = (reds.find((r) => !r.ok) || reds[0]).out || "";
+  if (LOAD_ERROR.test(redOut)) {
     // The base run FAILED, but as a load/collection error (import / syntax / no-tests-found),
     // not an assertion. That red may not prove the symptom: the test could be red on base
     // merely because it imports code that only exists on head (common and LEGITIMATE for a
@@ -511,8 +604,14 @@ function main() {
     if (loadMode === "block" && workType !== "feature") emit("BLOCK", msg);
     warn(msg);
   }
-  if (!green.ok)
-    emit("BLOCK", "the fix does not pass its own receipt test on head", (green.out || "").split("\n").slice(-8).join("\n"));
+  const greenFails = greens.filter((g) => !g.ok);
+  if (greenFails.length === greens.length)
+    emit("BLOCK", "the fix does not pass its own receipt test on head", (greenFails[0].out || "").split("\n").slice(-8).join("\n"));
+  if (greenFails.length > 0)
+    // Mixed green = nondeterministic: it "passed" only sometimes. Not a fix you can trust.
+    emit("BLOCK",
+      `flaky green: the receipt passed on head in only ${greens.length - greenFails.length}/${greens.length} run(s) - a nondeterministic green cannot be trusted as proof the symptom is gone (G9). Deflake the test, then re-run.`,
+      (greenFails[0].out || "").split("\n").slice(-8).join("\n"));
   if (haveSuite && suite && !suite.ok)
     emit("BLOCK", "G9 full-scope green: the fix passes its own receipt but BREAKS the full suite - a regression in code the changed test never exercised. Fix it, or carry a downgrade tag.", (suite.out || "").split("\n").slice(-8).join("\n"));
   if (gateOn(gates, "G9") && !haveSuite)
@@ -543,4 +642,4 @@ if (require.main === module) {
   catch (e) { console.error("receipts enforcer error: " + (e && e.message ? e.message : e)); process.exit(1); }
 }
 
-module.exports = { masksExit, gateOn, globToRe, isContractFile, typeSet, walkBreaks, contractBreaks, expandTestPlaceholders };
+module.exports = { masksExit, gateOn, globToRe, isContractFile, typeSet, walkBreaks, contractBreaks, expandTestPlaceholders, resolveTimeout, unknownConfigKeys };
