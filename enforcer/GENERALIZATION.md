@@ -50,7 +50,10 @@ integrate per-platform. Vercel, Railway, Netlify, Fly, Render all report deploym
 and commit statuses TO GitHub. So:
 
 - **G3 sha-match** reads the GitHub Deployments / commit-status API - platform-
-  agnostic. No per-platform adapters.
+  agnostic. No per-platform adapters. *(Status: design - the enforcer does not query
+  the API yet. Today G3 is carried agent-side by the Stop hook's deploy-binding check,
+  and `build.sha_source: none|ci-artifact` stands that hook down for a repo with no
+  URL deploy, where the receipt re-run at the PR is itself the right-build proof.)*
 - **Claim detection** (`closes #N`), **downgrade-tag detection**, and
   **receipt-present** all parse the PR - universal.
 - Repos with **no deploy** (libraries, CLIs) verify against the built artifact / test

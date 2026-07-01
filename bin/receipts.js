@@ -68,17 +68,25 @@ function detect(dir) {
   } else if (has("pyproject.toml") || has("pytest.ini") || has("setup.cfg") || has("tox.ini")) {
     stack = "python"; suite_command = "pytest"; test_command = "pytest {test}";
   } else if (has("go.mod")) {
-    stack = "go"; suite_command = "go test ./..."; test_command = "go test -run {test} ./...";
+    // {test} is a FILE path, but `go test -run` selects by test NAME - a path matches
+    // nothing and exits 0 (a "red" that ran no test). Go selects by package: {test_dirs}.
+    stack = "go"; suite_command = "go test ./..."; test_command = "go test {test_dirs}";
   } else if (has("Gemfile")) {
     stack = "ruby"; suite_command = "bundle exec rspec"; test_command = "bundle exec rspec {test}";
   } else if (has("Cargo.toml")) {
     stack = "rust"; suite_command = "cargo test"; test_command = "cargo test {test}";
   } else if (has("pom.xml")) {
-    stack = "maven"; suite_command = "mvn test"; test_command = "mvn -Dtest={test} test";
+    // Surefire's -Dtest= takes class names, never paths: {test_classes} (comma-joined).
+    stack = "maven"; suite_command = "mvn test"; test_command = "mvn -Dtest={test_classes} test";
   } else if (has("build.gradle") || has("build.gradle.kts")) {
-    stack = "gradle"; suite_command = "gradle test"; test_command = "gradle test --tests {test}";
+    // Gradle's --tests takes ONE pattern per flag (no comma list), so a multi-file receipt
+    // cannot be expressed in a single template - default to the coarse full run (correct,
+    // just broader); sharpen per project with --tests {test_classes} if receipts stay 1-file.
+    stack = "gradle"; suite_command = "gradle test"; test_command = "gradle test";
   } else if (hasExt(".csproj") || hasExt(".sln") || hasExt(".fsproj")) {
-    stack = "dotnet"; suite_command = "dotnet test"; test_command = "dotnet test --filter {test}";
+    // dotnet --filter needs FullyQualifiedName expressions ('|'-joined), not paths - same
+    // coarse-but-correct default as Gradle; see INIT.md for sharpening.
+    stack = "dotnet"; suite_command = "dotnet test"; test_command = "dotnet test";
   } else if (has("composer.json")) {
     stack = "php"; suite_command = "vendor/bin/phpunit"; test_command = "vendor/bin/phpunit {test}";
   } else if (has("mix.exs")) {
