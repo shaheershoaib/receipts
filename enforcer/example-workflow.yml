@@ -11,6 +11,9 @@ on:
 jobs:
   receipts:
     runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      pull-requests: write        # only needed for `comment: true` below
     steps:
       - uses: actions/checkout@v4
         with:
@@ -25,3 +28,8 @@ jobs:
       # -------------------------------------------------------------------------
 
       - uses: shaheershoaib/receipts/enforcer@main
+        with:
+          # Post/refresh ONE PR comment with the verification report (what was re-run,
+          # red/green evidence, gate findings). The job step summary is written either
+          # way; drop this (and the permission above) if the summary is enough.
+          comment: true

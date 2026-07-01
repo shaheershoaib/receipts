@@ -38,6 +38,25 @@ suite - it re-runs the proof, red then green, in the project's own test framewor
 `verify.js` is also runnable directly:
 `node verify.js --base <sha> --head <sha> --pr-body-file body.txt`
 
+## How a verdict reads (the report)
+
+Every run writes a **markdown report** to the job step summary - the verdict, the
+red/green evidence, every command re-run with its exit code, per-gate findings, and
+warnings. With `comment: true` (plus `permissions: pull-requests: write` on the job)
+the same report is posted as ONE PR comment, upserted on re-runs rather than stacked:
+
+```yaml
+- uses: shaheershoaib/receipts/enforcer@main
+  with:
+    comment: true
+```
+
+The report also carries the **G3 assist** when `build.sha_source` is
+`github-deployments`: a lookup of whether any deployment reached the head sha
+(advisory - a missing preview deployment means anything observed on a deployed URL is
+still the OLD build). Locally, `receipts explain <receipt.json> --md` renders the
+identical report - one renderer, no drift.
+
 ## The pluggable verify step
 
 The enforcer cannot magically re-verify anything, so the project supplies its plumbing

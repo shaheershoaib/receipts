@@ -3,6 +3,15 @@ description: "Re-prove a fix-claim PR by re-running its receipt: the changed tes
 branding:
   icon: "check-circle"
   color: "green"
+inputs:
+  comment:
+    description: "Post/refresh ONE PR comment with the verification report (needs `permissions: pull-requests: write` on the calling job). The job step summary is always written regardless."
+    required: false
+    default: "false"
+  github-token:
+    description: "Token for the PR comment and the G3 deployments lookup."
+    required: false
+    default: ${{ github.token }}
 runs:
   using: "composite"
   steps:
@@ -27,6 +36,18 @@ runs:
           --head "$HEAD_SHA" \
           --pr-body-file "$RUNNER_TEMP/receipts_pr_body.txt" \
           --receipt-out "$RUNNER_TEMP/receipts_receipt.json"
+    # Human-readable report: always the job step summary; optionally ONE upserted PR
+    # comment (inputs.comment). Runs even on BLOCK - a failing gate that explains itself
+    # gets acted on; a bare red X gets resented. Never affects the verdict (`|| true`).
+    - name: report (step summary + optional PR comment)
+      if: always()
+      shell: bash
+      env:
+        GH_TOKEN: ${{ inputs.github-token }}
+        COMMENT: ${{ inputs.comment }}
+        PR_NUMBER: ${{ github.event.pull_request.number }}
+        HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+      run: node "$GITHUB_ACTION_PATH/report.js" "$RUNNER_TEMP/receipts_receipt.json" || true
     # Upload the replayable receipt (the evidence of what was re-run) even when the gate
     # BLOCKs, so a failing check still leaves an auditable artifact.
     - name: upload receipt

@@ -3,6 +3,17 @@
 ## Unreleased
 
 ### Added
+- **The verdict now explains itself.** Every enforcer run renders a markdown report -
+  verdict, red/green evidence, every re-run command with exit code and duration, per-gate
+  findings (G6/G7/G11/G12), warnings - to the GitHub job step summary; `comment: true` on
+  the action posts the same report as ONE upserted PR comment (needs
+  `permissions: pull-requests: write`). `receipts explain <receipt> --md` renders the
+  identical report locally - one renderer (`enforcer/render.js`), no drift. A failing
+  gate that reads as a bare red X gets resented; one that explains itself gets acted on.
+- **G3 assist in the report** (advisory): when `build.sha_source` is
+  `github-deployments`, the report looks up whether any deployment reached the head sha -
+  "no deployment carries this sha yet" means anything observed on a deployed URL is still
+  the OLD build. Reporting is a side-channel: it can never flip a verdict or fail the job.
 - **Three new gates - the optimizing-agent gates.** G0-G10 defend against an agent that is
   *wrong*; these defend against an agent that is *optimizing* (making the check green
   rather than the code right):
