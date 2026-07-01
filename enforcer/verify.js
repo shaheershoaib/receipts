@@ -165,6 +165,22 @@ function expandTestPlaceholders(cmd, files) {
     .split("{test_classes}").join(classes.join(","));
 }
 
+// Monorepo grouping: each receipt test runs with the test_command of the NEAREST
+// receipts.config.json above it (nested configs are read from the trusted BASE commit,
+// same posture as the root config, and contribute ONLY their verify block - the policy
+// surface (claim / degrade / gates) stays root-only: one gate, many test runners).
+// Returns [{ dir, verify, tests }] with tests RELATIVE to dir (commands run with cwd=dir).
+function groupTestsByPackage(tests, pkgVerify, rootVerify) {
+  const dirs = [...(pkgVerify || new Map()).keys()].sort((a, b) => b.length - a.length); // deepest first
+  const groups = new Map(); // "" = the root group
+  for (const t of tests || []) {
+    const dir = dirs.find((d) => t.startsWith(d + "/")) || "";
+    if (!groups.has(dir)) groups.set(dir, { dir, verify: (dir ? pkgVerify.get(dir) : rootVerify) || {}, tests: [] });
+    groups.get(dir).tests.push(dir ? t.slice(dir.length + 1) : t);
+  }
+  return [...groups.values()].sort((a, b) => a.dir.localeCompare(b.dir));
+}
+
 // What to restore after the base/head checkout dance: the BRANCH when on one, else the
 // sha. Restoring the sha alone leaves a local `receipts verify` run on a detached HEAD -
 // the user's next commit then silently misses their branch (found the hard way: an amend
@@ -384,6 +400,21 @@ function main() {
   });
   RECEIPT.gates = { enabled: gates.enabled || "all", disabled: gates.disabled || [] };
 
+  // Monorepo: discover nested receipts.config.json files at the trusted BASE commit.
+  // Each contributes its verify block for the tests under its directory.
+  const pkgVerify = new Map();
+  for (const f of git(repo, ["ls-tree", "-r", "--name-only", base]).out.split("\n").map((s) => s.trim())) {
+    if (!f.endsWith("/receipts.config.json")) continue;
+    const raw = git(repo, ["show", `${base}:${f}`]);
+    if (!raw.ok) continue;
+    const dir = f.slice(0, -"/receipts.config.json".length);
+    try {
+      const c = JSON.parse(raw.out);
+      if (c && c.verify) pkgVerify.set(dir, c.verify);
+    } catch { warn(`monorepo: ${f} is not valid JSON - its package is treated as config-less`); }
+  }
+  if (pkgVerify.size) RECEIPT.packages = [...pkgVerify.keys()].sort();
+
   // The PR's changed files - computed early so G6 can run on EVERY PR (fix-claim or not).
   const diff = git(repo, ["diff", "--name-only", `${base}..${head}`]);
   if (!diff.ok) emit("BLOCK", `cannot diff ${base}..${head}`, diff.out);
@@ -524,29 +555,38 @@ function main() {
   // point each command actually RUNS (below), so a command that will NOT run - a masked
   // test_command on an inverted or no-receipt path, or a suite_command with G9 off - is never
   // a false block.
-  const testCmd = verify.test_command;
 
   // Inverted receipt: a refactor/chore changes no behavior, so the proof is the full suite
-  // staying green on head - not a red->green on a new test.
+  // staying green on head - not a red->green on a new test. In a monorepo with no root
+  // suite, EVERY package suite is the proof (no behavior change anywhere).
   if (inverted) {
-    const suiteCmd = verify.suite_command;
-    if (!suiteCmd || /REPLACE_ME/.test(suiteCmd))
+    const rootSuiteCmd = verify.suite_command;
+    const invRunners = rootSuiteCmd && !/REPLACE_ME/.test(rootSuiteCmd)
+      ? [{ dir: "", cmd: rootSuiteCmd }]
+      : [...pkgVerify.entries()]
+          .filter(([, v]) => v.suite_command && !/REPLACE_ME/.test(v.suite_command))
+          .map(([d, v]) => ({ dir: d, cmd: v.suite_command }));
+    if (!invRunners.length)
       emit(noReceiptMode === "warn" ? "WARN" : "BLOCK",
         `${workType}: a ${workType} changes no behavior, so its receipt is the FULL suite staying green on head - but verify.suite_command is not set. Set it, or tag the PR honestly.`);
-    if (masksExit(suiteCmd))
-      emit("BLOCK", "verify.suite_command can mask its own exit code - a green cannot be trusted (G9). Use a clean command or a script.");
+    for (const s of invRunners)
+      if (masksExit(s.cmd))
+        emit("BLOCK", `verify.suite_command${s.dir ? ` for package '${s.dir}'` : ""} can mask its own exit code - a green cannot be trusted (G9). Use a clean command or a script.`);
     RECEIPT.gates.work_type_inverted = workType;
     const original = originalRef(repo);
-    let suite;
+    let bad = null;
     try {
       if (!git(repo, ["checkout", "-q", "-f", head]).ok) emit("BLOCK", `cannot checkout head ${head}`);
-      suite = runCmd(repo, suiteCmd, cmdTimeout);
-      record(`${workType}-suite@head`, suiteCmd, suite);
+      for (const s of invRunners) {
+        const r = runCmd(path.join(repo, s.dir), s.cmd, cmdTimeout);
+        record(s.dir ? `${workType}-suite@head [${s.dir}]` : `${workType}-suite@head`, s.cmd, r);
+        if (!r.ok && !bad) bad = r;
+      }
     } finally {
       git(repo, ["checkout", "-q", "-f", original]);
     }
-    if (!suite.ok)
-      emit("BLOCK", `${workType}: the full suite is NOT green on head - a ${workType} must not change behavior`, (suite.out || "").split("\n").slice(-8).join("\n"));
+    if (bad)
+      emit("BLOCK", `${workType}: the full suite is NOT green on head - a ${workType} must not change behavior`, (bad.out || "").split("\n").slice(-8).join("\n"));
     finish(`${workType} verified: the full suite is green on head (no behavior change) - G9`);
   }
 
@@ -587,20 +627,47 @@ function main() {
   if (unsafe.length)
     emit("BLOCK", `refusing to run: changed test path(s) are unsafe (shell metacharacters, or a leading - / : a test runner or git pathspec could misread): ${unsafe.join(", ")}`);
 
-  if (!testCmd || /REPLACE_ME/.test(testCmd))
-    emit("BLOCK", "verify.test_command is not set in receipts.config.json (run `receipts init`)");
-  const cmdFor = (files) => expandTestPlaceholders(testCmd, files);
+  // Group the receipt tests by their nearest config (monorepo: nested configs supply
+  // per-package test runners) and validate every group's runner up front.
+  const groups = groupTestsByPackage(tests, pkgVerify, verify);
+  for (const gp of groups) {
+    const tc = gp.verify.test_command;
+    const where = gp.dir ? ` for package '${gp.dir}'` : "";
+    if (!tc || /REPLACE_ME/.test(tc))
+      emit("BLOCK", `verify.test_command is not set${where} in receipts.config.json (run \`receipts init\`${gp.dir ? " there" : ""})`);
+    if (masksExit(tc))
+      emit("BLOCK", `verify.test_command${where} can mask its own exit code (; , || , pipe, background &, newline, or command substitution), so a green from it cannot be trusted (G9). Use a single command whose own exit is the test result, or wrap it in a script.`);
+  }
+  // One labeled command per group; the aggregate is ok only when EVERY group is.
+  const runGroups = (gs, label) => {
+    const agg = { ok: true, out: "", timedOut: false };
+    for (const gp of gs) {
+      const cmd = expandTestPlaceholders(gp.verify.test_command, gp.tests);
+      const r = runCmd(path.join(repo, gp.dir), cmd, cmdTimeout);
+      record(gp.dir ? `${label} [${gp.dir}]` : label, cmd, r);
+      agg.ok = agg.ok && r.ok;
+      agg.out += r.out || "";
+      agg.timedOut = agg.timedOut || !!r.timedOut;
+    }
+    return agg;
+  };
 
+  // G9 suite runners: the root suite when configured; else the AFFECTED packages' suites.
   const suiteCmd = verify.suite_command;
-  const haveSuite = suiteCmd && !/REPLACE_ME/.test(suiteCmd);
-  // G13 claim-scope congruence is opt-in: only with a coverage command configured.
+  const suiteRunners = suiteCmd && !/REPLACE_ME/.test(suiteCmd)
+    ? [{ dir: "", cmd: suiteCmd }]
+    : groups
+        .filter((gp) => gp.dir && gp.verify.suite_command && !/REPLACE_ME/.test(gp.verify.suite_command))
+        .map((gp) => ({ dir: gp.dir, cmd: gp.verify.suite_command }));
+  const haveSuite = suiteRunners.length > 0;
+  // G13 claim-scope congruence is opt-in: only with a coverage command configured (root only).
   const g13cfg = (gates && gates.G13) || {};
   const haveG13 = gateOn(gates, "G13") && g13cfg.coverage_command && !/REPLACE_ME/.test(g13cfg.coverage_command);
   // Mask-check only the commands that will now run: the receipt always, the suite if G9 is on.
-  if (masksExit(testCmd))
-    emit("BLOCK", "verify.test_command can mask its own exit code (; , || , pipe, background &, newline, or command substitution), so a green from it cannot be trusted (G9). Use a single command whose own exit is the test result, or wrap it in a script.");
-  if (haveSuite && gateOn(gates, "G9") && masksExit(suiteCmd))
-    emit("BLOCK", "verify.suite_command can mask its own exit code - a green cannot be trusted (G9). Use a clean command or a script.");
+  if (gateOn(gates, "G9"))
+    for (const s of suiteRunners)
+      if (masksExit(s.cmd))
+        emit("BLOCK", `verify.suite_command${s.dir ? ` for package '${s.dir}'` : ""} can mask its own exit code - a green cannot be trusted (G9). Use a clean command or a script.`);
   if (haveG13 && masksExit(g13cfg.coverage_command))
     emit("BLOCK", "gates.G13.coverage_command can mask its own exit code - its coverage output cannot be trusted (G9). Use a clean command or a script.");
 
@@ -609,6 +676,15 @@ function main() {
   const depTests = [...new Set(g7res.newDependents.flatMap((d) => d.tests))]
     .filter((f) => !(UNSAFE_PATH.test(f) || /^[-:]/.test(f)));
   const depNoTest = g7res.newDependents.filter((d) => !d.tests.length);
+  // Dependent tests group like receipt tests; a group whose package has no usable
+  // runner is skipped LOUDLY, never silently.
+  const depGroups = groupTestsByPackage(depTests, pkgVerify, verify)
+    .filter((gp) => {
+      const tc = gp.verify.test_command;
+      if (tc && !/REPLACE_ME/.test(tc) && !masksExit(tc)) return true;
+      warn(`G7: dependent test(s) in ${gp.dir ? `package '${gp.dir}'` : "the root"} skipped - no usable verify.test_command there (${gp.tests.join(", ")}).`);
+      return false;
+    });
 
   // Determinism (verify.receipt_runs, default 1): a FLAKY receipt can manufacture a fake
   // red (a green test that flaked red on base) or pass a broken fix (a red that flaked
@@ -623,25 +699,27 @@ function main() {
     if (!git(repo, ["checkout", "-q", "-f", base]).ok) emit("BLOCK", `cannot checkout base ${base}`);
     git(repo, ["checkout", "-q", head, "--", ...tests]);
     for (let i = 0; i < receiptRuns; i++) {
-      const r = runCmd(repo, cmdFor(tests), cmdTimeout); // expect FAIL = reproduces the bug
-      record(runLabel("receipt-red@base", i), cmdFor(tests), r);
-      reds.push(r);
+      reds.push(runGroups(groups, runLabel("receipt-red@base", i))); // expect FAIL = reproduces the bug
     }
     RECEIPT.red = reds.every((r) => !r.ok); // red = reproduced on base (FAILED there, every run)
     // GREEN: full head.
     git(repo, ["checkout", "-q", "-f", head]);
     for (let i = 0; i < receiptRuns; i++) {
-      const g = runCmd(repo, cmdFor(tests), cmdTimeout); // expect PASS = bug gone
-      record(runLabel("receipt-green@head", i), cmdFor(tests), g);
-      greens.push(g);
+      greens.push(runGroups(groups, runLabel("receipt-green@head", i))); // expect PASS = bug gone
     }
     RECEIPT.green = greens.every((g) => g.ok); // green = gone on head (PASSED there, every run)
-    if (RECEIPT.green && haveSuite && gateOn(gates, "G9")) { suite = runCmd(repo, suiteCmd, cmdTimeout); record("suite@head", suiteCmd, suite); }
+    if (RECEIPT.green && haveSuite && gateOn(gates, "G9")) {
+      suite = { ok: true, out: "" };
+      for (const s of suiteRunners) {
+        const r = runCmd(path.join(repo, s.dir), s.cmd, cmdTimeout);
+        record(s.dir ? `suite@head [${s.dir}]` : "suite@head", s.cmd, r);
+        if (!r.ok && suite.ok) { suite.ok = false; suite.out = r.out || ""; }
+      }
+    }
     // G7: re-run the new dependents' tests on head - unless a green full suite already covered
     // them (it runs every test, so re-running the subset would be waste).
-    if (RECEIPT.green && gateOn(gates, "G7") && depTests.length && !(suite && suite.ok)) {
-      g7run = runCmd(repo, cmdFor(depTests), cmdTimeout);
-      record("g7-dependents@head", cmdFor(depTests), g7run);
+    if (RECEIPT.green && gateOn(gates, "G7") && depGroups.length && !(suite && suite.ok)) {
+      g7run = runGroups(depGroups, "g7-dependents@head");
     }
     // G13: run the coverage command on head (it needs the head tree); the lcov it wrote
     // is read AFTER the checkout dance (an untracked file survives the restore).
@@ -746,4 +824,4 @@ if (require.main === module) {
   catch (e) { console.error("receipts enforcer error: " + (e && e.message ? e.message : e)); process.exit(1); }
 }
 
-module.exports = { masksExit, gateOn, globToRe, isContractFile, typeSet, walkBreaks, contractBreaks, expandTestPlaceholders, resolveTimeout, unknownConfigKeys };
+module.exports = { masksExit, gateOn, globToRe, isContractFile, typeSet, walkBreaks, contractBreaks, expandTestPlaceholders, resolveTimeout, unknownConfigKeys, groupTestsByPackage };

@@ -246,6 +246,11 @@ async function init(opts) {
   // Agent-home = skills + session cwd with no tests and no deploy (e.g. a skills
   // project separate from the code repos): write an agent-only config (no build/verify).
   const agentHome = !d.test_command && d.platform === "none";
+  // Monorepo hint: workspaces mean per-package runners - init each package; the
+  // enforcer discovers nested receipts.config.json files automatically.
+  const ws = readJson(path.join(dir, "package.json"));
+  if (exists(path.join(dir, "pnpm-workspace.yaml")) || (ws && ws.workspaces))
+    console.error("  note: workspaces detected - run `receipts init` in each package too; the\n        enforcer picks up nested receipts.config.json files (root keeps the policy).\n");
   // Diagnostics go to stderr so --print keeps stdout pure JSON.
   console.error(`receipts init - scanning ${dir}\n`);
   console.error("  detected:");

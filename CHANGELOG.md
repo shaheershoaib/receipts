@@ -3,6 +3,21 @@
 ## Unreleased
 
 ### Added
+- **G7 speaks Python.** The dependent-selection scan now covers Python alongside JS/TS:
+  repo-relative absolute imports (`a.b.c` -> `a/b/c.py` / `__init__.py`), relative imports
+  (`from ..shared import x`), from-import submodule forms, alias/comma lists - with
+  new-file AND new-edge detection and co-located test mapping (`test_mod.py` /
+  `mod_test.py` / `tests/test_mod.py`). src/-layouts and namespace packages honestly
+  degrade to `gates.G7.graph`. Venv/site-packages are never consumers.
+- **Monorepo support: per-package runners, one policy.** Nested `receipts.config.json`
+  files (read from the trusted BASE commit, same posture as the root) contribute their
+  `verify` block for the tests under them: the receipt's red/green runs per group with the
+  nearest config's `test_command`, cwd'd to the package, evidence labeled per package
+  (`receipt-red@base [packages/a]`). G9 runs the root suite or the AFFECTED packages'
+  suites; a refactor with no root suite proves itself on every package suite. `claim` /
+  `degrade` / `gates` stay root-only. A package missing a usable `test_command` blocks by
+  name; G7 dependent tests in a runner-less package are skipped loudly. `receipts init`
+  hints when it detects workspaces.
 - **G13 claim-scope congruence is now enforced** (opt-in). With
   `gates.G13.coverage_command` configured, the enforcer runs the suite under coverage on
   head, parses the lcov (`gates.G13.lcov_path`, default `coverage/lcov.info`), intersects
