@@ -74,14 +74,23 @@ ladder* below.
 
 **Mandate.** Read the actual rendered value on the deployed build: `input.value`, the
 selected option, the `checked` state, the number on screen. A grey placeholder
-showing the expected text is a FAIL. "An input exists" is not a pass.
+showing the expected text is a FAIL. "An input exists" is not a pass. When the value
+crosses layers to reach that output (form -> request payload -> serializer ->
+proxy/gateway -> handler -> store), assert it ARRIVED at the far end - the persisted or
+rendered result - never that the caller sent it or that a middle layer received it.
 
 **Scar.** Uncontrolled form defaults (e.g. React Hook Form `defaultValues`) paint
 correctly in dev and jsdom and come up empty in production. "The test passes" and
 "the screenshot looks right" are both insufficient - only the by-value read on the
 real build catches it.
 
-**Receipt.** A by-value read of the rendered state on the deployed build.
+**Scar (multi-hop).** A field newly added to an existing path is a silent-drop point at
+EVERY hop it crosses. A picked charge date was dropped twice - the client mutation sent
+only the record id, and the proxy route forwarded no body - so it reverted to a default
+while every layer painted correctly; only the by-value read at the far end caught it.
+
+**Receipt.** A by-value read of the rendered or persisted state on the deployed build,
+taken at the far end of the path (not the layer you changed).
 
 *Kind: verify (re-runnable at the PR).*
 

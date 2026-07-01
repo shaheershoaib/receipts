@@ -1,5 +1,15 @@
 # Changelog
 
+## Unreleased
+
+### Changed
+- **G1 sharpened for multi-hop paths.** A value that crosses layers to reach its output
+  (form -> request payload -> serializer -> proxy/gateway -> handler -> store) can be
+  silently dropped at any hop and fall back to a default. G1 now says to assert the value
+  ARRIVED at the far end (persisted/rendered), never that the caller sent it or that a
+  middle layer received it; adds a multi-hop scar (a picked field dropped by BOTH the
+  client mutation and the proxy route). Doc-only; no behavior change.
+
 ## 0.2.0
 
 The verification engine learns to verify itself, ship a replayable proof, and run locally.
