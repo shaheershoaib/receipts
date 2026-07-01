@@ -6,16 +6,7 @@
         "hooks": [
           {
             "type": "command",
-            "command": "python3 \"${CLAUDE_PLUGIN_ROOT}/hooks/stop-verification-gate.py\""
-          }
-        ]
-      },
-      {
-        "matcher": "",
-        "hooks": [
-          {
-            "type": "command",
-            "command": "python3 \"${CLAUDE_PLUGIN_ROOT}/hooks/stop-trajectory-reminder.py\""
+            "command": "node \"${CLAUDE_PLUGIN_ROOT}/hooks/stop-gates.mjs\""
           }
         ]
       }

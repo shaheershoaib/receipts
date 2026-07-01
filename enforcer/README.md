@@ -80,6 +80,6 @@ in `receipts.config.json` (`receipts init` detects most of it): `verify.test_com
 
 - [x] `verify.js` red -> green engine + composite GitHub Action.
 - [ ] `verify.live_drive`: drive the deployed app for symptoms a test cannot express
-      (the Stop-hook precursor `../plugin/hooks/stop-verification-gate.py` has the
+      (the Stop-hook precursor `../plugin/hooks/stop-gates.mjs` has the
       deploy-binding + observation logic to draw from).
 - [ ] A minimal `examples/` repo demoing a caught wrong-fix end to end (the README GIF).

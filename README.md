@@ -139,8 +139,9 @@ edits, no `claude mcp add`:
   ("fixing a bug, addressing a tester/issue report, or about to claim a change is
   done/fixed/working"). The skill *body* is the procedure: reproduce-first, the
   red->green receipt, the gate list, the honesty ladder, the trajectory touchpoints.
-- the **two Stop hooks** - they fire on every stop-cycle, regardless of the model: one
-  blocks a "fixed" close-out that lacks deployed-build evidence, the other nudges a
+- the **Stop-hook backstop** (`stop-gates.mjs`, Node - no python needed) - it fires on
+  every stop-cycle, regardless of the model, and carries both checks in one transcript
+  pass: it blocks a "fixed" close-out that lacks deployed-build evidence, and nudges a
   trajectory-kb entry at a loop exit.
 - the **`trajectory-kb` MCP** - the verification memory the skill queries and appends.
 
