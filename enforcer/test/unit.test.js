@@ -168,3 +168,21 @@ test("contractBreaks: structural breaking-change detection on JSON", () => {
              { type: "object", properties: {} }),
     /removed .*properties\.description/);
 });
+
+test("every documented receipt-cmd example parses clean and passes the exit-masking guard", () => {
+  // The docs are part of the contract: a user copying a documented example must never
+  // be BLOCKed by masksExit or the grammar. (Caught in review: a `test "$(curl ...)"`
+  // example that the command-substitution guard rejects.)
+  const fs = require("fs");
+  const path = require("path");
+  const docs = ["spec/RECEIPT.md", "spec/MEDIA.md", "enforcer/README.md"]
+    .map((p) => fs.readFileSync(path.join(__dirname, "..", "..", p), "utf8")).join("\n");
+  const snippets = [...docs.matchAll(/`receipt-cmd: ([^`]+)`/g)].map((m) => m[1]);
+  assert.ok(snippets.length >= 4, "expected the documented examples to be found");
+  for (const s of snippets) {
+    const [parsed] = parseCmdReceipts(`receipt-cmd: ${s}`);
+    assert.ok(parsed && parsed.cmd, `parses to a command: ${s}`);
+    assert.ok(!masksExit(parsed.cmd), `documented example must not mask its exit: ${s}`);
+    if (parsed.expect !== null) new RegExp(parsed.expect, "m"); // must compile
+  }
+});

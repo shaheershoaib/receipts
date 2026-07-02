@@ -109,7 +109,7 @@ key: the grammar lives entirely in the PR body.
 
 | Medium | `receipt-cmd:` |
 |---|---|
-| API / service | `receipt-cmd: test "$(curl -fsS -o /dev/null -w '%{http_code}' http://localhost:3000/orders/42)" = 200` |
+| API / service | `receipt-cmd: curl -fsS http://localhost:3000/orders/42 expect:/"status":"paid"/` (`-f` fails on non-2xx; the regex asserts the body) |
 | SQL / database | `receipt-cmd: sqlite3 app.db "select count(*) from users where email is null" expect:/^0$/` |
 | CLI stdout | `receipt-cmd: mytool --version expect:/^mytool 2\./` |
 | Infra plan-diff | `receipt-cmd: terraform plan -detailed-exitcode` (exit 0 = no drift; the fix converges it) |
