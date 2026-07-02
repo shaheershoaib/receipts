@@ -49,6 +49,9 @@ Usage:
                                  [--expect '/<regex>/']   assert stdout/body (else exit-0/2xx only)
                                  [--sha-cmd '<command>' | --sha <id>]   bind to the build (G3)
                                  [--out <file>]   also write the full receipt JSON there
+  receipts report <paths...>   Aggregate receipt artifacts (files or dirs of *.json) into
+                               team-level signals: verdicts, real-receipt rate, honesty-
+                               ladder usage, weak/flaky rejections, gate findings [--json]
   receipts kb <sub>            Read the trajectory memory (the append-only JSONL the trajectory-kb
                                MCP writes). Analytics over what was tried and what happened:
                                  recur   [--repo <name>] [--json]   recurrence report: group by
@@ -814,6 +817,33 @@ function lock(rest) {
   process.stdout.write(`receipt-lock: ${hash}\n`);
 }
 
+// `receipts report <paths...>` - aggregate receipt artifacts into team-level signals.
+// Accepts files and/or directories (each scanned one level for *.json); skips anything
+// that does not parse as a receipt rather than failing the whole report.
+function report(rest) {
+  const { aggregateReceipts, renderReportText } = require("../enforcer/render.js");
+  const wantJson = rest.includes("--json");
+  const paths = rest.filter((a) => !a.startsWith("-"));
+  if (!paths.length) { console.error("usage: receipts report <receipt.json | dir> [more...] [--json]"); process.exit(1); }
+  const files = [];
+  for (const p of paths) {
+    try {
+      if (fs.statSync(p).isDirectory()) {
+        for (const f of fs.readdirSync(p)) if (f.endsWith(".json")) files.push(path.join(p, f));
+      } else files.push(p);
+    } catch { console.error(`receipts report: cannot read ${p} - skipped`); }
+  }
+  const records = [];
+  for (const f of files) {
+    const rec = readJson(f);
+    if (rec && typeof rec.verdict === "string") records.push(rec);
+  }
+  if (!records.length) { console.error("receipts report: no receipt artifacts found (looked at " + files.length + " file(s))"); process.exit(1); }
+  const agg = aggregateReceipts(records);
+  if (wantJson) process.stdout.write(JSON.stringify(agg, null, 2) + "\n");
+  else process.stdout.write(renderReportText(agg));
+}
+
 function parseArgs(argv) {
   const o = { _: [] };
   for (let i = 0; i < argv.length; i++) {
@@ -842,6 +872,7 @@ async function main() {
   if (cmd === "replay") return replay(rest);
   if (cmd === "explain") return explain(rest);
   if (cmd === "lock") return lock(rest);
+  if (cmd === "report") return report(rest);
   if (cmd === "observe") return observe(rest);
   if (cmd === "kb") return kb(o, rest);
   console.error(`Unknown command: ${cmd}\n`);
