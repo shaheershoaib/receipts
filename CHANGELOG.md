@@ -3,6 +3,24 @@
 ## Unreleased
 
 ### Added
+- **Command receipts - a receipt is any re-runnable command with an expected outcome.**
+  Alongside `receipt: <path>`, a PR body may carry `receipt-cmd: <shell command>` lines: the
+  command IS the receipt, so software with no test runner (an API, a data pipeline, a CLI,
+  infra) can carry one at all. The command must FAIL its expectation on base (reproduce the
+  symptom) and MEET it on head (symptom gone) - the same red->green law. Expectation defaults
+  to exit code 0; an optional trailing ` expect:/<regex>/` also requires the output to match
+  (JS regex, multiline, against stdout+stderr) - e.g.
+  `receipt-cmd: sqlite3 app.db "select count(*) from users where email is null" expect:/^0$/`.
+  Multiple lines are ANDed (like multiple `receipt:` pins) and may be mixed with them. Runs
+  through the SAME machinery as `test_command` (cwd = repo root at the ref, `command_timeout_ms`,
+  `receipt_runs` determinism, the G9 exit-masking guard, recorded into the receipt's
+  `commands[]` and a new `command_receipts` field); a command already green on base is the same
+  weak-receipt block; `receipts replay` reconstructs the `receipt-cmd:` lines. No new config key
+  - the grammar lives in the PR body. `receipts init` points runner-less stacks at it instead of
+  inventing a fake `test_command`. Threat model (README): a PR body supplying a command adds no
+  new exposure over the PR's own test code the enforcer already runs, with a read-only token and
+  the same exec path as test commands. Full grammar + a worked example per medium in
+  `spec/RECEIPT.md`; `spec/MEDIA.md` maps the executable receipt form per medium.
 - **G7 speaks Python.** The dependent-selection scan now covers Python alongside JS/TS:
   repo-relative absolute imports (`a.b.c` -> `a/b/c.py` / `__init__.py`), relative imports
   (`from ..shared import x`), from-import submodule forms, alias/comma lists - with

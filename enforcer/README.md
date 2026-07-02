@@ -28,6 +28,40 @@ When a PR claims to fix an issue (its body matches `claim.issue_link`, e.g.
 The core move: the enforcer does not trust a pasted screenshot or a green unrelated
 suite - it re-runs the proof, red then green, in the project's own test framework.
 
+### Command receipts (no test runner required)
+
+The receipt need not be a test *file*. For software with no test runner - an API, a data
+pipeline, a CLI, infra - the PR body carries a **command receipt** instead:
+
+```
+receipt-cmd: sqlite3 app.db "select count(*) from users where email is null" expect:/^0$/
+```
+
+The command itself is the acceptance test: it must FAIL its expectation on the base commit
+(the symptom reproduces) and MEET it on head (the symptom is gone) - the same red->green law.
+The expectation defaults to exit code 0; an optional trailing ` expect:/<regex>/` also requires
+the command's output to match (a JS regex, matched multiline against stdout+stderr). Multiple
+`receipt-cmd:` lines are all required (ANDed), and a PR may mix `receipt:` pins with
+`receipt-cmd:` lines. The command runs through the same machinery as `test_command` (cwd = repo
+root at the ref, `command_timeout_ms`, `receipt_runs` determinism, the G9 exit-masking guard,
+recorded into the receipt's `commands[]`); a command already green on base is the same
+weak-receipt block. No config key is needed - the grammar lives in the PR body. Full grammar
+and a worked example per medium: `../spec/RECEIPT.md`.
+
+**Threat model: `receipt-cmd`.** A PR body supplying a shell command means CI executes
+attacker-authored text. This adds no new exposure: the enforcer *already* checks out and
+executes the PR's own code (its test files run on both base and head), so a PR can already run
+arbitrary code in the job. The action runs with a **read-only** token (`contents: read`; the
+optional PR comment needs `pull-requests: write` and nothing more) and carries no secrets
+beyond that token, and the command string is passed to the **same exec path** as a
+`test_command` (`execSync` with `cwd` = the repo, captured) - it is never interpolated into the
+workflow-level shell or an Action expression, so it cannot escape into the runner's environment
+or the job definition. As with test commands, the enforcer rejects exit-masking (`;`, `||`, a
+pipe, `&`, command substitution) so a green cannot be faked by a masked exit. This is the same
+posture the spec states for tests: the Gates raise the floor on honesty and are not a security
+boundary against a hostile author - human review of the diff *and the PR body* plus branch
+protection are what bound that (see `../spec/GATES.md`, "What the Gates do NOT defend against").
+
 ## Usage
 
 1. `npx receipts init` at your repo root (writes `receipts.config.json`).
@@ -66,9 +100,10 @@ in `receipts.config.json` (`receipts init` detects most of it): `verify.test_com
 
 ## v1 limitations (honest)
 
-- **Test-able symptoms only.** The red -> green model covers anything expressible as a
-  test. UI/visual symptoms that need a live deployed app are the optional
-  `verify.live_drive` path - not in v1.
+- **Re-runnable symptoms only.** The red -> green model covers anything expressible as a
+  test *or a re-runnable command* (a `receipt-cmd:`: a query, a curl, a plan-diff - so a
+  runner-less API / pipeline / CLI / infra repo is covered too). UI/visual symptoms that need
+  a live deployed app are the optional `verify.live_drive` path - not in v1.
 - **Deps at base.** Running the test on the base commit reuses head's installed deps
   (node_modules etc. are gitignored, not reverted on checkout). Fine for the common
   case; a base/head dep mismatch is an edge case.

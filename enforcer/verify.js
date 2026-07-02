@@ -165,6 +165,49 @@ function expandTestPlaceholders(cmd, files) {
     .split("{test_classes}").join(classes.join(","));
 }
 
+// Command receipts (Phase 1 - "a receipt is any re-runnable command with an expected
+// outcome"). Alongside `receipt: <path>`, a PR body may carry `receipt-cmd: <shell command>`
+// lines: the command itself is the acceptance test, for software with no test runner (an API
+// curl, a SQL count, a CLI stdout check, an infra plan-diff). Each line is one command, ANDed
+// like multiple path pins. The command must FAIL its expectation on base (reproduce the
+// symptom) and MEET it on head (symptom gone) - the SAME red->green law as a file receipt.
+//
+// Grammar (one command per line, to end-of-line):
+//   receipt-cmd: <command>
+//   receipt-cmd: <command> expect:/<regex>/
+// The optional ` expect:/<regex>/` suffix - a space, the literal `expect:/`, a JS regex, a
+// closing `/`, at END OF LINE - adds a stdout assertion; everything before it is the command
+// verbatim. With no suffix the expectation is exit code 0. A `/` inside the command (a path)
+// is fine: only a trailing ` expect:/.../ ` is treated as the assertion, so the split is
+// unambiguous on a single line.
+const CMD_RECEIPT_RE = /^[ \t]*receipt-cmd[ \t]*:[ \t]*(.*?)[ \t]*$/gim;
+// Trailing ` expect:/<regex>/` (regex body is anything up to the FINAL slash on the line).
+const EXPECT_SUFFIX_RE = /\s+expect:\/(.*)\/\s*$/;
+// Parse the `receipt-cmd:` lines from a PR body into { raw, cmd, expect } records. `expect`
+// is the raw regex SOURCE string (null = exit-0-only); compilation/validation happens in the
+// caller so an invalid regex BLOCKs with a clear message rather than throwing here.
+function parseCmdReceipts(prBody) {
+  const out = [];
+  let m;
+  CMD_RECEIPT_RE.lastIndex = 0;
+  while ((m = CMD_RECEIPT_RE.exec(prBody || ""))) {
+    const raw = m[1];
+    const em = raw.match(EXPECT_SUFFIX_RE);
+    if (em) out.push({ raw, cmd: raw.slice(0, em.index).trim(), expect: em[1] });
+    else out.push({ raw, cmd: raw.trim(), expect: null });
+  }
+  return out;
+}
+// Does a command run MEET its receipt's expectation? Exit 0 AND (if an expect regex is given)
+// the combined output matches it. `re` is a compiled RegExp or null. The regex is matched
+// (multiline) against stdout+stderr as `runCmd` captures it, so `expect:/^0$/` matches a
+// `0\n`-terminated line naturally.
+function meetsExpectation(res, re) {
+  if (!res.ok) return false;         // non-zero exit never meets (exit-0 is the floor)
+  if (!re) return true;              // exit-0-only expectation, met
+  return re.test(String(res.out || ""));
+}
+
 // Monorepo grouping: each receipt test runs with the test_command of the NEAREST
 // receipts.config.json above it (nested configs are read from the trusted BASE commit,
 // same posture as the root config, and contribute ONLY their verify block - the policy
@@ -616,9 +659,30 @@ function main() {
   const tests = pathish.length ? pathish : changedTests;
   RECEIPT.tests = tests;
   RECEIPT.pinned = pathish.length > 0;
-  if (!tests.length) {
-    if (noReceiptMode === "warn") emit("WARN", "no receipt (no test added/changed) - allowed by config, but unverified");
-    emit("BLOCK", "no receipt: this change adds no acceptance test. Add a test that FAILS before and PASSES after the change, or tag the PR 'unverified-reasoned' / 'speculative'. (A behavior-preserving change: tag it `work-type: refactor`.)");
+
+  // Command receipts: `receipt-cmd: <shell command> [expect:/<regex>/]` lines in the body.
+  // The command IS the receipt (no test file) - it runs against the base tree (must NOT meet
+  // its expectation = reproduces the symptom) and the head tree (must meet it = symptom gone).
+  // Each is validated up front: an empty command, an invalid expect regex, or an exit-masking
+  // command (a green from a masked exit cannot be trusted - G9) BLOCKs by name.
+  const cmdReceipts = parseCmdReceipts(prBody).map((c) => {
+    if (!c.cmd)
+      emit("BLOCK", "receipt-cmd: line has no command after the colon - `receipt-cmd:` must name a re-runnable command whose expectation flips fail->meet.");
+    if (masksExit(c.cmd))
+      emit("BLOCK", `receipt-cmd '${c.cmd}' can mask its own exit code (; , || , pipe, background &, newline, or command substitution), so meeting exit 0 cannot be trusted (G9). Use a single command whose own exit is the result, or wrap it in a script.`);
+    let re = null;
+    if (c.expect !== null) {
+      try { re = new RegExp(c.expect, "m"); }
+      catch (e) { emit("BLOCK", `receipt-cmd expect:/${c.expect}/ is not a valid regex (${e && e.message}) - fix the pattern or drop the expect: suffix (exit code 0 is the default expectation).`); }
+    }
+    return { cmd: c.cmd, expect: c.expect, re };
+  });
+  if (cmdReceipts.length)
+    RECEIPT.command_receipts = cmdReceipts.map((c) => ({ command: c.cmd, expect: c.expect }));
+
+  if (!tests.length && !cmdReceipts.length) {
+    if (noReceiptMode === "warn") emit("WARN", "no receipt (no test added/changed, no receipt-cmd) - allowed by config, but unverified");
+    emit("BLOCK", "no receipt: this change adds no acceptance test. Add a test (or a `receipt-cmd: <command>` line) that FAILS before and PASSES after the change, or tag the PR 'unverified-reasoned' / 'speculative'. (A behavior-preserving change: tag it `work-type: refactor`.)");
   }
   // Path safety: these get interpolated into the shell test command (shell metacharacters)
   // and passed as test-runner args / git pathspecs (a leading "-" reads as a flag, a leading
@@ -650,6 +714,34 @@ function main() {
       agg.timedOut = agg.timedOut || !!r.timedOut;
     }
     return agg;
+  };
+  // Command receipts run at repo root through the SAME exec path as tests (runCmd, cwd=repo at
+  // the checked-out ref, same timeout). "ok" here means MET the expectation (exit 0 AND, if an
+  // expect regex is set, the output matches) - so a command receipt folds into the SAME red/
+  // green aggregate as a test group: not-met on base = reproduced, met on head = gone. Each run
+  // is recorded like any other command (label carries the expectation for the evidence trail).
+  const runCmdReceipts = (label) => {
+    const agg = { ok: true, out: "", timedOut: false };
+    for (const c of cmdReceipts) {
+      const r = runCmd(repo, c.cmd, cmdTimeout);
+      const met = meetsExpectation(r, c.re);
+      // `ok` in the receipt artifact = process exit 0; `met` = the receipt's expectation. Record
+      // the raw exit via `r`, and note the expectation verdict in the label so evidence is legible.
+      record(`${label} [cmd${c.expect !== null ? ` expect:/${c.expect}/` : ""}]`, c.cmd, r);
+      agg.ok = agg.ok && met;
+      agg.out += r.out || "";
+      agg.timedOut = agg.timedOut || !!r.timedOut;
+    }
+    return agg;
+  };
+  // One combined red/green step: the test groups AND the command receipts, ANDed. Either may be
+  // empty (a repo can carry only file receipts, only command receipts, or both). This is what
+  // the N-run determinism loop and every downstream weak/flaky/green check see.
+  const runReceipt = (label) => {
+    const a = runGroups(groups, label);
+    if (!cmdReceipts.length) return a;
+    const b = runCmdReceipts(label);
+    return { ok: a.ok && b.ok, out: a.out + b.out, timedOut: a.timedOut || b.timedOut };
   };
 
   // G9 suite runners: the root suite when configured; else the AFFECTED packages' suites.
@@ -695,17 +787,18 @@ function main() {
   const reds = [], greens = [];
   let suite, g7run, g13run;
   try {
-    // RED: base source, with head's receipt test(s) overlaid on top.
+    // RED: base source, with head's receipt test(s) overlaid on top. A command receipt has no
+    // file to overlay - it runs against the base tree as-is (must NOT meet its expectation).
     if (!git(repo, ["checkout", "-q", "-f", base]).ok) emit("BLOCK", `cannot checkout base ${base}`);
-    git(repo, ["checkout", "-q", head, "--", ...tests]);
+    if (tests.length) git(repo, ["checkout", "-q", head, "--", ...tests]);
     for (let i = 0; i < receiptRuns; i++) {
-      reds.push(runGroups(groups, runLabel("receipt-red@base", i))); // expect FAIL = reproduces the bug
+      reds.push(runReceipt(runLabel("receipt-red@base", i))); // expect FAIL = reproduces the bug
     }
     RECEIPT.red = reds.every((r) => !r.ok); // red = reproduced on base (FAILED there, every run)
     // GREEN: full head.
     git(repo, ["checkout", "-q", "-f", head]);
     for (let i = 0; i < receiptRuns; i++) {
-      greens.push(runGroups(groups, runLabel("receipt-green@head", i))); // expect PASS = bug gone
+      greens.push(runReceipt(runLabel("receipt-green@head", i))); // expect PASS = bug gone
     }
     RECEIPT.green = greens.every((g) => g.ok); // green = gone on head (PASSED there, every run)
     if (RECEIPT.green && haveSuite && gateOn(gates, "G9")) {
@@ -758,18 +851,24 @@ function main() {
     }
   }
 
+  // "receipt" reads naturally for a file receipt (the test) and a command receipt (the command
+  // meeting its expectation); a command-only PR gets the command-flavored noun.
+  const receiptNoun = (!tests.length && cmdReceipts.length) ? "receipt-cmd" : "the test";
   const redPasses = reds.filter((r) => r.ok).length;
   if (redPasses === reds.length)
-    // A test that passes on base did not reproduce the symptom - for a fix-claim that is an
-    // unproven receipt, not a clean pass. (A behavior-preserving change uses work-type.)
+    // A receipt that already holds on base did not reproduce the symptom - for a fix-claim that
+    // is an unproven receipt, not a clean pass. (A behavior-preserving change uses work-type.)
     emit(noReceiptMode === "warn" ? "WARN" : "BLOCK",
-      "weak receipt: the test PASSES on the base commit, so it does not prove it reproduced the reported symptom (G0/G1). Make the test assert the actual symptom, tag the PR honestly, or - if no behavior changes - mark it `work-type: refactor`.");
+      `weak receipt: ${receiptNoun} already ${cmdReceipts.length && !tests.length ? "MEETS its expectation" : "PASSES"} on the base commit, so it does not prove it reproduced the reported symptom (G0/G1). Make it assert the actual symptom, tag the PR honestly, or - if no behavior changes - mark it \`work-type: refactor\`.`);
   if (redPasses > 0)
     // Mixed red = nondeterministic. Never "allowed by config" - a flake proves nothing.
     emit("BLOCK",
-      `flaky receipt: the test passed on the base commit in ${redPasses}/${reds.length} run(s) and failed in the rest - a nondeterministic red cannot prove it reproduced the symptom (G0/G9). Deflake it (pin time / network / ordering), then re-run.`);
+      `flaky receipt: ${receiptNoun} ${cmdReceipts.length && !tests.length ? "met its expectation" : "passed"} on the base commit in ${redPasses}/${reds.length} run(s) and not in the rest - a nondeterministic red cannot prove it reproduced the symptom (G0/G9). Deflake it (pin time / network / ordering), then re-run.`);
+  // The load-error heuristic is about a TEST RUNNER's collection/import failure; a command
+  // receipt has no "collection" phase, so scope it to PRs that carry file tests (a curl whose
+  // error body happens to say "not found" must not read as a weak test-collection red).
   const redOut = (reds.find((r) => !r.ok) || reds[0]).out || "";
-  if (LOAD_ERROR.test(redOut)) {
+  if (tests.length && LOAD_ERROR.test(redOut)) {
     // The base run FAILED, but as a load/collection error (import / syntax / no-tests-found),
     // not an assertion. That red may not prove the symptom: the test could be red on base
     // merely because it imports code that only exists on head (common and LEGITIMATE for a
@@ -788,11 +887,15 @@ function main() {
   }
   const greenFails = greens.filter((g) => !g.ok);
   if (greenFails.length === greens.length)
-    emit("BLOCK", "the fix does not pass its own receipt test on head", (greenFails[0].out || "").split("\n").slice(-8).join("\n"));
+    emit("BLOCK",
+      cmdReceipts.length && !tests.length
+        ? "the fix does not MEET its own receipt-cmd expectation on head (exit 0" + (cmdReceipts.some((c) => c.expect !== null) ? " and the expect: regex" : "") + ")"
+        : "the fix does not pass its own receipt test on head",
+      (greenFails[0].out || "").split("\n").slice(-8).join("\n"));
   if (greenFails.length > 0)
     // Mixed green = nondeterministic: it "passed" only sometimes. Not a fix you can trust.
     emit("BLOCK",
-      `flaky green: the receipt passed on head in only ${greens.length - greenFails.length}/${greens.length} run(s) - a nondeterministic green cannot be trusted as proof the symptom is gone (G9). Deflake the test, then re-run.`,
+      `flaky green: the receipt ${cmdReceipts.length && !tests.length ? "met its expectation" : "passed"} on head in only ${greens.length - greenFails.length}/${greens.length} run(s) - a nondeterministic green cannot be trusted as proof the symptom is gone (G9). Deflake it, then re-run.`,
       (greenFails[0].out || "").split("\n").slice(-8).join("\n"));
   if (haveSuite && suite && !suite.ok)
     emit("BLOCK", "G9 full-scope green: the fix passes its own receipt but BREAKS the full suite - a regression in code the changed test never exercised. Fix it, or carry a downgrade tag.", (suite.out || "").split("\n").slice(-8).join("\n"));
@@ -824,4 +927,4 @@ if (require.main === module) {
   catch (e) { console.error("receipts enforcer error: " + (e && e.message ? e.message : e)); process.exit(1); }
 }
 
-module.exports = { masksExit, gateOn, globToRe, isContractFile, typeSet, walkBreaks, contractBreaks, expandTestPlaceholders, resolveTimeout, unknownConfigKeys, groupTestsByPackage };
+module.exports = { masksExit, gateOn, globToRe, isContractFile, typeSet, walkBreaks, contractBreaks, expandTestPlaceholders, resolveTimeout, unknownConfigKeys, groupTestsByPackage, parseCmdReceipts, meetsExpectation };
