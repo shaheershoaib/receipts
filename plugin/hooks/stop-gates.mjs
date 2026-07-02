@@ -33,6 +33,7 @@
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
+import crypto from "node:crypto";
 
 // ---------------------------------------------------------------- shared matchers
 
@@ -444,6 +445,95 @@ function trajectoryReminder(seq, cfg, m) {
   );
 }
 
+// ------------------------------------------------------------- refire-damping state
+//
+// The gate re-blocks the SAME close-out on EVERY subsequent Stop until the agent produces
+// evidence. When the human has ALREADY seen the block and simply lets the agent stop again
+// (no new work), that is pure friction (observed: ~8 redundant blocks in one session). Damp it:
+// once a given block SIGNATURE has fired >= 2 times AND a fresh USER turn entered the transcript
+// after the last block (the human saw it and moved on), stand down SILENTLY for that signature.
+//
+// The signature is deliberately BRITTLE to progress: it hashes the close-out's position+content
+// AND which halves fired. Any NEW close-out, NEW merge (moves the window), NEW evidence (flips a
+// half off), or NEW trajectory append CHANGES the signature -> a fresh entry, count resets to 1,
+// enforcement fully re-arms. So damping only ever silences the EXACT same unaddressed nag, never
+// a materially different one. Never damps on the 1st or 2nd firing.
+//
+// State lives in one JSON file in os.tmpdir(), keyed by a hash of transcript_path (per session).
+// Any read/write failure FAILS OPEN to the current behavior (block) - a lost damp beats a lost
+// gate.
+
+// A genuine USER turn (a human message), NOT a tool_result that Claude Code also records as a
+// role:"user" entry. Count entries that are user-role with text/string content and no tool_result.
+function userTurnCount(lines) {
+  let n = 0;
+  for (const line of lines) {
+    const t = line.trim();
+    if (!t) continue;
+    let e;
+    try { e = JSON.parse(t); } catch { continue; }
+    if (!e || e.type !== "user") continue;
+    const msg = e.message;
+    if (!msg || msg.role !== "user") continue;
+    const c = msg.content;
+    if (typeof c === "string") { if (c.trim()) n++; continue; }
+    if (Array.isArray(c)) {
+      const hasToolResult = c.some((p) => p && typeof p === "object" && p.type === "tool_result");
+      const hasText = c.some((p) => p && typeof p === "object" && p.type === "text" && String(p.text || "").trim());
+      if (hasText && !hasToolResult) n++;
+    }
+  }
+  return n;
+}
+
+// SIGNATURE of what is being blocked: the last close-out's seq index + a hash of its content,
+// plus which halves fired (verification / trajectory). Two blocks are "the same nag" iff this is
+// identical. lastCloseout carries [index, serialized-input]; halves is the set that produced a
+// reason. A stable JSON of these -> sha256.
+function blockSignature(lastCloseout, halves) {
+  const payload = JSON.stringify({
+    idx: lastCloseout ? lastCloseout[0] : -1,
+    body: lastCloseout ? String(lastCloseout[1]).slice(0, 4000) : "",
+    halves: [...halves].sort(),
+  });
+  return crypto.createHash("sha256").update(payload).digest("hex");
+}
+
+function stateFilePath(transcriptPath) {
+  const key = crypto.createHash("sha256").update(String(transcriptPath || "")).digest("hex").slice(0, 24);
+  return path.join(os.tmpdir(), `receipts-stop-damp-${key}.json`);
+}
+function readState(fp) {
+  try { const s = JSON.parse(fs.readFileSync(fp, "utf8")); return s && typeof s === "object" ? s : {}; }
+  catch { return {}; }
+}
+function writeState(fp, state) {
+  try { fs.writeFileSync(fp, JSON.stringify(state)); return true; } catch { return false; }
+}
+
+// Decide, at a would-block moment, whether to STAND DOWN. Mutates+persists state as a side effect.
+// Returns true = damp (suppress the block). Fail-open: any state IO failure returns false (block).
+//   damp iff: this signature has already been blocked >= 2 times AND at least one user turn has
+//   entered the transcript since the last block for this signature.
+function shouldDamp(transcriptPath, signature, currentUserTurns) {
+  const fp = stateFilePath(transcriptPath);
+  const state = readState(fp);
+  const rec = state[signature];
+  if (rec && rec.count >= 2 && currentUserTurns > (rec.userTurnsAtLastBlock ?? 0)) {
+    // The human saw it (>=2 prior blocks) and took a fresh turn -> stand down; do not bump count,
+    // so a LATER identical stop with yet another user turn stays damped too.
+    return true;
+  }
+  // Otherwise this block fires: record/increment it (a NEW signature starts at 1 -> never damped
+  // on the 1st or 2nd firing). Persist; if persistence fails we simply lose damping (block still).
+  const next = { count: (rec?.count || 0) + 1, userTurnsAtLastBlock: currentUserTurns };
+  // Keep the file bounded: only ever retain the signatures we still touch (drop stale ones once a
+  // new close-out supersedes them - old signatures never recur, so this cannot resurrect a block).
+  const trimmed = { [signature]: next };
+  writeState(fp, trimmed);
+  return false;
+}
+
 // ------------------------------------------------------------------------- main
 
 async function readStdin() {
@@ -486,10 +576,41 @@ async function main() {
   if (!seq.length) return; // no structured tool calls -> fail safe
 
   const reasons = [];
-  try { const r = verificationGate(seq, cfg, m, liveIdxs); if (r) reasons.push(r); } catch { /* fail safe */ }
-  try { const r = trajectoryReminder(seq, cfg, m); if (r) reasons.push(r); } catch { /* fail safe */ }
-  if (reasons.length)
-    process.stdout.write(JSON.stringify({ decision: "block", reason: reasons.join("\n\n--- also ---\n\n") }) + "\n");
+  const halves = new Set();
+  try { const r = verificationGate(seq, cfg, m, liveIdxs); if (r) { reasons.push(r); halves.add("verification"); } } catch { /* fail safe */ }
+  try { const r = trajectoryReminder(seq, cfg, m); if (r) { reasons.push(r); halves.add("trajectory"); } } catch { /* fail safe */ }
+  if (!reasons.length) return; // nothing to block on
+
+  // Refire-damping: build the block SIGNATURE, then stand down if the human has already seen this
+  // exact nag twice and taken a fresh turn since. The signature ingredients (re-derived from seq,
+  // cheaply) are everything whose CHANGE must re-arm the gate: the last close-out (index+content),
+  // the merge boundaries (the window that decides verification), and every evidence index +
+  // trajectory append (each flips a half). Any change to ANY of these -> a new signature.
+  let signature = null;
+  try {
+    let lastCloseout = null; // [index, serialized-input]
+    const mergeIdxs = [], evidenceIdxs = [], appendIdxs = [];
+    seq.forEach(([name, inp], i) => {
+      if (isMerge(name, inp)) mergeIdxs.push(i);
+      if (isDeployBinding(name, inp, m) || isObservation(name, inp, m)) evidenceIdxs.push(i);
+      if (name.toLowerCase().includes("append_trajectory")) appendIdxs.push(i);
+      if (isFixedCloseout(name, inp, m)) lastCloseout = [i, txt(inp)];
+    });
+    // Live-receipt evidence also re-arms: fold its indices in (a new receipt changes the signature).
+    for (const L of liveIdxs) evidenceIdxs.push(L.i);
+    signature = blockSignature(lastCloseout, halves) + ":" +
+      crypto.createHash("sha256")
+        .update(JSON.stringify({ m: mergeIdxs, e: evidenceIdxs.sort((a, b) => a - b), a: appendIdxs }))
+        .digest("hex").slice(0, 16);
+  } catch { signature = null; }
+
+  if (signature) {
+    let damp = false;
+    try { damp = shouldDamp(tp, signature, userTurnCount(lines)); } catch { damp = false; }
+    if (damp) return; // seen it twice + a fresh user turn -> silent stand-down for this signature
+  }
+
+  process.stdout.write(JSON.stringify({ decision: "block", reason: reasons.join("\n\n--- also ---\n\n") }) + "\n");
 }
 
 main().catch(() => { /* a hook must never crash the stop-cycle */ });

@@ -327,6 +327,28 @@
           "description": "Where the trajectory memory lives - this decides WHO it serves. 'home' (default): ~/.claude/mcp-servers/trajectory-kb/data/trajectories.jsonl - private, per-machine, aggregates across your repos. 'repo': <repo>/.receipts/trajectories.jsonl - COMMIT it and the whole team inherits every recorded trap and dead end (append-only JSONL merges trivially). Any other value: an explicit path, resolved against this config's directory.",
           "default": "home",
           "examples": ["home", "repo", ".receipts/trajectories.jsonl"]
+        },
+        "tripwires": {
+          "type": "object",
+          "description": "In-session PreToolUse guards (the `pre-gates.mjs` hook) that fire AT the risky action, between the Stop-hook backstop and the CI enforcer. Each raises the weak-agent floor without waiting for a stop-cycle or a PR. All default to 'deny' with an EXPLICIT, greppable escape (an honesty tag in the command / edit - `RECEIPTS_ACK=<why>`, `RECEIPTS_TRIPWIRE=off`, `--no-verify-receipts`, or a `test-removal: <why>` note), never a silent skip. Ship generic; this only tunes THIS project.",
+          "additionalProperties": false,
+          "properties": {
+            "commit_unverified": {
+              "enum": ["deny", "warn", "off"],
+              "description": "The commit-without-verification tripwire (Bash `git commit`): a commit that lands right after a production-source edit with NO test / receipt command run in between is denied - a commit is a claim it works (G0/G9). 'deny' (default): block with the escape instructions. 'off': disable. 'warn' is accepted but is a NO-OP at PreToolUse (there is no reliable agent-visible warn channel there) - use 'deny' to enforce or 'off' to disable.",
+              "default": "deny"
+            },
+            "g11_live": {
+              "enum": ["deny", "warn", "off"],
+              "description": "The G11-live referee tripwire (Edit/Write/MultiEdit on a TEST file): editing a test that was seen FAILING earlier this session with no passing run since is the 'shoot the referee' move - fix the code, not the test (G11). 'deny' (default): block unless the edit carries a `test-removal: <why>` note or a `RECEIPTS_ACK`. 'off': disable. 'warn' is a NO-OP (see commit_unverified).",
+              "default": "deny"
+            },
+            "test_command_patterns": {
+              "type": "array",
+              "items": { "type": "string" },
+              "description": "Extra regex patterns (matched against the Bash command string) that count as 'ran the code / produced a receipt' for the commit tripwire, on top of the generic defaults (npm/pnpm/yarn test, node --test, vitest/jest/mocha/playwright, pytest/tox/nox, go/cargo/mvn/gradle test, rspec, mix test, phpunit, dotnet test, receipts observe/verify, ...). Add a bespoke runner here, e.g. \"run-checks\\\\.sh\"."
+            }
+          }
         }
       }
     }

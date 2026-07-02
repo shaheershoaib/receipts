@@ -154,6 +154,28 @@ If the `trajectory-kb` MCP is available:
   what_worked, what_failed, files })` with the honest outcome - failures included, so
   the next fix on this surface inherits the lesson.
 
+## In-session tripwires (guards that fire before the PR)
+
+Two small PreToolUse guards sit BETWEEN the Stop-hook backstop and the CI enforcer, so a
+weak agent is caught at the moment of the action, not a stop-cycle or a PR later:
+
+- **commit-without-verification** - a `git commit` right after you edited production source
+  with NO test / `receipts observe` run in between is blocked. A commit is a claim it works
+  (G0/G9); run the tests first, then commit.
+- **G11-live referee** - editing a TEST file whose test you just saw FAILING (no green
+  since) is blocked. Fix the code the test caught, not the test.
+
+Both are DENY-by-default with the SAME explicit, greppable escape as the honesty ladder -
+never a silent skip. When the block genuinely does not apply, carry the ack IN the command
+or the edit:
+- `RECEIPTS_ACK='<why>'` prefixed on the command (e.g. `RECEIPTS_ACK='wip checkpoint,
+  tests before PR' git commit ...`), or `--no-verify-receipts` in the commit message, or
+  `RECEIPTS_TRIPWIRE=off` inline;
+- for the referee tripwire, a `test-removal: <why>` note in the edit is the honest,
+  reviewed way to change a test that truly must go.
+
+Turn either off or tune the runner list under `agent.tripwires` in `receipts.config.json`.
+
 ## What this skill is NOT
 
 It is not a ticket-triage / worktree / PR / deploy pipeline. It is the verification
