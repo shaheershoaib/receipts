@@ -33,3 +33,50 @@ jobs:
           # red/green evidence, gate findings). The job step summary is written either
           # way; drop this (and the permission above) if the summary is enough.
           comment: true
+
+# --------------------------------------------------------------------------------------
+# OPTIONAL: browser receipts (the web medium) — a HEAD-ONLY acceptance check.
+#
+# A browser receipt runs YOUR OWN Playwright/e2e script against the PR's PREVIEW
+# deployment. Playwright is NEVER a dependency of receipts: your repo brings it. The
+# enforcer only resolves the preview URL, exports it as $RECEIPTS_PREVIEW_URL, runs your
+# `verify.browser_receipt.command`, and folds the exit code into the verdict.
+#
+# It is NOT a red->green receipt (a preview deploys only the HEAD build — there is no base
+# preview to run it red against). It is a G1/G3/G5-shaped check that the fixed behavior
+# actually works on the deploy, and it runs IN ADDITION to the carried red->green receipt,
+# never as a substitute. Default mode is `warn` (a flaky/unreachable preview is often infra,
+# not the PR); set mode:block to fail the check on a definitive failure.
+#
+# 1) Add the block to receipts.config.json (read from the BASE commit, like all verify.*):
+#
+#      "verify": {
+#        "test_command": "npm test -- {test}",
+#        "browser_receipt": {
+#          "command": "npx playwright test e2e/receipt.spec.ts",
+#          "url_source": "github-deployment",   // Vercel/Netlify post deployments -> usually resolves
+#          "mode": "warn"
+#        }
+#      }
+#
+#    Your spec reads the URL from the env var receipts exports:
+#      await page.goto(process.env.RECEIPTS_PREVIEW_URL);
+#
+# 2) In this workflow, before the enforcer step, install your browser stack so the command
+#    can run (receipts does not install it):
+#
+#      - run: npx playwright install --with-deps chromium
+#
+# URL resolution — three sources (all degrade to a distinct WARN if the URL can't be
+# resolved, never a silent pass):
+#   • github-deployment  — query the deployments API for the head sha's environment_url
+#     (needs the default github-token, already passed). Vercel/Netlify post deployments, so
+#     this usually just works. G3: the deployment's sha is checked == PR head; a mismatch
+#     WARNs "preview is not the head build".  CAVEAT: a preview whose runtime needs env vars
+#     the preview environment doesn't set (e.g. NEXTAUTH_URL / a preview DB URL) can deploy
+#     yet 500 at runtime — the URL resolves but the script fails; wire the preview env in
+#     your deploy platform, not here.
+#   • env                — read $RECEIPTS_PREVIEW_URL (or verify.browser_receipt.url_env) that
+#     a prior deploy step in this job set (e.g. the Vercel Action's `preview-url` output).
+#   • command            — run verify.browser_receipt.url_cmd and read the first http(s) URL
+#     it prints (a CLI query, or `cat preview-url.txt`).

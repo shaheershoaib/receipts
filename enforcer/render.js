@@ -48,6 +48,21 @@ function renderMarkdown(rec) {
     const cr = r.command_receipts.map((c) => `\`${cell(c.command)}\`${c.expect != null ? ` expect:\`/${cell(c.expect)}/\`` : ""}`).join(", ");
     out.push(`| receipt-cmd | ${cr} |`);
   }
+  // Browser receipt (head-only preview acceptance): NOT a red->green receipt (a preview has no
+  // base build), so it reads as its own row with the honest "(head-only)" label. `ran: false`
+  // (a masked command / adapter error) and a could-not-resolve degrade both surface as text, so
+  // a skipped or unresolved check is never silently absent.
+  const br = r.browser_receipt;
+  if (br && br.configured) {
+    let cellText;
+    if (br.ran === false) cellText = `skipped — ${cell(br.reason || "not run")}`;
+    else if (br.ok == null) cellText = `not run — ${cell(br.reason || "could not resolve preview URL")}`;
+    else {
+      const shaBit = br.sha_match === false ? " · ⚠️ preview ≠ head build" : (br.sha_match === true ? " · sha✓" : "");
+      cellText = `${flag(br.ok)} on preview${br.url ? ` \`${cell(br.url)}\`` : ""} (via ${cell(br.source || "?")})${shaBit}`;
+    }
+    out.push(`| browser-receipt@preview (head-only) | ${cellText} |`);
+  }
   const trigger = r.is_fix_claim ? "fix-claim" : (r.work_type ? `work-type: ${r.work_type}` : "unclaimed");
   out.push(`| trigger | ${trigger}${r.strict ? " (strict: any-source-change)" : ""} |`);
   out.push(`| config | read from ${r.config_source || "?"}${r.config_source === "head" ? " ⚠️ (first-setup: the PR controlled its own gate config)" : ""} |`);

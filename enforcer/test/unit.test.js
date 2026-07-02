@@ -27,6 +27,36 @@ test("unknownConfigKeys: typo'd keys are named, valid configs are silent", () =>
   }).sort(), ["gates.G6.modee", "gatez", "verify.test_comand"]);
 });
 
+test("unknownConfigKeys: verify.browser_receipt is a known nested block; its typos are named", () => {
+  // A valid browser_receipt block is silent.
+  assert.deepEqual(unknownConfigKeys({
+    verify: { test_command: "t", browser_receipt: { command: "npx playwright test", url_source: "github-deployment", url_env: "X", url_cmd: "c", mode: "block", timeout_ms: 1000 } },
+  }), []);
+  // A typo inside the block is named (not silently defaulted).
+  assert.deepEqual(unknownConfigKeys({
+    verify: { test_command: "t", browser_receipt: { command: "x", url_sauce: "env" } },
+  }), ["verify.browser_receipt.url_sauce"]);
+});
+
+test("KNOWN_KEYS mirrors the JSON schema for verify.browser_receipt (no drift)", () => {
+  // The enforcer validates keys against KNOWN_KEYS (schema-lite, no dep); the shipped schema is
+  // the real contract. A key added to one but not the other is a silent hole - assert they match
+  // for the new browser_receipt block.
+  const fs = require("fs");
+  const path = require("path");
+  const schema = JSON.parse(fs.readFileSync(path.join(__dirname, "..", "..", "receipts.config.schema.json"), "utf8"));
+  const schemaKeys = Object.keys(schema.properties.verify.properties.browser_receipt.properties).sort();
+  // KNOWN_KEYS is internal; re-derive the same list the enforcer uses by round-tripping an
+  // object with every schema key through unknownConfigKeys (all-known => empty).
+  const allKnown = {};
+  for (const k of schemaKeys) allKnown[k] = "x";
+  assert.deepEqual(
+    unknownConfigKeys({ verify: { test_command: "t", browser_receipt: allKnown } }), [],
+    "every schema key for verify.browser_receipt must be in the enforcer's KNOWN_KEYS - they drifted");
+  // And browser_receipt itself must be a recognized verify.* key.
+  assert.deepEqual(unknownConfigKeys({ verify: { test_command: "t", browser_receipt: { command: "x" } } }), []);
+});
+
 test("expandTestPlaceholders: {test} / {test_dirs} / {test_classes} select correctly per runner", () => {
   const goFiles = ["pkg/api/user_test.go", "pkg/api/auth_test.go", "pkg/db/store_test.go"];
   assert.equal(

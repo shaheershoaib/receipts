@@ -62,6 +62,14 @@ BLOCK is recorded with the same fidelity as a PASS, so a failing gate still leav
   each `{ command, expect }` the PR carried as a `receipt-cmd:` line. Present only when the PR
   used one; the command's own runs are recorded in `commands` with a `[cmd ...]` label suffix.
   A PR may carry file receipts, command receipts, or both (all ANDed).
+- **`browser_receipt`** - the optional web-medium adapter's result (see "The browser receipt"
+  below). Present only when `verify.browser_receipt` is configured: `{ url, source, sha_match,
+  ok, output_tail }` - the resolved preview URL, how it was resolved (`env` / `github-deployment`
+  / `command`), whether the deployment sha matched the PR head (`true`/`false`/`null` = N/A), and
+  whether the browser command passed. It is a HEAD-ONLY acceptance check, so there is no
+  `red`/`green` here - `ok: true` means the fixed behavior worked on the preview, not that a
+  symptom reproduced first. A `ran: false` field with a `reason` records a skipped run (an
+  exit-masking command, an adapter error); an unresolved URL leaves `ok: null` with the reason.
 - **`config_source`** records whether the gate config came from the trusted base commit, the PR
   head (first-setup fallback, with a warning), or an explicit `--config`. A receipt read from
   `head` is weaker - the PR controlled its own gate config.
@@ -113,6 +121,40 @@ key: the grammar lives entirely in the PR body.
 | SQL / database | `receipt-cmd: sqlite3 app.db "select count(*) from users where email is null" expect:/^0$/` |
 | CLI stdout | `receipt-cmd: mytool --version expect:/^mytool 2\./` |
 | Infra plan-diff | `receipt-cmd: terraform plan -detailed-exitcode` (exit 0 = no drift; the fix converges it) |
+
+## The browser receipt (the web medium — head-only)
+
+A rendered-UI symptom (a button that never enabled, a modal that never opened, a value that
+never painted) is not something a `receipt-cmd:` curl can prove. A **browser receipt** runs the
+consumer's own Playwright/Cypress/e2e script against the PR's **preview deployment** and folds
+the pass/fail into the verdict. Configured under `verify.browser_receipt`, it is an OPTIONAL
+adapter: Playwright is never a dependency of receipts — the consuming repo brings its own e2e
+stack, and receipts only resolves the preview URL, exports it as `RECEIPTS_PREVIEW_URL`, runs
+the command, and reads the exit code.
+
+**Head-only, by construction.** A preview deploys only the **head** build; there is no
+base-commit preview to run the script red against. So a browser receipt is a HEAD-ONLY
+acceptance check (G1/G3/G5-shaped: *does the fixed behavior work on the deploy*) — **not** a
+red → green receipt, and it **never substitutes** for the carried red → green one. It runs *in
+addition*, when configured. That is why it has its own artifact field (`browser_receipt`) and
+report row (`browser-receipt@preview (head-only)`) rather than folding into `red`/`green`.
+
+**URL resolution.** `url_source` picks how the preview URL is found: `env` (read
+`verify.browser_receipt.url_env`, default `RECEIPTS_PREVIEW_URL`), `command` (run `url_cmd`, take
+the first http(s) line), or `github-deployment` (query the deployments API for the head sha's
+`environment_url` via `GITHUB_TOKEN` + `GITHUB_REPOSITORY`). Every path **degrades honestly** — a
+distinct *"could not resolve preview URL"* WARN, never a silent pass.
+
+**G3 sha binding.** When the URL resolves via `github-deployment`, the deployment's own sha is
+recorded and required `== PR head`; a mismatch WARNs *"preview is not the head build"* (a green
+against a stale preview is the classic false positive). Recorded as `browser_receipt.sha_match`.
+
+**Trust & degradation.** The `command`/`url_cmd` come from the trusted base config and pass the
+same exit-masking guard as every other command (a green from a masked exit can't be trusted —
+G9). The whole adapter is isolated: an unreachable preview, an unresolved URL, or a thrown error
+degrades to a **WARN**, never a crash and (unless `mode: "block"`) never a hard fail. Only a
+definitive failure (the command ran and exited non-zero against a resolved preview) fails under
+`mode: "block"`.
 
 ## Why it matters
 
