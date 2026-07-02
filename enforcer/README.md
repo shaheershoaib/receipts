@@ -62,6 +62,59 @@ posture the spec states for tests: the Gates raise the floor on honesty and are 
 boundary against a hostile author - human review of the diff *and the PR body* plus branch
 protection are what bound that (see `../spec/GATES.md`, "What the Gates do NOT defend against").
 
+### Browser receipts (the web medium — optional, head-only)
+
+A UI symptom — a button that never enabled, a modal that never opened, a value that never
+painted — is not something a `receipt-cmd:` curl can prove. A **browser receipt** runs your own
+Playwright/Cypress/e2e script against the PR's **preview deployment** and folds the pass/fail
+into the verdict:
+
+```json
+"verify": {
+  "test_command": "npm test -- {test}",
+  "browser_receipt": {
+    "command": "npx playwright test e2e/receipt.spec.ts",
+    "url_source": "github-deployment",
+    "mode": "warn"
+  }
+}
+```
+
+Receipts resolves the preview URL, exports it as **`RECEIPTS_PREVIEW_URL`** (your script reads
+`process.env.RECEIPTS_PREVIEW_URL`, or a `playwright.config` `baseURL`), runs `command`, and
+reads the exit code. **Playwright is never a dependency of receipts** — your repo brings its own
+e2e stack (add `npx playwright install --with-deps chromium` before the enforcer step); the
+receipts side only resolves the URL and runs the command.
+
+**It is a HEAD-ONLY acceptance check, not a red → green receipt.** A preview deploys only the
+**head** build, so there is no base-commit preview to run the script red against. A browser
+receipt therefore proves *the fixed behavior works on the deploy* (a G1/G3/G5-shaped check) —
+it does **not** prove the symptom reproduced first, and it **never substitutes** for the carried
+red → green receipt. It runs **in addition**, when configured. The report row is labeled
+`browser-receipt@preview (head-only)` to keep that honest.
+
+**URL resolution** — three sources, each degrading to a distinct *"could not resolve preview
+URL"* WARN (never a silent pass):
+
+- `github-deployment` — queries the GitHub deployments API for the head sha's `environment_url`
+  (uses the `github-token` the Action already passes + `GITHUB_REPOSITORY`). Vercel/Netlify post
+  deployments, so this usually just works. **G3 sha binding:** the deployment's sha is checked
+  `== PR head`; a mismatch WARNs *"preview is not the head build"* (not a block by default). One
+  caveat: a preview whose runtime needs env vars the preview environment doesn't set
+  (`NEXTAUTH_URL`, a preview DB URL) can deploy yet 500 at runtime — the URL resolves but the
+  script fails; wire the preview env in your platform.
+- `env` — reads `$RECEIPTS_PREVIEW_URL` (or `verify.browser_receipt.url_env`) that a prior deploy
+  step in the job set.
+- `command` — runs `verify.browser_receipt.url_cmd` and takes the first http(s) URL it prints.
+
+**Degradation & trust.** The whole adapter is isolated: a thrown error, an unreachable preview,
+or a URL that won't resolve degrades to a **WARN** — never a crash, and (unless `mode: "block"`)
+never a hard fail on infra that isn't the PR's fault. Only a *definitive* failure (the command
+ran and exited non-zero against a resolved preview) fails the check under `mode: "block"`. The
+`command`/`url_cmd` come from the trusted **base** config and are exit-masking-checked (a green
+from a `; echo` can't be trusted — G9). The result is recorded in the receipt artifact as
+`browser_receipt = { url, source, sha_match, ok, output_tail }`.
+
 ## Usage
 
 1. `npx receipts init` at your repo root (writes `receipts.config.json`).
@@ -102,8 +155,9 @@ in `receipts.config.json` (`receipts init` detects most of it): `verify.test_com
 
 - **Re-runnable symptoms only.** The red -> green model covers anything expressible as a
   test *or a re-runnable command* (a `receipt-cmd:`: a query, a curl, a plan-diff - so a
-  runner-less API / pipeline / CLI / infra repo is covered too). UI/visual symptoms that need
-  a live deployed app are the optional `verify.live_drive` path - not in v1.
+  runner-less API / pipeline / CLI / infra repo is covered too). A rendered-UI symptom that
+  needs a live deployed app has the optional **browser receipt** (above) - but note that is a
+  *head-only* acceptance check against the preview, not a red->green receipt.
 - **Deps at base.** Running the test on the base commit reuses head's installed deps
   (node_modules etc. are gitignored, not reverted on checkout). Fine for the common
   case; a base/head dep mismatch is an edge case.
@@ -114,6 +168,8 @@ in `receipts.config.json` (`receipts init` detects most of it): `verify.test_com
 ## Roadmap
 
 - [x] `verify.js` red -> green engine + composite GitHub Action.
+- [x] Browser receipts: run an e2e script against the PR preview as a head-only acceptance
+      check for the web medium (`verify.browser_receipt`).
 - [ ] `verify.live_drive`: drive the deployed app for symptoms a test cannot express
       (the Stop-hook precursor `../plugin/hooks/stop-gates.mjs` has the
       deploy-binding + observation logic to draw from).
