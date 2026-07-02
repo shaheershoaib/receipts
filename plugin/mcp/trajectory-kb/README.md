@@ -54,3 +54,40 @@ echo '{"jsonrpc":"2.0","id":1,"method":"tools/list"}' | node index.js
 - **Every loop exit (after verify when there is one):** `append_trajectory({ repo, surface, surface_key, symptom, root_cause, outcome, what_worked, what_failed, files })`. Record downgraded / reverted / **blocked** exits too, with the honest `outcome` - a success-only store is survivorship bias that blinds the corpus.
 
 The store is the source of truth; this MCP just enforces the schema and serves structured reads.
+
+## Memory that pushes (SessionStart injection)
+Querying the kb only ever helped an agent that *thought* to query it - and the weak agent
+that repeats a wrong-surface trap never does. The plugin's **SessionStart hook**
+(`plugin/hooks/session-memory.mjs`) flips that from pull to push: at the start of every
+session it READS this same JSONL (never writes), picks up to ~5 entries most worth knowing
+for the CURRENT repo, and injects a compact summary into the agent's context - so the agent
+arrives already warned, with no tool call.
+
+- **Store + repo resolution:** identical to this server (home + optional `repo` store via
+  `agent.trajectory_store`, `RECEIPTS_TRAJECTORY_STORE` override). The "current repo" is
+  matched case-insensitively against the config's `agent.repo_name`, the git remote basename,
+  `package.json` name, and the cwd basename - so a slightly-differently-named tag still lines up.
+- **Selection:** failures are the payload, so entries are ranked failures-first (outcome !=
+  `fixed`, or a non-empty `what_failed`) then most-recent, de-duplicated **one per
+  `surface_key`** (five different traps beat five re-tellings of one), superseded entries
+  dropped.
+- **Format + cap:** a one-line header + 2-3 lines per entry (`surface_key` · `[outcome]` ·
+  the first `what_failed` line, truncated ~200 chars), the whole block HARD-capped at ~1500
+  chars because it loads into EVERY session.
+- **Default-on, but only with a config:** ON when a `receipts.config.json` is found on the
+  walk-up (an opt-in); a repo with NO config gets ZERO injection and zero noise. Empty store /
+  no repo match / any error -> emits nothing (fail-open). Turn off with
+  `agent.memory_inject: "off"`.
+
+## CLI analytics (`receipts kb`)
+Read the same store from the terminal (zero deps; same resolution rules):
+
+- `receipts kb recur [--repo <name>] [--json]` - recurrence report: groups by `surface_key`,
+  showing count, an outcomes histogram, the last timestamp, and the top `what_failed` line,
+  most-recurring first.
+- `receipts kb distill [--repo <name>] [--json]` - conservative, rule-based suggestions
+  derived from the data (never auto-applied), printed with their evidence lines:
+  - a `surface_key` with **>= 2 non-fixed** outcomes -> *recurring trouble spot* (declare a G6
+    family / a `receipt-cmd` probe / a config note);
+  - a repo with **>= 2 `reverted`** -> suggest `gates.G12.mode: "block"`;
+  - **>= 2** entries whose `what_failed` mentions **`flaky`** -> suggest `verify.receipt_runs: 2`.

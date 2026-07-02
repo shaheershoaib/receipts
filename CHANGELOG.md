@@ -3,6 +3,30 @@
 ## Unreleased
 
 ### Added
+- **Memory that pushes - SessionStart scar injection + `receipts kb` analytics.** The
+  `trajectory-kb` memory only ever helped an agent that thought to QUERY it, and the weak agent
+  that repeats a wrong-surface trap never does. A new SessionStart hook (`session-memory.mjs`,
+  registered under `SessionStart` with matcher `""`) flips pull to push: at session start it
+  READS the trajectory store (never writes, resolving it EXACTLY like the MCP server - home +
+  optional `repo` store, `RECEIPTS_TRAJECTORY_STORE` override), picks up to ~5 entries most worth
+  knowing for the CURRENT repo (repo matched case-insensitively against `agent.repo_name` / the
+  git remote basename / `package.json` name / the cwd basename), and injects them as
+  `additionalContext` - so the agent arrives already warned with no tool call. Selection is
+  failures-first (outcome != `fixed` or a non-empty `what_failed`), most-recent, de-duplicated
+  ONE per `surface_key` (five different traps beat five re-tellings of one), superseded entries
+  dropped. Format: a header + 2-3 lines per entry (`surface_key` · `[outcome]` · the first
+  `what_failed` line truncated ~200 chars), the whole block HARD-capped at ~1500 chars because it
+  loads into EVERY session. **Default-on only when a `receipts.config.json` is present** (an
+  opt-in); a repo with NO config gets ZERO injection and zero noise. Empty store / no repo match /
+  any error -> emits NOTHING (fail-open). Tune with `agent.memory_inject` (`"on"` | `"off"`).
+  Alongside it, a new `receipts kb` CLI verb reads the same store (zero deps): `kb recur` (a
+  recurrence report - group by `surface_key`, count + outcomes histogram + last ts + top
+  `what_failed`, most-recurring first) and `kb distill` (conservative, rule-based, never
+  auto-applied suggestions: a `surface_key` with >=2 non-fixed outcomes -> declare a G6 family / a
+  `receipt-cmd` probe; a repo with >=2 `reverted` -> `gates.G12.mode: "block"`; >=2 `flaky`
+  mentions -> `verify.receipt_runs: 2`), both with `--repo` and `--json`. New config key
+  `agent.memory_inject` (schema). No MCP server / bundle change (the hook + CLI read the JSONL
+  directly). No version bump.
 - **In-session tripwires - PreToolUse guards between the Stop hook and the CI enforcer.** A new
   `pre-gates.mjs` hook (registered under `PreToolUse` for `Bash|Edit|Write|MultiEdit`) raises the
   weak-agent floor AT the risky action, not a stop-cycle or a PR later. Two guards:

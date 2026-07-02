@@ -147,12 +147,20 @@ A gate you cannot clear does not become a silent "fixed." Pick the honest outcom
 
 ## Trajectory memory (learn across fixes)
 
-If the `trajectory-kb` MCP is available:
+Memory now **pushes**: a SessionStart hook (`session-memory.mjs`) injects this repo's prior
+scars (failures first, one per surface, capped small) into your context at session start, so
+you arrive already warned even before you query - if you see a "receipts trajectory memory"
+note listing prior dead ends, treat it as the first thing to not repeat. It is on by default
+when a `receipts.config.json` is present (`agent.memory_inject: "off"` disables it). You can
+still pull the full picture yourself:
+
 - **At the start**, `query_trajectory({ surface })` - see what was tried on this
-  surface before and what failed (a prior wrong-surface trap, pre-recorded).
+  surface before and what failed (a prior wrong-surface trap, pre-recorded). From the
+  terminal, `receipts kb recur` shows which surfaces recur and `receipts kb distill`
+  turns the pattern into concrete config suggestions.
 - **At close-out**, `append_trajectory({ repo, surface, symptom, root_cause, outcome,
   what_worked, what_failed, files })` with the honest outcome - failures included, so
-  the next fix on this surface inherits the lesson.
+  the next fix on this surface inherits the lesson (and gets pushed into the next session).
 
 ## In-session tripwires (guards that fire before the PR)
 

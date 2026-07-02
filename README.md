@@ -91,7 +91,9 @@ honesty.
 - **`plugin/`** - a Claude Code plugin (the agent adapter): teaches your agent to
   produce receipts as it works, so its PRs pass the gate naturally.
 - **`plugin/mcp/trajectory-kb/`** - the memory layer: what was tried on a surface and
-  how it turned out, so the gates *learn* and stop the team repeating the same trap.
+  how it turned out, so the gates *learn* and stop the team repeating the same trap. The
+  memory now **pushes** - a SessionStart hook injects prior scars for the repo into a new
+  session so even an agent that never thinks to query the kb arrives already warned.
 
 ## Install
 
@@ -154,6 +156,15 @@ edits, no `claude mcp add`:
   greppable escape (`RECEIPTS_ACK='<why>'` / `--no-verify-receipts` / a `test-removal:` note) -
   an honest note, never a silent skip; tune under `agent.tripwires`.
 - the **`trajectory-kb` MCP** - the verification memory the skill queries and appends.
+- the **memory-push** (`session-memory.mjs`, a SessionStart hook) - the kb only helped an
+  agent that thought to *query* it; a weak agent never does. This hook flips that: at
+  session start it reads the trajectory store, picks up to ~5 most-relevant entries for
+  THIS repo (failures first, one per surface_key), and injects a compact (~1500-char-capped)
+  summary into the agent's context - so the agent arrives already warned, with no tool call.
+  On by default when a `receipts.config.json` is present (a receipts-less repo gets zero
+  change); turn off with `agent.memory_inject: "off"`. Inspect the same memory from the
+  terminal with `receipts kb recur` (recurrence report) and `receipts kb distill`
+  (conservative, rule-based config suggestions).
 
 These form a gradient: the skill is a model-layer **nudge** (it is invoked by
 description-match, not guaranteed), while the Stop hooks and the [CI enforcer](enforcer/)
@@ -179,9 +190,9 @@ pipeline for months and caught real money-path regressions.
 Built and working today:
 - the Gates spec (`spec/GATES.md`)
 - the focused `gates` agent skill + two Stop-hook backstops (the Claude Code adapter), tracker-agnostic (Notion / Linear / Jira / GitHub)
-- the `trajectory-kb` memory MCP
+- the `trajectory-kb` memory MCP, plus **memory-push** at session start (`session-memory.mjs`, a SessionStart hook that injects the repo's prior scars into every session so a weak agent is warned without querying; `agent.memory_inject`) and `receipts kb recur` / `kb distill` to read + distill that memory from the terminal
 - `receipts init` - detects stack + deploy target, confirms, writes `receipts.config.json`; published to npm as [`receipts-cli`](https://www.npmjs.com/package/receipts-cli) (`npx receipts-cli init`)
-- the **verification engine** as both a **CI enforcer** (`enforcer/`, a GitHub Action) and a **local CLI** (`receipts verify` / `replay` / `explain` / `observe`) - one engine, the red->green re-verification at the PR or on your machine
+- the **verification engine** as both a **CI enforcer** (`enforcer/`, a GitHub Action) and a **local CLI** (`receipts verify` / `replay` / `explain` / `observe` / `kb`) - one engine, the red->green re-verification at the PR or on your machine
 - **replayable receipts** - every verification can emit a machine-readable evidence artifact (`--receipt-out`, schema in `spec/RECEIPT.md`): base/head, verdict, every command run with its exit code, the red->green proof. `receipts replay` re-runs it; `receipts explain` reads it
 - **live receipts** (`receipts observe`, schema in `spec/LIVE-RECEIPT.md`) - machine-validated deployed-build evidence for the Stop hook: probe the live build (a deployed URL / staging query / installed CLI), check the output MEETS an expectation, bind it to the build sha, emit one `LIVE-RECEIPT` line. Replaces "a screenshot happened" with a re-runnable value check bound to the build; `agent.evidence: "live-receipt"` makes it mandatory
 - **in-session tripwires** (`pre-gates.mjs`, a PreToolUse hook) - a commit-without-verification guard (deny a `git commit` that follows a production-source edit with no test / `receipts observe` in between) and a G11-live referee guard (deny editing a TEST file just seen failing). Deny-by-default with an explicit greppable escape (`RECEIPTS_ACK` / `--no-verify-receipts` / `test-removal:`); tune under `agent.tripwires`
