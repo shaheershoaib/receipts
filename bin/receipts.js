@@ -34,6 +34,14 @@ Usage:
                                verdict reproduces (exit 1 on mismatch). [--repo <dir>]
   receipts explain <receipt>   Print a human-readable summary of a receipt artifact
                                (--md: the same markdown report the GitHub Action posts)
+  receipts observe [args]      Probe the LIVE build and emit a live receipt - machine-validated
+                               deployed-build evidence for the Stop hook. Runs ONE probe now,
+                               captures the output, evaluates met, binds it to the build, and
+                               prints a single LIVE-RECEIPT: <json> line (exit 0 iff met):
+                                 --cmd '<command>'  |  --url '<https url>'
+                                 [--expect '/<regex>/']   assert stdout/body (else exit-0/2xx only)
+                                 [--sha-cmd '<command>' | --sha <id>]   bind to the build (G3)
+                                 [--out <file>]   also write the full receipt JSON there
 
 Options:
   --dir <path>   Target repo (default: current directory)
@@ -434,6 +442,123 @@ function explain(rest) {
   process.stdout.write(out.join("\n") + "\n");
 }
 
+// `receipts observe` - probe the LIVE build NOW and emit a `receipts/live-receipt@1` artifact:
+// structured, machine-validated deployed-build evidence for the Stop hook. One command so a
+// weak agent can be RIGHT by running one line - it runs the probe, captures the output, computes
+// `met` with the SAME red/green law a command receipt uses (exit-0/2xx floor + optional regex),
+// binds the observation to the build (G3), and prints EXACTLY ONE marker line:
+//   LIVE-RECEIPT: {compact single-line JSON}
+// That line landing in the transcript is the hand-off to the Stop hook. Exit 0 iff met (scripts
+// can branch), but the marker ALWAYS prints - a failed observation is evidence too.
+const OBSERVED_MAX = 2048; // ~2KB bound on the stored output tail (evidence, not a full log)
+const tailBytes = (s, n) => { s = String(s || ""); return s.length > n ? s.slice(-n) : s; };
+// Strip a leading/trailing `/` from an `--expect` value (the `/re/` grammar, like receipt-cmd's
+// expect:/…/); a bare `re` with no slashes is also accepted. Returns the regex SOURCE string.
+function expectSource(raw) {
+  if (raw == null) return null;
+  const s = String(raw);
+  const m = s.match(/^\/(.*)\/$/s);
+  return m ? m[1] : s;
+}
+
+async function observe(rest) {
+  // meetsExpectation + masksExit come from the enforcer engine (require-safe: exports without
+  // running main), so the CLI and CI share ONE definition of "met" and ONE exit-masking guard.
+  const { meetsExpectation, masksExit } = require("../enforcer/verify.js");
+  const cmd = flagVal(rest, "--cmd");
+  const url = flagVal(rest, "--url");
+  const expectRaw = flagVal(rest, "--expect");
+  const shaCmd = flagVal(rest, "--sha-cmd");
+  const shaLit = flagVal(rest, "--sha");
+  const outFile = flagVal(rest, "--out");
+
+  if ((cmd && url) || (!cmd && !url)) {
+    console.error("usage: receipts observe (--cmd '<command>' | --url '<https url>') [--expect '/re/'] [--sha-cmd '<cmd>' | --sha <id>] [--out <file>]");
+    process.exit(2);
+  }
+  if (shaCmd && shaLit) { console.error("receipts observe: pass --sha-cmd OR --sha, not both."); process.exit(2); }
+  // A masked exit could fake met:true - reject --cmd / --sha-cmd that can hide their exit (G9),
+  // the SAME guard the enforcer applies to test/receipt commands.
+  if (cmd && masksExit(cmd)) {
+    console.error(`receipts observe: --cmd '${cmd}' can mask its own exit code (; , || , pipe, background &, newline, or command substitution), so a met from it cannot be trusted (G9). Use a single command whose own exit is the result, or wrap it in a script.`);
+    process.exit(2);
+  }
+  if (shaCmd && masksExit(shaCmd)) {
+    console.error(`receipts observe: --sha-cmd '${shaCmd}' can mask its own exit code - the resolved artifact id cannot be trusted (G9). Use a single command, or wrap it in a script.`);
+    process.exit(2);
+  }
+  // Compile --expect up front so a bad regex fails clearly (never mis-reads as not-met).
+  const expectSrc = expectSource(expectRaw);
+  let re = null;
+  if (expectSrc != null) {
+    try { re = new RegExp(expectSrc, "m"); }
+    catch (e) { console.error(`receipts observe: --expect ${expectRaw} is not a valid regex (${e && e.message}) - fix the pattern or drop --expect (exit 0 / 2xx is the default expectation).`); process.exit(2); }
+  }
+
+  // Resolve the artifact binding (G3): run --sha-cmd (single-line id), take --sha verbatim, else
+  // kind "none" (allowed but weaker - documented in spec/LIVE-RECEIPT.md).
+  let artifact = { kind: "none", id: null, source: null };
+  if (shaCmd) {
+    const r = spawnSync(shaCmd, { shell: true, encoding: "utf8", maxBuffer: 8 * 1024 * 1024 });
+    const id = ((r.stdout || "").split("\n").map((l) => l.trim()).find(Boolean)) || null;
+    if (r.status !== 0 || !id) {
+      console.error(`receipts observe: --sha-cmd exited ${r.status == null ? "abnormally" : r.status}${id ? "" : " with no id"} - the build binding could not be resolved. Fix the command or pass --sha <id>.`);
+      process.exit(2);
+    }
+    artifact = { kind: "deploy-sha", id, source: shaCmd };
+  } else if (shaLit) {
+    artifact = { kind: "deploy-sha", id: String(shaLit).trim(), source: "--sha (verbatim)" };
+  }
+
+  // Run the probe NOW.
+  let probe, met, observed;
+  if (cmd) {
+    probe = { kind: "cmd", spec: cmd };
+    const r = spawnSync(cmd, { shell: true, encoding: "utf8", maxBuffer: 64 * 1024 * 1024 });
+    const out = (r.stdout || "") + (r.stderr || "");
+    // meetsExpectation's contract: { ok } = exit 0, `re` = compiled regex or null.
+    met = meetsExpectation({ ok: r.status === 0, out }, re);
+    observed = tailBytes(out, OBSERVED_MAX);
+  } else {
+    // --url: node >=18 global fetch. met = 2xx AND (regex over body if given). https only
+    // (localhost http allowed for a port-forwarded staging box).
+    if (!/^https:\/\//i.test(url) && !/^http:\/\/(localhost|127\.0\.0\.1)(:|\/|$)/i.test(url)) {
+      console.error(`receipts observe: --url must be https:// (or http://localhost) - refusing '${url}'. A live probe reads the deployed build over TLS.`);
+      process.exit(2);
+    }
+    probe = { kind: "url", spec: url };
+    let status = 0, body = "";
+    try {
+      const resp = await fetch(url, { redirect: "follow" });
+      status = resp.status;
+      body = await resp.text();
+    } catch (e) {
+      status = 0;
+      body = `fetch error: ${e && e.message ? e.message : e}`;
+    }
+    met = meetsExpectation({ ok: status >= 200 && status < 300, out: body }, re);
+    observed = tailBytes(body, OBSERVED_MAX);
+  }
+
+  const receipt = {
+    schema: "receipts/live-receipt@1",
+    probe,
+    expect: expectSrc,
+    observed,
+    met: !!met,
+    artifact,
+    generated_at: new Date().toISOString(),
+  };
+
+  if (outFile) {
+    try { fs.writeFileSync(outFile, JSON.stringify(receipt, null, 2) + "\n"); }
+    catch (e) { console.error(`receipts observe: could not write --out ${outFile} - ${e && e.message ? e.message : e}`); }
+  }
+  // The ONE marker line - the hand-off to the Stop hook. Compact single-line JSON.
+  process.stdout.write("LIVE-RECEIPT: " + JSON.stringify(receipt) + "\n");
+  process.exit(met ? 0 : 1);
+}
+
 function parseArgs(argv) {
   const o = { _: [] };
   for (let i = 0; i < argv.length; i++) {
@@ -461,6 +586,7 @@ async function main() {
   if (cmd === "verify") return verify(rest);
   if (cmd === "replay") return replay(rest);
   if (cmd === "explain") return explain(rest);
+  if (cmd === "observe") return observe(rest);
   console.error(`Unknown command: ${cmd}\n`);
   process.stdout.write(HELP);
   process.exit(1);

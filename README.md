@@ -142,7 +142,10 @@ edits, no `claude mcp add`:
 - the **Stop-hook backstop** (`stop-gates.mjs`, Node - no python needed) - it fires on
   every stop-cycle, regardless of the model, and carries both checks in one transcript
   pass: it blocks a "fixed" close-out that lacks deployed-build evidence, and nudges a
-  trajectory-kb entry at a loop exit.
+  trajectory-kb entry at a loop exit. That deployed-build evidence can be a **live receipt** -
+  `receipts observe` probes the live build, checks the output MEETS its expectation, and binds
+  it to the build sha (set `agent.evidence: "live-receipt"` to make it the ONLY accepted
+  evidence, so "a screenshot happened" no longer clears the gate).
 - the **`trajectory-kb` MCP** - the verification memory the skill queries and appends.
 
 These form a gradient: the skill is a model-layer **nudge** (it is invoked by
@@ -171,13 +174,15 @@ Built and working today:
 - the focused `gates` agent skill + two Stop-hook backstops (the Claude Code adapter), tracker-agnostic (Notion / Linear / Jira / GitHub)
 - the `trajectory-kb` memory MCP
 - `receipts init` - detects stack + deploy target, confirms, writes `receipts.config.json`; published to npm as [`receipts-cli`](https://www.npmjs.com/package/receipts-cli) (`npx receipts-cli init`)
-- the **verification engine** as both a **CI enforcer** (`enforcer/`, a GitHub Action) and a **local CLI** (`receipts verify` / `replay` / `explain`) - one engine, the red->green re-verification at the PR or on your machine
+- the **verification engine** as both a **CI enforcer** (`enforcer/`, a GitHub Action) and a **local CLI** (`receipts verify` / `replay` / `explain` / `observe`) - one engine, the red->green re-verification at the PR or on your machine
 - **replayable receipts** - every verification can emit a machine-readable evidence artifact (`--receipt-out`, schema in `spec/RECEIPT.md`): base/head, verdict, every command run with its exit code, the red->green proof. `receipts replay` re-runs it; `receipts explain` reads it
+- **live receipts** (`receipts observe`, schema in `spec/LIVE-RECEIPT.md`) - machine-validated deployed-build evidence for the Stop hook: probe the live build (a deployed URL / staging query / installed CLI), check the output MEETS an expectation, bind it to the build sha, emit one `LIVE-RECEIPT` line. Replaces "a screenshot happened" with a re-runnable value check bound to the build; `agent.evidence: "live-receipt"` makes it mandatory
 - **G7 dependent-test-selection** - the enforcer re-runs the tests of consumers that newly route through the changed surface (JS/TS scan + an explicit graph for any stack)
 - the enforcer **verifies itself**: an adversarial test suite (per gate: valid / invalid / malicious receipt) runs in CI, and receipts' enforcer gates receipts' own PRs
 
-Next: `verify.live_drive` for symptoms a test can't express (drive the deployed app),
-and an `examples/` demo of a caught wrong-fix.
+Next: `verify.live_drive` in CI for symptoms a unit/e2e test can't express (drive the deployed
+app from the enforcer, complementing the agent-side `receipts observe`), and an `examples/` demo
+of a caught wrong-fix.
 
 ## Releasing (maintainer)
 
