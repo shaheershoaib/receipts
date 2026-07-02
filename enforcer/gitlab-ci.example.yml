@@ -1,0 +1,23 @@
+# receipts on GitLab CI - the engine is CLI-first; the GitHub Action is just one wrapper.
+# Copy this job into your .gitlab-ci.yml. Requires a receipts.config.json at the repo
+# root (npx receipts-cli init) merged to the target branch first (the enforcer reads its
+# config from the TRUSTED base, not the MR head).
+receipts:
+  image: node:20
+  rules:
+    - if: $CI_PIPELINE_SOURCE == "merge_request_event"
+  variables:
+    GIT_DEPTH: "0"                     # base + head history for the red->green re-run
+  script:
+    # --- your runtime + deps so verify.test_command runs (swap per stack) ---
+    - npm ci
+    # ------------------------------------------------------------------------
+    - printf '%s' "$CI_MERGE_REQUEST_DESCRIPTION" > /tmp/mr_body.txt
+    - npx receipts-cli verify
+        --base "$CI_MERGE_REQUEST_DIFF_BASE_SHA"
+        --head "$CI_COMMIT_SHA"
+        --pr-body-file /tmp/mr_body.txt
+        --receipt-out receipt.json
+  artifacts:
+    when: always                       # a BLOCK still leaves auditable evidence
+    paths: [receipt.json]

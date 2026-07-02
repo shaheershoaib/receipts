@@ -31,6 +31,21 @@ no cheating around it.
   `NODE_ENV === 'production'` stays legitimate. New bench cells `tampers-with-receipt`
   and `sniffs-test-env` measure both new defenses as catches.
 
+- **A runnable caught-wrong-fix demo** (`npm run demo`, `examples/caught-wrong-fix/`): the
+  founding scar - a height cap shipped for a too-narrow modal - replayed through the real
+  enforcer: the wrong fix BLOCKs (weak receipt), the exact-value fix PASSes (G14-proof:
+  the demo receipt pins `width === 520`, not "wider than before").
+- **`receipts report`** - aggregate receipt artifacts (files or dirs) into team signals:
+  verdicts, real-receipt rate, honesty-ladder usage, weak/flaky rejections, per-gate
+  findings incl. G14; `--json` for dashboards.
+- **Generated agent adapters** (`npm run build:adapters`): the gates skill compiled to
+  `adapters/AGENTS.md` (any rules-file agent) and `adapters/cursor/receipts.mdc` -
+  generated from the one source, never hand-edited, current with G14 and the receipt lock.
+- **GitLab CI example** (`enforcer/gitlab-ci.example.yml`) - the engine is CLI-first.
+- **README: the hotfix playbook** (the honesty ladder as the incident pressure valve) and
+  **receipts-accumulate** (keep merged receipts in the suite; G9 re-proves every past
+  symptom forever, G11 makes deleting one loud).
+
 ### Fixed
 - **Python's `__pycache__` could hide a G14 mutant**: a same-length mutation written
   within the same mtime second reuses STALE bytecode (mtime+size validation), so the

@@ -1,0 +1,198 @@
+---
+description: The receipts Gates - produce a red->green receipt before claiming any fix/change is done; never game the referee.
+alwaysApply: true
+---
+
+<!-- GENERATED from plugin/skills/gates/SKILL.md by scripts/build-adapters.js - do not hand-edit.
+     Target: Cursor - copy to .cursor/rules/receipts.mdc. Regenerate with: npm run build:adapters -->
+
+When fixing a bug, addressing tester or issue feedback, or about to claim a change is "done" / "fixed" / "working", follow the Gates below and produce a RECEIPT - a re-runnable acceptance test that is red before the fix and green after, asserting the reported symptom. A fix is not done because you say so; it is done when the symptom is observably gone.
+
+# The Gates
+
+The verification discipline behind `receipts`. When you fix or change something your
+job is not to *claim* it works - it is to *produce a receipt* that proves it, and to
+fix the thing the reporter actually sees.
+
+This skill is the project-agnostic discipline. Project specifics (the test command,
+the deploy target, what marks a fix-claim) live in `receipts.config.json` - run
+`receipts init` once to create it.
+
+**Which gates apply here:** honor `receipts.config.json` `gates.enabled` / `gates.disabled`
+(default: all). A project disables the gates that do not fit it - e.g. G10 in a single
+repo with no split deploy, or the deploy-surface gates in a library with no deploy.
+
+**The deep how-to per gate** - the full mandate, the real scar, and the exact enforcement
+for each gate - is bundled with this skill in `references/GATES.md`. Read the section for
+a gate when you need the detailed procedure (e.g. G8's rebase + migration-leaf check, or
+G10's backward-compatible contract change); the list below is the gist.
+
+**Applying the gates in THIS project's medium:** the gates are principles, and what a
+"surface" or "value" or "terminal action" means depends on what you ship (a web page vs an
+API endpoint vs a library function vs a CLI command vs a data table). `references/MEDIA.md`
+maps every gate to the concrete artifact and tool per software type, and gives a template
+for any type not listed. Use `receipts.config.json` `gates.medium` as the hint for which
+mapping applies; if it is unknown or missing, infer the medium from the stack and apply the
+principle. Do NOT default to "use the browser" - read the value where THIS project's
+consumer actually sees it.
+
+**Applying the gates by WORK TYPE:** the spec is written for fixes, but the receipt is just
+TDD and applies to any change - what shifts is what the receipt asserts (the acceptance
+criterion). Determine the work type from the task: a fix reproduces the reported symptom; a
+**feature** writes the acceptance test for the new behavior first (red until it exists); a
+**migration** tests a fixture incl. legacy rows + expand/contract ordering (G10); a
+**refactor** INVERTS the receipt - there is no red-before, the proof is the existing full
+suite staying green (G9), so a test that passes on base too is correct, not a weak receipt.
+See `references/WORK-TYPES.md`. For a refactor/chore, signal it with a `work-type: refactor`
+line in the PR body so the enforcer expects the inverted receipt.
+
+## The receipt (the one non-negotiable)
+
+Before you claim a fix, write a **red-before / green-after acceptance test** in the
+project's own test framework:
+
+1. It FAILS on the current code (proving it reproduces the reported bug).
+2. It PASSES after your fix (proving the symptom is gone).
+3. It asserts the symptom the REPORTER described - not a proxy. A test that only
+   checks a height cap does not prove a too-narrow modal got wider.
+
+That red -> green test is the receipt. A passing screenshot, or a green unrelated
+suite, is not.
+
+**On the deployed build (G1/G3), make the evidence machine-checkable, not a screenshot.**
+When you verify the fix on the live build, run `receipts observe` - it probes the deployed
+URL / staging query / installed CLI, checks the output MEETS your expectation, binds the
+observation to the build sha, and emits a `LIVE-RECEIPT` line the Stop hook reads as
+by-value-bound-to-build proof:
+`receipts observe --cmd '<curl/query reading the reporter's value>' --expect '/<the value>/' --sha-cmd '<print the live build sha>'`
+(or `--url <https>` for a direct fetch). A `met:true` receipt bound to the build clears the
+deployed-build gate; a `met:false` one records that the symptom is NOT gone. See
+`references/LIVE-RECEIPT.md`.
+
+## The gates
+
+**Verify gates - did you actually prove it works?** (re-runnable at the PR)
+- **G0 Reproduce first.** Observe and record the reported symptom before choosing a
+  fix; that observation is the acceptance test it must later show GONE.
+- **G1 Assert the VALUE.** Read the actual rendered value (not "an element exists,"
+  not a placeholder painting the expected text). Corollary: assert the POSITIVE
+  behavior (the value arrives, the action succeeds) - "the error no longer appears"
+  is a receipt a silencing fix (G12) passes.
+- **G3 Right build.** Verify on the build that carries YOUR commit (sha-match), never
+  a stale deploy. The artifact is code + CONFIG: the right sha under the wrong
+  feature-flag bucket is still the wrong build.
+- **G5 Terminal action.** Drive a multi-step flow to its final action (submit /
+  activate / save), accepting pre-filled defaults; the state seams between steps are
+  where fixed-one-broke-another hides.
+- **G9 Trustworthy green.** The receipt's green must be full-scope (the whole suite on
+  head, not just the changed test), unmasked (no `cmd; echo; tail` that exits 0 and
+  hides a failure), run on a prod-representative engine (real DB / browser, not a
+  substitute that passes where prod fails), and repeatable (a flaky red/green proves
+  nothing - deflake before you trust it).
+- **G11 Don't shoot the referee.** Never delete a failing test, add `.skip`/`.only`,
+  loosen an assertion, or regenerate snapshots to get green - the suite must keep its
+  assertion power. A test that genuinely must go is declared honestly
+  (`test-removal: <why>` in the PR), never removed quietly.
+- **G13 The receipt must exercise the diff.** One narrow receipt does not verify 500
+  changed lines. Keep the diff congruent with the claim: split unrelated changes out,
+  or cover them - changed lines no test executes are UNVERIFIED changes.
+- **G14 The receipt must have teeth.** The enforcer will BREAK your changed lines on
+  purpose (flipped comparisons, nudged numbers, knocked-out returns) and your receipt
+  must go red against each broken variant. Write assertions that pin EXACT values
+  ("=== 6"), never "not the old value" - a receipt that only excludes the old bug
+  passes any new one.
+- **The receipt lock.** If the PR/issue carries `receipt-lock: <sha256>`, the receipt
+  content is APPROVED and pinned - make it pass; do NOT edit, weaken, or replace it
+  (the enforcer blocks the mismatch). If you believe the locked test is wrong, say so
+  and stop: re-approval belongs to whoever owns the contract, not to you.
+
+**Target gates - did you fix the RIGHT thing, all of it?** (your judgment, as you work)
+- **G2 Pin the exact flow.** Apps grow parallel copies of the "same" feature; fix the
+  one the reporter actually used - including the reporter's CONTEXT: role/permissions,
+  tenant, feature-flag bucket, locale. Reproducing as admin when the bug is
+  user-only is the wrong flow.
+- **G4 Right surface.** Land on the surface the reporter SEES; if your change is not
+  visible there, you fixed the wrong one - revert it.
+- **G6 Sweep the twins.** A pattern changed on one surface leaves every sibling
+  carrying the old pattern - the next ticket. Sweep them, or note the divergence.
+- **G7 Verify the dependents.** Your change has consumers; a freshly-pulled change may
+  now route through what you edited (e.g. your input field is now a chart's data
+  source). Enumerate the changed surface's dependents, flag the ones new since you
+  branched, and verify those still work - an integration break is neither your surface
+  (G4) nor a twin (G6).
+- **G8 Fresh base.** Recon and build off origin's CURRENT tip, not a long-lived local
+  checkout; rebase onto the live tip and re-run green before merge, and resolve
+  migration-number / leaf collisions. A green earned on a stale base is green on code
+  that will not ship.
+- **G10 Rollout compatibility.** When a change splits across separately-deployed halves
+  (BE/FE, two services), make the contract backward-compatible or sequence the deploys -
+  the system must not break in the window where one half is new and the other is old. A
+  new endpoint is unreachable until its proxy ships too.
+- **G12 Fix the cause, not the alarm.** A symptom can be SILENCED: the 403 "fixed" by
+  deleting the permission check, the error toast by an empty catch, the rejected input
+  by loosening the validator. Before closing, answer: did I repair the invariant or
+  mute its detector? If the check itself was the bug, say so explicitly in the PR.
+
+G7, G8, and G10 are the multi-dev gates: they only bite because other people push in
+parallel and the codebase changes under you. G11-G14 are the
+optimizing-agent gates: they exist because "make the check green" and "make the code
+right" are different objectives - never optimize the first at the expense of the
+second. Never special-case the test/CI environment in production code
+(`process.env.CI`, `NODE_ENV === 'test'`) - G12 flags it as the gamed-gate shape.
+
+## The honesty ladder (when you cannot clear a gate)
+
+A gate you cannot clear does not become a silent "fixed." Pick the honest outcome:
+- **fixed** - reproduced and observably gone on the right build (the only success).
+- **unverified-reasoned** - real root cause + a test on the path, but you genuinely
+  could not observe it; ship routed to someone who can, not as "fixed."
+- **speculative** - no confirmed cause; loudest flag, human sign-off on high-stakes
+  surfaces (money / auth / contracts / destructive migrations).
+- **reverted** - you backed the change out (e.g. wrong surface).
+
+"I could not verify this" is a respectable outcome. A false "fixed" is not.
+
+## Trajectory memory (learn across fixes)
+
+Memory now **pushes**: a SessionStart hook (`session-memory.mjs`) injects this repo's prior
+scars (failures first, one per surface, capped small) into your context at session start, so
+you arrive already warned even before you query - if you see a "receipts trajectory memory"
+note listing prior dead ends, treat it as the first thing to not repeat. It is on by default
+when a `receipts.config.json` is present (`agent.memory_inject: "off"` disables it). You can
+still pull the full picture yourself:
+
+- **At the start**, `query_trajectory({ surface })` - see what was tried on this
+  surface before and what failed (a prior wrong-surface trap, pre-recorded). From the
+  terminal, `receipts kb recur` shows which surfaces recur and `receipts kb distill`
+  turns the pattern into concrete config suggestions.
+- **At close-out**, `append_trajectory({ repo, surface, symptom, root_cause, outcome,
+  what_worked, what_failed, files })` with the honest outcome - failures included, so
+  the next fix on this surface inherits the lesson (and gets pushed into the next session).
+
+## In-session tripwires (guards that fire before the PR)
+
+Two small PreToolUse guards sit BETWEEN the Stop-hook backstop and the CI enforcer, so a
+weak agent is caught at the moment of the action, not a stop-cycle or a PR later:
+
+- **commit-without-verification** - a `git commit` right after you edited production source
+  with NO test / `receipts observe` run in between is blocked. A commit is a claim it works
+  (G0/G9); run the tests first, then commit.
+- **G11-live referee** - editing a TEST file whose test you just saw FAILING (no green
+  since) is blocked. Fix the code the test caught, not the test.
+
+Both are DENY-by-default with the SAME explicit, greppable escape as the honesty ladder -
+never a silent skip. When the block genuinely does not apply, carry the ack IN the command
+or the edit:
+- `RECEIPTS_ACK='<why>'` prefixed on the command (e.g. `RECEIPTS_ACK='wip checkpoint,
+  tests before PR' git commit ...`), or `--no-verify-receipts` in the commit message, or
+  `RECEIPTS_TRIPWIRE=off` inline;
+- for the referee tripwire, a `test-removal: <why>` note in the edit is the honest,
+  reviewed way to change a test that truly must go.
+
+Turn either off or tune the runner list under `agent.tripwires` in `receipts.config.json`.
+
+## What this skill is NOT
+
+It is not a ticket-triage / worktree / PR / deploy pipeline. It is the verification
+discipline you apply *within* whatever workflow you already use. Bring your own
+pipeline; the gates ride along.
