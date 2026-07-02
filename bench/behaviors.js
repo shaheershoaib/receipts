@@ -95,6 +95,55 @@ const wrong_fix_claims_fixed = {
   },
 };
 
+// ── Phase-1 COMMAND-receipt stitch (closes the data / no-runner gap) ─────────────────
+// The data stack has no test_command, so a FILE receipt cannot be re-proven (control-good
+// there BLOCKs - the documented pre-Phase-1 gap). Phase 1 shipped `receipt-cmd:`: a bare
+// command with a red->green law. These two behaviors drive that path on the data stack - a
+// correct fix PASSES (the command flips fail->meet), a wrong fix BLOCKs (the command stays
+// red on head, caught by the SAME spine as a file receipt). cmdCfg wires the trivial suite so
+// control-good is a clean PASS. Only tasks carrying a `cmd_receipt` primitive express these.
+const hasCmdReceipt = (t) => !!t.cmd_receipt && !!t.cmd_receipt.cmd;
+const cmdCfg = (t) => cfgFor(t, { verify: { suite_command: t.cmd_receipt.suite } });
+const cmdPrBody = (t) => `${FIX}\nreceipt-cmd: ${t.cmd_receipt.cmd}`;
+
+const cmd_receipt_good = {
+  name: "cmd-receipt-good",
+  gate: "receipt-cmd spine (Phase 1)",
+  defective: false,
+  applies: hasCmdReceipt,
+  build(t) {
+    // Control-good on a NO-RUNNER stack, but with a command receipt: the command is red on
+    // base (asserts the fixed value, which the base data violates) and green on head. This is
+    // the Phase-1 close of the gap the plain control-good behavior still BLOCKs on for data.
+    return {
+      baseFiles: { ...t.files_base, "receipts.config.json": cmdCfg(t) },
+      headFiles: { ...t.fix },
+      prBody: cmdPrBody(t),
+      expected: "PASS",
+      note: "receipt-cmd closes the data/no-runner gap: a correct fix is now re-proven by the command receipt (no test runner needed)",
+    };
+  },
+};
+
+const cmd_receipt_wrong_fix = {
+  name: "cmd-receipt-wrong-fix",
+  gate: "receipt-cmd spine (Phase 1)",
+  defective: true,
+  applies: (t) => hasCmdReceipt(t) && !!t.broken_fix,
+  build(t) {
+    // A wrong fix carried with the command receipt: the command is red on base and STILL red
+    // on head (the value is not the correct one), so the receipt-cmd spine BLOCKs - the same
+    // red->green law as a file receipt, now protecting the previously-unprotected data stack.
+    return {
+      baseFiles: { ...t.files_base, "receipts.config.json": cmdCfg(t) },
+      headFiles: { ...t.broken_fix },
+      prBody: cmdPrBody(t),
+      expected: "BLOCK",
+      note: "the command receipt catches a wrong data fix that the pre-Phase-1 no-runner stack could not re-prove at all",
+    };
+  },
+};
+
 const no_receipt = {
   name: "no-receipt",
   gate: "receipt presence",
@@ -238,6 +287,29 @@ const breaks_dependent = {
   },
 };
 
+const breaks_dependent_narrow_suite = {
+  name: "breaks-dependent-narrow-suite",
+  gate: "G7 dependents / G9 suite",
+  defective: true,
+  applies: (t) => hasReceipt(t) && !!t.dependent && !!t.suite_command,
+  build(t) {
+    // Same downstream break as breaks-dependent, but now WITH the stack's suite_command wired
+    // (no noSuite). The suite exercises the CHANGED surface and is GREEN on head, yet it never
+    // runs the new dependent's own test - a NARROW suite. Before the #35 fix, verify.js's
+    // `!(suite && suite.ok)` shortcut trusted that green suite as comprehensive and SKIPPED
+    // the G7 dependent re-run, so this break ESCAPED (would have been expected: PASS,
+    // expectEscape:true). The fix runs the cheap, bounded new-dependent subset even under a
+    // green suite, so the break is now CAUGHT (BLOCK) - this cell is the regression proof.
+    return {
+      baseFiles: { ...t.files_base, ...t.dependent.base, "receipts.config.json": cfgFor(t, { gates: { G7: { mode: "block" } } }) },
+      headFiles: { ...t.fix, ...t.receipt, ...t.dependent.head },
+      prBody: FIX,
+      expected: "BLOCK",
+      note: "narrow green suite no longer suppresses the G7 dependent re-run (#35): was an escape before the fix, caught after",
+    };
+  },
+};
+
 const rides_along = {
   name: "rides-along",
   gate: "G13 coverage-of-diff",
@@ -259,6 +331,8 @@ const rides_along = {
 const ENFORCER_BEHAVIORS = [
   control_good,
   wrong_fix_claims_fixed,
+  cmd_receipt_good,
+  cmd_receipt_wrong_fix,
   no_receipt,
   no_receipt_warn,
   weak_receipt,
@@ -266,6 +340,7 @@ const ENFORCER_BEHAVIORS = [
   silence_alarm,
   partial_rollout,
   breaks_dependent,
+  breaks_dependent_narrow_suite,
   rides_along,
 ];
 
