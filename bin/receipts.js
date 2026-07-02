@@ -15,6 +15,7 @@
  * bare `node bin/receipts.js` and never needs an install step.
  */
 const fs = require("fs");
+const os = require("os");
 const path = require("path");
 const readline = require("readline");
 const { spawnSync } = require("child_process");
@@ -42,6 +43,14 @@ Usage:
                                  [--expect '/<regex>/']   assert stdout/body (else exit-0/2xx only)
                                  [--sha-cmd '<command>' | --sha <id>]   bind to the build (G3)
                                  [--out <file>]   also write the full receipt JSON there
+  receipts kb <sub>            Read the trajectory memory (the append-only JSONL the trajectory-kb
+                               MCP writes). Analytics over what was tried and what happened:
+                                 recur   [--repo <name>] [--json]   recurrence report: group by
+                                         surface_key, count + outcomes histogram + last ts + top
+                                         what_failed line, most-recurring first.
+                                 distill [--repo <name>] [--json]   conservative, rule-based
+                                         suggestions from the data (recurring trouble spots,
+                                         revert-prone repos, flaky signals). Printed, never applied.
 
 Options:
   --dir <path>   Target repo (default: current directory)
@@ -559,6 +568,213 @@ async function observe(rest) {
   process.exit(met ? 0 : 1);
 }
 
+// ─────────────────────────────────────────────────────────────────────────────
+// `receipts kb` - analytics over the trajectory memory (the append-only JSONL the
+// trajectory-kb MCP writes). Read-only: recurrence reporting + conservative, rule-based
+// distillation. Zero deps (Node built-ins only); store resolution is INLINED here (mirrors
+// plugin/mcp/trajectory-kb/store.mjs) so the shipped CLI stays self-contained - it must not
+// require a module outside the npm `files` allowlist.
+// ─────────────────────────────────────────────────────────────────────────────
+
+const KB_HOME_STORE = path.join(os.homedir(), ".claude/mcp-servers/trajectory-kb/data/trajectories.jsonl");
+
+// Where the memory lives: home by default; agent.trajectory_store ("home" | "repo" | explicit
+// path) redirects (resolved against the config's dir on the walk-up from cwd); the
+// RECEIPTS_TRAJECTORY_STORE env var overrides everything - identical rules to the MCP server.
+function kbResolveStore(startDir, env) {
+  env = env || process.env;
+  if (env.RECEIPTS_TRAJECTORY_STORE) return path.resolve(env.RECEIPTS_TRAJECTORY_STORE);
+  let d = path.resolve(startDir || process.cwd());
+  for (let i = 0; i < 40; i++) {
+    let cfg = null;
+    try { cfg = JSON.parse(fs.readFileSync(path.join(d, "receipts.config.json"), "utf8")); }
+    catch (e) { if (e && e.code !== "ENOENT") return KB_HOME_STORE; }
+    if (cfg) {
+      const want = cfg.agent && cfg.agent.trajectory_store;
+      if (!want || want === "home") return KB_HOME_STORE;
+      if (want === "repo") return path.join(d, ".receipts", "trajectories.jsonl");
+      return path.resolve(d, String(want));
+    }
+    const parent = path.dirname(d);
+    if (parent === d) break;
+    d = parent;
+  }
+  return KB_HOME_STORE;
+}
+
+function kbReadEntries(storePath) {
+  let raw;
+  try { raw = fs.readFileSync(storePath, "utf8"); } catch { return []; }
+  const out = [];
+  for (const line of raw.split("\n")) {
+    const t = line.trim();
+    if (!t) continue;
+    try { out.push(JSON.parse(t)); } catch { /* tolerate a corrupt line */ }
+  }
+  return out;
+}
+
+const kbFirst = (v) => {
+  if (Array.isArray(v)) { for (const x of v) { const s = String(x || "").trim(); if (s) return s; } return ""; }
+  return String(v || "").trim();
+};
+// Recurrence groups on the canonical surface_key; entries written before it existed fall
+// back to a normalized surface / first file (the same derivation the server uses).
+function kbSurfaceKey(e) {
+  const explicit = String(e.surface_key || "").trim();
+  if (explicit) return explicit.toLowerCase().replace(/\s+/g, " ");
+  const s = String(e.surface || "").trim();
+  if (s) {
+    const cut = s.search(/\s\(|\s\|\s|\s\+\s|\s->\s/);
+    return (cut >= 0 ? s.slice(0, cut) : s).toLowerCase().replace(/\s+/g, " ");
+  }
+  const f = kbFirst(e.files);
+  return f ? f.toLowerCase().replace(/\s+/g, " ") : "(unknown)";
+}
+function kbSupersededIds(all) {
+  const s = new Set();
+  for (const e of all) if (e && e.supersedes) s.add(e.supersedes);
+  return s;
+}
+
+// Load the live entries for a scope: drop superseded, optionally filter to one repo (case-insensitive).
+function kbLoad(dir, repo) {
+  const all = kbReadEntries(kbResolveStore(dir));
+  const superseded = kbSupersededIds(all);
+  const want = repo ? String(repo).toLowerCase() : null;
+  return all.filter((e) => {
+    if (!e || typeof e !== "object") return false;
+    if (e.id && superseded.has(e.id)) return false;
+    if (want && String(e.repo || "").toLowerCase() !== want) return false;
+    return true;
+  });
+}
+
+// Group live entries by surface_key -> { key, count, outcomes:{...}, last_ts, repos:Set, top_failed }.
+function kbGroupBySurface(entries) {
+  const groups = new Map();
+  for (const e of entries) {
+    const key = kbSurfaceKey(e);
+    let g = groups.get(key);
+    if (!g) { g = { key, count: 0, outcomes: {}, last_ts: "", repos: new Set(), failed: [] }; groups.set(key, g); }
+    g.count++;
+    const oc = String(e.outcome || "?").trim() || "?";
+    g.outcomes[oc] = (g.outcomes[oc] || 0) + 1;
+    const ts = String(e.ts || "");
+    if (ts > g.last_ts) g.last_ts = ts;
+    if (e.repo) g.repos.add(String(e.repo));
+    const f = kbFirst(e.what_failed);
+    if (f) g.failed.push(f);
+  }
+  const rows = [...groups.values()].map((g) => ({
+    surface_key: g.key,
+    count: g.count,
+    outcomes: g.outcomes,
+    last_ts: g.last_ts || null,
+    repos: [...g.repos],
+    top_failed: g.failed[0] || null, // most-recent-first would need a sort; first seen is enough for a hint
+  }));
+  rows.sort((a, b) => b.count - a.count || String(b.last_ts).localeCompare(String(a.last_ts)));
+  return rows;
+}
+
+const kbTrunc = (s, n) => { s = String(s || ""); return s.length > n ? s.slice(0, n - 1) + "…" : s; };
+const kbHist = (o) => Object.entries(o).sort((a, b) => b[1] - a[1]).map(([k, v]) => `${k}:${v}`).join(" ");
+
+function kbRecur(dir, repo, asJson) {
+  const rows = kbGroupBySurface(kbLoad(dir, repo));
+  if (asJson) { process.stdout.write(JSON.stringify({ repo: repo || null, groups: rows }, null, 2) + "\n"); return; }
+  if (!rows.length) {
+    console.log(`receipts kb recur${repo ? ` (repo ${repo})` : ""}: no trajectory entries found (store: ${kbResolveStore(dir)}).`);
+    return;
+  }
+  const out = [`receipts kb recur${repo ? ` - repo ${repo}` : ""} - ${rows.length} surface${rows.length === 1 ? "" : "s"}, most-recurring first:\n`];
+  for (const r of rows) {
+    out.push(`  ${r.count}x  ${kbTrunc(r.surface_key, 52).padEnd(52)}  [${kbHist(r.outcomes)}]  last ${String(r.last_ts || "?").slice(0, 10)}`);
+    if (r.top_failed) out.push(`        └ ${kbTrunc(r.top_failed, 90)}`);
+  }
+  process.stdout.write(out.join("\n") + "\n");
+}
+
+// Conservative, rule-based suggestions from the data. NEVER auto-applied - printed to stdout with
+// the evidence lines so a human decides. Rules (each fires only with real evidence):
+//   R1 surface_key with >= 2 NON-fixed outcomes -> recurring trouble spot: declare a G6 family /
+//      a receipt-cmd probe / a config note.
+//   R2 repo with >= 2 'reverted' -> suggest gates.G12.mode = "block" (fixes keep getting backed out;
+//      the silencing assist should hard-stop, not warn).
+//   R3 >= 2 entries whose what_failed mentions "flaky" -> suggest verify.receipt_runs = 2 (reject
+//      nondeterministic receipts).
+function kbDistill(dir, repo, asJson) {
+  const entries = kbLoad(dir, repo);
+  const suggestions = [];
+
+  // R1 - recurring trouble spots (>=2 non-fixed outcomes on one surface_key).
+  const groups = kbGroupBySurface(entries);
+  for (const g of groups) {
+    const nonFixed = Object.entries(g.outcomes).reduce((n, [oc, c]) => (oc !== "fixed" ? n + c : n), 0);
+    if (nonFixed >= 2) {
+      suggestions.push({
+        rule: "recurring-trouble-spot",
+        subject: g.surface_key,
+        suggestion: `recurring trouble spot: ${g.surface_key} - consider a declared G6 family (a glob + required marker), a receipt-cmd probe that reproduces it, or a config note so the next loop starts warned`,
+        evidence: [
+          `${nonFixed} non-fixed outcome(s) across ${g.count} attempt(s) [${kbHist(g.outcomes)}]`,
+          ...(g.top_failed ? [`e.g. ${kbTrunc(g.top_failed, 140)}`] : []),
+        ],
+      });
+    }
+  }
+
+  // R2 - revert-prone repos (>=2 'reverted').
+  const revByRepo = {};
+  for (const e of entries) if (String(e.outcome || "") === "reverted") revByRepo[e.repo || "(unknown)"] = (revByRepo[e.repo || "(unknown)"] || 0) + 1;
+  for (const [rp, n] of Object.entries(revByRepo)) {
+    if (n >= 2) {
+      suggestions.push({
+        rule: "revert-prone-repo",
+        subject: rp,
+        suggestion: `repo ${rp} has ${n} reverted fixes - consider gates.G12.mode: "block" (fix the cause, not the alarm: hard-stop silencing-shaped diffs instead of only warning)`,
+        evidence: [`${n} entries with outcome "reverted" in ${rp}`],
+      });
+    }
+  }
+
+  // R3 - flaky signal (>=2 entries whose what_failed mentions "flaky").
+  const flaky = entries.filter((e) => (Array.isArray(e.what_failed) ? e.what_failed.join(" ") : String(e.what_failed || "")).toLowerCase().includes("flaky"));
+  if (flaky.length >= 2) {
+    suggestions.push({
+      rule: "flaky-receipts",
+      subject: repo || "(all repos)",
+      suggestion: `${flaky.length} entries mention "flaky" - consider verify.receipt_runs: 2 (a flaky receipt can fake a red or pass a broken fix; N>1 rejects nondeterministic receipts)`,
+      evidence: flaky.slice(0, 3).map((e) => `${e.repo || "?"} / ${kbSurfaceKey(e)}: ${kbTrunc(kbFirst(e.what_failed), 120)}`),
+    });
+  }
+
+  if (asJson) { process.stdout.write(JSON.stringify({ repo: repo || null, suggestions }, null, 2) + "\n"); return; }
+  if (!suggestions.length) {
+    console.log(`receipts kb distill${repo ? ` (repo ${repo})` : ""}: no actionable pattern yet (rules need >=2 corroborating entries). Store: ${kbResolveStore(dir)}.`);
+    return;
+  }
+  const out = [`receipts kb distill${repo ? ` - repo ${repo}` : ""} - ${suggestions.length} suggestion${suggestions.length === 1 ? "" : "s"} (rule-based; NOT auto-applied):\n`];
+  for (const s of suggestions) {
+    out.push(`  [${s.rule}] ${s.suggestion}`);
+    for (const ev of s.evidence) out.push(`      - ${ev}`);
+    out.push("");
+  }
+  process.stdout.write(out.join("\n").replace(/\n+$/, "\n"));
+}
+
+function kb(o, rest) {
+  const dir = path.resolve(o.dir || process.cwd());
+  const sub = firstPositional(rest);
+  const repo = flagVal(rest, "--repo");
+  const asJson = rest.includes("--json");
+  if (sub === "recur") return kbRecur(dir, repo, asJson);
+  if (sub === "distill") return kbDistill(dir, repo, asJson);
+  console.error("usage: receipts kb <recur|distill> [--repo <name>] [--json]");
+  process.exit(2);
+}
+
 function parseArgs(argv) {
   const o = { _: [] };
   for (let i = 0; i < argv.length; i++) {
@@ -587,6 +803,7 @@ async function main() {
   if (cmd === "replay") return replay(rest);
   if (cmd === "explain") return explain(rest);
   if (cmd === "observe") return observe(rest);
+  if (cmd === "kb") return kb(o, rest);
   console.error(`Unknown command: ${cmd}\n`);
   process.stdout.write(HELP);
   process.exit(1);
