@@ -55,6 +55,20 @@ test("receipts replay re-runs a receipt and confirms the verdict reproduces", ()
   assert.match(rep.stdout, /REPRODUCED/);
 });
 
+test("receipts replay reconstructs a command receipt and reproduces the verdict", () => {
+  // A command-receipt-only PR: red on base (flag BAD), green on head (flag GOOD), no test runner.
+  const r = makeRepo({
+    baseFiles: { "flag.txt": "BAD\n", "receipts.config.json": cfg({ verify: { test_command: "REPLACE_ME" } }) },
+    headFiles: { "flag.txt": "GOOD\n" },
+  });
+  const cmd = `node -e "process.exit(require('fs').readFileSync('flag.txt','utf8').trim()==='GOOD'?0:1)"`;
+  const out = tmpReceipt();
+  run(["verify", "--json", "--base", r.base, "--head", r.head, "--repo", r.dir, "--pr-body", `closes #1\nreceipt-cmd: ${cmd}`, "--receipt-out", out]);
+  const rep = run(["replay", out, "--repo", r.dir]);
+  assert.equal(rep.code, 0, rep.stdout + rep.stderr);
+  assert.match(rep.stdout, /REPRODUCED/);
+});
+
 test("receipts explain summarizes a receipt artifact", () => {
   const r = fixRepo();
   const out = tmpReceipt();
