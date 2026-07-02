@@ -40,6 +40,26 @@ const NAV = tu("mcp__chrome__navigate", { url: "https://acme-staging.vercel.app/
 const SHOT = tu("mcp__chrome__screenshot");
 const MERGE = tu("mcp__github__merge_pull_request", { pull_number: 1 });
 
+// A live receipt as `receipts observe` emits it.
+const liveReceipt = (over = {}) => ({
+  schema: "receipts/live-receipt@1",
+  probe: { kind: "cmd", spec: "curl -fsS https://acme-staging.vercel.app/api/orders/42" },
+  expect: "\"status\":\\s*\"paid\"",
+  observed: '{"status":"paid"}',
+  met: true,
+  artifact: { kind: "deploy-sha", id: "4e3c1a9", source: "gh api ...deployments" },
+  generated_at: "2026-07-01T00:00:00.000Z",
+  ...over,
+});
+// The REAL shape the marker lands in: `receipts observe`'s stdout captured into a Bash
+// tool_result's text, then JSON-stringified into the JSONL line (so the marker's own JSON is
+// escaped in the raw line). This is the extraction the hook must survive.
+const liveResult = (over = {}) => ({
+  type: "user",
+  message: { role: "user", content: [ { type: "tool_result", tool_use_id: "toolu_obs",
+    content: [ { type: "text", text: "LIVE-RECEIPT: " + JSON.stringify(liveReceipt(over)) + "\n" } ] } ] },
+});
+
 const blocks = (events, opts) => {
   const d = runHook(events, opts);
   assert.ok(d, "expected a block decision, hook was silent");
@@ -193,4 +213,68 @@ test("exit-tag variants ('unverified reasoned', \"won't  fix\") still nudge the 
     tu("mcp__linear__update_issue", { comment: "closing as won't  fix per triage" }),
   ]);
   assert.match(wontFix.reason, /append_trajectory/, "whitespace-run in won't fix still counts");
+});
+
+// -------------------------------------------------- live receipts (Phase 2 evidence)
+
+test("a met:true, build-bound live receipt in the window satisfies binding+observation (silent)", () => {
+  // The marker is embedded in a realistic JSONL-stringified Bash tool_result - the hook must
+  // extract it from there, not from a tool_use.
+  silent([MERGE, liveResult(), tu("mcp__linear__update_issue", { state: "Done" })]);
+});
+
+test("a met:FALSE live receipt is a FAILED observation -> block with the precise message", () => {
+  const d = blocks([MERGE, liveResult({ met: false }), tu("mcp__linear__update_issue", { state: "Done" })]);
+  assert.match(d.reason, /FAILED observation/, "the block names it a failed observation, not 'no evidence'");
+  assert.match(d.reason, /not gone/i);
+});
+
+test("a live receipt with artifact.kind 'none' does NOT satisfy the binding (block)", () => {
+  // met:true but unbound - it cannot prove it ran against the build that carries the commit (G3).
+  const d = blocks([MERGE, liveResult({ artifact: { kind: "none", id: null, source: null } }),
+    tu("mcp__linear__update_issue", { state: "Done" })]);
+  assert.equal(d.decision, "block");
+});
+
+test("a live receipt BEFORE the shipping merge is out of window (block)", () => {
+  const d = blocks([liveResult(), MERGE, tu("mcp__linear__update_issue", { state: "Done" })]);
+  assert.equal(d.decision, "block");
+});
+
+test("STRICT mode (agent.evidence: live-receipt): heuristic navigate+screenshot no longer satisfies", () => {
+  const d = blocks(
+    [MERGE, NAV, SHOT, tu("mcp__linear__update_issue", { state: "Done" })],
+    { projectConfig: { version: 1, agent: { evidence: "live-receipt" } } },
+  );
+  assert.match(d.reason, /receipts observe/, "the block tells the agent the exact command to run");
+  assert.match(d.reason, /machine-validated/i);
+});
+
+test("STRICT mode: a valid live receipt satisfies the gate (silent)", () => {
+  silent(
+    [MERGE, liveResult(), tu("mcp__linear__update_issue", { state: "Done" })],
+    { projectConfig: { version: 1, agent: { evidence: "live-receipt" } } },
+  );
+});
+
+test("STRICT mode: a met:false live receipt blocks with the failed-probe message", () => {
+  const d = blocks(
+    [MERGE, liveResult({ met: false }), tu("mcp__linear__update_issue", { state: "Done" })],
+    { projectConfig: { version: 1, agent: { evidence: "live-receipt" } } },
+  );
+  assert.match(d.reason, /met:false|NOT gone/i);
+});
+
+test("default mode is unchanged: heuristic navigate+screenshot still satisfies with no live receipt", () => {
+  // Backward-compat guard: the Phase-1 behavior (already covered above) must not regress when the
+  // new evidence path exists but no live receipt and no strict config are present.
+  silent([MERGE, NAV, SHOT, tu("mcp__linear__update_issue", { state: "Done" })]);
+});
+
+test("a live receipt embedded in a JSONL-stringified tool_result is detected (marker extraction)", () => {
+  // Explicitly assert the extraction survives the double-encoding: build the entry, round-trip it
+  // through JSON (as the JSONL file does), and confirm the escaped marker still clears the gate.
+  const entry = liveResult();
+  const roundTripped = JSON.parse(JSON.stringify(entry)); // exactly what readFileSync->JSON.parse yields
+  silent([MERGE, roundTripped, tu("mcp__linear__update_issue", { state: "Done" })]);
 });

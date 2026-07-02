@@ -130,6 +130,80 @@ function walkToolUses(obj, out) {
 const sget = (inp, key) => (inp && typeof inp === "object" && !Array.isArray(inp) ? inp[key] : undefined);
 const txt = (inp) => (typeof inp === "string" ? inp : JSON.stringify(inp));
 
+// ---------------------------------------------------------------- live receipts
+//
+// `receipts observe` prints a single `LIVE-RECEIPT: {json}` line; it lands in the transcript
+// inside a Bash tool_result's output text, which is JSON-stringified into the JSONL line - so
+// the marker's own JSON is ESCAPED in the raw line (`LIVE-RECEIPT: {\"schema\":...}`). Rather
+// than unescape by hand, we parse the JSONL line to an object first (main() already does), then
+// walk every STRING value: after JSON.parse the tool_result text is un-escaped, so the string
+// holds the literal `LIVE-RECEIPT: {"schema":...}` and the embedded JSON parses directly.
+const LIVE_MARKER = "LIVE-RECEIPT:";
+
+// Collect every string value reachable in a parsed JSONL entry (tool_result text, tool_use
+// input, a plain content string - wherever the marker landed).
+function walkStrings(obj, out) {
+  if (typeof obj === "string") { out.push(obj); return; }
+  if (Array.isArray(obj)) { for (const v of obj) walkStrings(v, out); return; }
+  if (obj && typeof obj === "object") for (const v of Object.values(obj)) walkStrings(v, out);
+}
+
+// From the first `{` at or after `start`, return the index just past the matching `}` (brace
+// depth, string/escape aware so braces inside JSON string values do not miscount). -1 if none.
+function jsonObjectEnd(s, start) {
+  let i = start;
+  while (i < s.length && s[i] !== "{") i++;
+  if (i >= s.length) return -1;
+  let depth = 0, inStr = false, esc = false;
+  for (; i < s.length; i++) {
+    const c = s[i];
+    if (inStr) {
+      if (esc) esc = false;
+      else if (c === "\\") esc = true;
+      else if (c === '"') inStr = false;
+    } else if (c === '"') inStr = true;
+    else if (c === "{") depth++;
+    else if (c === "}") { depth--; if (depth === 0) return i + 1; }
+  }
+  return -1;
+}
+
+// Every valid live receipt embedded in one (un-escaped) string. A string may carry more than one
+// marker (batched output); each is brace-matched from its `{` and JSON.parse'd. A malformed or
+// non-object payload is skipped (fail safe - a stray "LIVE-RECEIPT:" in prose is not evidence).
+function liveReceiptsInString(s, out) {
+  if (typeof s !== "string" || !s.includes(LIVE_MARKER)) return;
+  let from = 0;
+  for (;;) {
+    const mk = s.indexOf(LIVE_MARKER, from);
+    if (mk < 0) return;
+    const objStart = mk + LIVE_MARKER.length;
+    const end = jsonObjectEnd(s, objStart);
+    if (end < 0) return;
+    const chunk = s.slice(s.indexOf("{", objStart), end);
+    try {
+      const r = JSON.parse(chunk);
+      if (r && typeof r === "object" && r.schema === "receipts/live-receipt@1") out.push(r);
+    } catch { /* not our JSON - skip */ }
+    from = end;
+  }
+}
+
+// All live receipts in one parsed JSONL entry (across every string value it contains).
+function liveReceiptsInEntry(entry) {
+  const strings = [];
+  walkStrings(entry, strings);
+  const out = [];
+  for (const s of strings) liveReceiptsInString(s, out);
+  return out;
+}
+
+// A live receipt is SATISFYING when its probe met its expectation AND it is bound to the build
+// (an artifact.kind other than "none"): it is the by-value read bound to the build, so it clears
+// BOTH the deploy-binding and the observation at once. A met:false receipt is evidence the
+// symptom is NOT gone (a failed observation), never a satisfying one.
+const liveReceiptSatisfies = (r) => !!(r && r.met === true && r.artifact && r.artifact.kind && r.artifact.kind !== "none");
+
 // ------------------------------------------------------- verification-gate pieces
 
 function makeMatchers(cfg) {
@@ -203,7 +277,14 @@ function isObservation(name, inp, m) {
   return false;
 }
 
-function verificationGate(seq, cfg, m) {
+// The one command a blocked agent runs to produce satisfying evidence (shown in strict mode
+// and appended as the machine-checkable path in the default message).
+const OBSERVE_HOWTO =
+  "receipts observe --cmd '<curl/query that reads the reporter's value on the DEPLOYED build>' " +
+  "--expect '/<the value that proves the symptom is gone>/' " +
+  "--sha-cmd '<command printing the live build's sha>'";
+
+function verificationGate(seq, cfg, m, liveIdxs) {
   // Stand down when THIS repo has no URL-deployed build to observe: an explicit
   // library/CLI/artifact build block, or G1/G3 disabled. A config with NO build block
   // (an agent-home) keeps enforcing - the split topology's code repos deploy elsewhere.
@@ -212,6 +293,9 @@ function verificationGate(seq, cfg, m) {
     const explicitNoUrl = ["none", "ci-artifact"].includes(cfg.build.sha_source);
     if (explicitNoUrl || !(gateOn(gates, "G1") && gateOn(gates, "G3"))) return null;
   }
+  // Opt-in strictness: only a valid live receipt satisfies the gate (the prose/pattern
+  // heuristics no longer count). Default (key absent) = current behavior.
+  const strict = ((cfg.agent || {}).evidence || "").toLowerCase() === "live-receipt";
 
   let lastCloseout = -1;
   let lastCloseoutDowngraded = false;
@@ -229,14 +313,57 @@ function verificationGate(seq, cfg, m) {
   if (lastCloseout < 0) return null; // nothing was claimed fixed this session
   if (lastCloseoutDowngraded) return null; // honestly flagged as unverified -> allowed
 
-  // Require, AFTER the merge that shipped THIS fix and at/before the close-out, BOTH a
-  // deploy-binding AND an observation. The relevant merge is the LAST one BEFORE the
-  // close-out - a later merge belongs to other work and must not retroactively
-  // invalidate an already-verified close-out.
+  // Require, AFTER the merge that shipped THIS fix and at/before the close-out, evidence the
+  // symptom is gone on the deployed build. The relevant merge is the LAST one BEFORE the
+  // close-out - a later merge belongs to other work and must not retroactively invalidate an
+  // already-verified close-out.
   const floor = Math.max(-1, ...mergeIdxs.filter((x) => x < lastCloseout));
-  const hasBinding = bindingIdxs.some((e) => floor < e && e <= lastCloseout);
-  const hasObs = obsIdxs.some((e) => floor < e && e <= lastCloseout);
+  const inWindow = (e) => floor < e && e <= lastCloseout;
+
+  // Live receipts in the window: a met:true + build-bound one is the by-value read bound to the
+  // build (clears BOTH binding and observation); a met:false one is a FAILED observation.
+  const winLive = (liveIdxs || []).filter((L) => inWindow(L.i)).map((L) => L.receipt);
+  const hasSatisfyingLive = winLive.some(liveReceiptSatisfies);
+  const hasFailedLive = winLive.some((r) => r && r.met === false);
+  if (hasSatisfyingLive) return null; // machine-validated, bound to the build -> allowed
+
+  // STRICT: nothing but a valid live receipt clears the gate.
+  if (strict) {
+    const why = hasFailedLive
+      ? "the live receipt(s) this session recorded met:false - the probe did NOT meet its " +
+        "expectation, so the reporter's symptom is NOT gone on the deployed build."
+      : (winLive.length
+        ? "the live receipt(s) this session recorded are not build-bound (artifact.kind " +
+          "\"none\") - an unbound observation cannot prove it ran against the build that " +
+          "carries your commit (G3)."
+        : "this session recorded NO live receipt after the merge.");
+    return (
+      "A ticket was moved to a fixed status, but " + why + " This project requires " +
+      "machine-validated deployed-build evidence (agent.evidence: \"live-receipt\"). Produce it " +
+      "with ONE command, then stop:\n  " + OBSERVE_HOWTO + "\n" +
+      "It runs the probe against the LIVE build, captures the output, checks it MEETS the " +
+      "expectation (met:true), and binds it to the build sha - and prints a LIVE-RECEIPT line " +
+      "this gate reads. If you genuinely cannot observe it, re-open the close-out with an " +
+      "'unverified-reasoned: <why unobservable>' tag instead of claiming fixed."
+    );
+  }
+
+  // DEFAULT (backward compatible): the heuristics still satisfy the gate.
+  const hasBinding = bindingIdxs.some(inWindow);
+  const hasObs = obsIdxs.some(inWindow);
   if (hasBinding && hasObs) return null; // bound AND observed -> allowed
+
+  // A met:false live receipt is the most precise thing we can say: the observation FAILED.
+  if (hasFailedLive && !hasObs) {
+    return (
+      "A ticket was moved to a fixed status, but the live receipt this session recorded " +
+      "met:false - the probe ran against the deployed build and did NOT meet its expectation, " +
+      "so the reporter's symptom is NOT gone. This is a FAILED observation, not a verified fix. " +
+      "Fix the cause, re-run `receipts observe ...` until it reports met:true (bound to the " +
+      "build sha), then close the ticket - or, if the receipt is wrong, correct its --expect. " +
+      "Do not close on a failed observation."
+    );
+  }
 
   const gap = hasBinding && !hasObs
     ? "you reached the deployed build (a navigate / get_deployment) but never OBSERVED " +
@@ -254,11 +381,12 @@ function verificationGate(seq, cfg, m) {
     "drive the reporter's exact flow on the deployed app (a real browser on your " +
     "staging / production URL), then SCREENSHOT it and read the rendered value; " +
     "or (b) DATA/seed ticket -> run a by-value staging query (DB proxy / API) and a " +
-    "get_deployment sha-confirm; or (c) if you truly cannot observe it (NOT 'my first " +
-    "try failed', and NEVER for a surface reachable by clicking a visible button), " +
-    "re-open the close-out note with an explicit 'unverified-reasoned: <why " +
-    "unobservable + the unit test covering it>' tag and route it to the reporter. " +
-    "Cite the observed value in the close-out note. Then stop."
+    "get_deployment sha-confirm; or (c) run ONE command that does both and emits " +
+    "machine-checkable evidence this gate reads: " + OBSERVE_HOWTO + "; or (d) if you truly " +
+    "cannot observe it (NOT 'my first try failed', and NEVER for a surface reachable by " +
+    "clicking a visible button), re-open the close-out note with an explicit " +
+    "'unverified-reasoned: <why unobservable + the unit test covering it>' tag and route it " +
+    "to the reporter. Cite the observed value in the close-out note. Then stop."
   );
 }
 
@@ -339,17 +467,26 @@ async function main() {
   try { lines = fs.readFileSync(tp, "utf8").split("\n"); }
   catch { return; }
 
-  // ONE parse of the transcript feeds both checks.
+  // ONE parse of the transcript feeds every check: tool_uses (ordered in `seq`) AND the
+  // live-receipt markers embedded in tool_result output. A line's live receipts are anchored
+  // at the current seq length, so they sort into seq-index space RIGHT AFTER the tool_uses seen
+  // so far (which includes the Bash `observe` call that emitted them) - the same index space the
+  // merge-floor windowing uses.
   const seq = [];
+  const liveIdxs = [];
   for (const line of lines) {
     const t = line.trim();
     if (!t) continue;
-    try { walkToolUses(JSON.parse(t), seq); } catch { /* skip a corrupt line */ }
+    let entry;
+    try { entry = JSON.parse(t); } catch { continue; /* skip a corrupt line */ }
+    try { walkToolUses(entry, seq); } catch { /* fail safe */ }
+    try { for (const r of liveReceiptsInEntry(entry)) liveIdxs.push({ i: seq.length, receipt: r }); }
+    catch { /* fail safe */ }
   }
   if (!seq.length) return; // no structured tool calls -> fail safe
 
   const reasons = [];
-  try { const r = verificationGate(seq, cfg, m); if (r) reasons.push(r); } catch { /* fail safe */ }
+  try { const r = verificationGate(seq, cfg, m, liveIdxs); if (r) reasons.push(r); } catch { /* fail safe */ }
   try { const r = trajectoryReminder(seq, cfg, m); if (r) reasons.push(r); } catch { /* fail safe */ }
   if (reasons.length)
     process.stdout.write(JSON.stringify({ decision: "block", reason: reasons.join("\n\n--- also ---\n\n") }) + "\n");
