@@ -175,7 +175,11 @@ function buildConfig(d, a) {
       verify_against: a.verify_against || (d.platform !== "none" ? "staging" : "none"),
     },
     verify: {
-      test_command: a.test_command || d.test_command || "REPLACE_ME: how to run ONE acceptance test (use {test} for the path)",
+      // No test runner detected: don't invent a fake test_command - point at the command-receipt
+      // grammar instead (a `receipt-cmd:` line IS the receipt for a runner-less API / pipeline /
+      // CLI / infra repo). If you DO have a runner, replace this with how to run one test.
+      test_command: a.test_command || d.test_command ||
+        "REPLACE_ME: no test runner detected. If you have one, put how to run ONE test here (use {test} for the path). If you don't, delete this and use `receipt-cmd: <command>` lines in each PR body instead (see spec/RECEIPT.md - a curl/query/plan-diff, red on base + green on head).",
       suite_command: d.suite_command || null,
       live_drive: null,
     },
@@ -385,6 +389,10 @@ function replay(rest) {
   let body = "";
   if (rec.is_fix_claim) body += "closes #1";
   if (rec.work_type) body += (body ? "\n" : "") + "work-type: " + rec.work_type;
+  // Reconstruct the command receipts so replay re-runs the same `receipt-cmd:` lines (a file
+  // receipt is rediscovered from the diff; a command receipt lived only in the PR body).
+  for (const c of rec.command_receipts || [])
+    body += (body ? "\n" : "") + "receipt-cmd: " + c.command + (c.expect != null ? ` expect:/${c.expect}/` : "");
   const a = [ENFORCER, "--json", "--base", rec.base, "--head", rec.head, "--repo", repo];
   if (body) a.push("--pr-body", body);
   const r = spawnSync(process.execPath, a, { encoding: "utf8" });

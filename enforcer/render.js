@@ -44,6 +44,10 @@ function renderMarkdown(rec) {
     const tests = Array.isArray(r.tests) && r.tests.length ? ` — ${r.tests.map((t) => `\`${cell(t)}\``).join(", ")}` : "";
     out.push(`| receipt | red on base: ${flag(r.red)} · green on head: ${flag(r.green)}${r.pinned ? " · pinned" : ""}${tests} |`);
   }
+  if (Array.isArray(r.command_receipts) && r.command_receipts.length) {
+    const cr = r.command_receipts.map((c) => `\`${cell(c.command)}\`${c.expect != null ? ` expect:\`/${cell(c.expect)}/\`` : ""}`).join(", ");
+    out.push(`| receipt-cmd | ${cr} |`);
+  }
   const trigger = r.is_fix_claim ? "fix-claim" : (r.work_type ? `work-type: ${r.work_type}` : "unclaimed");
   out.push(`| trigger | ${trigger}${r.strict ? " (strict: any-source-change)" : ""} |`);
   out.push(`| config | read from ${r.config_source || "?"}${r.config_source === "head" ? " ⚠️ (first-setup: the PR controlled its own gate config)" : ""} |`);

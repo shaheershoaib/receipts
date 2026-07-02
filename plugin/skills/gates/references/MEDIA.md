@@ -23,7 +23,9 @@ answer them for your project:
 5. **Build / artifact** - what does "the build that carries your commit" mean? (G3)
 6. **Twin** - where is the same pattern re-implemented? (G6)
 7. **Dependent** - what consumes what you changed? (G7)
-8. **Receipt** - what automated test re-proves it, red-before / green-after? (G0)
+8. **Receipt** - what automated test *or re-runnable command* re-proves it, red-before /
+   green-after? (G0) A runner-less medium answers this with a `receipt-cmd:` (a query, a curl,
+   a plan-diff), not a test file.
 9. **Compatibility boundary** - where do producer and consumer update independently? (G10)
 
 ## The medium-varying gates, restated as invariants
@@ -47,18 +49,24 @@ fresh base, G9 trustworthy green) are already medium-agnostic in wording; only t
 
 ## The map
 
+The **Receipt (G0)** column names both forms: a *test file* (run via `verify.test_command`)
+where a runner fits, and an executable *command receipt* (a `receipt-cmd:` line in the PR
+body - see `RECEIPT.md`) where the observable is read by running a command, not a framework.
+The command receipt is red-on-base / green-on-head just like a test; it is how the runner-less
+mediums (API, data, CLI, infra) carry a receipt at all.
+
 | Medium | Surface (G4) | Value + observe-by (G1) | Terminal action (G5) | Build / artifact (G3) | Receipt (G0) |
 |---|---|---|---|---|---|
 | Web frontend | the page/route the user opens | DOM text / `input.value` / aria state, via a browser (Playwright, headless, preview) | submit/save in the UI | the deployed bundle (deploy sha) | component/e2e test (jest+RTL, Playwright, Cypress) |
-| API / service (REST/GraphQL/gRPC) | the endpoint + its response contract | response status/body/field, via an HTTP/gRPC client | the write request that persists (POST/PUT/mutation) | the deployed service (sha via `/health` or the deployments API) | a request/integration test |
+| API / service (REST/GraphQL/gRPC) | the endpoint + its response contract | response status/body/field, via an HTTP/gRPC client | the write request that persists (POST/PUT/mutation) | the deployed service (sha via `/health` or the deployments API) | a request/integration test, or `receipt-cmd:` a curl asserting status/body (`curl -fsS …` - `-f` fails on non-2xx - plus a body match via `expect:/…/`; keep it ONE command, no pipes/substitution, so the exit is honest) |
 | Library / package / SDK | the public API (exported fns/types) | return value / thrown error / mutated state, by calling it | the call that performs the operation | the built/published package (version + artifact) | a unit test against the public API |
-| CLI tool | the command + stdout/stderr/exit/files | stdout, exit code, files written, by running it | the subcommand that performs the effect | the built binary (`--version`) | run-and-assert (invoke, check output/exit) |
+| CLI tool | the command + stdout/stderr/exit/files | stdout, exit code, files written, by running it | the subcommand that performs the effect | the built binary (`--version`) | run-and-assert - a unit test, or `receipt-cmd:` the invocation itself (`mytool … expect:/<expected stdout>/`) |
 | Mobile app (iOS/Android) | the screen | the on-screen element's value, via XCUITest / Espresso / a simulator | the tap that commits | the installed build (build number) | a UI / instrumentation test |
 | Desktop GUI (Electron/native) | the window/view | the control's state, via UI automation | the action control | the packaged app version | a UI test |
-| Data / ETL pipeline | the output dataset/table/metric | row counts, column values, aggregates, schema, by querying the output | the job run that writes the output | the deployed DAG / job version | a data test (dbt test, Great Expectations, an assertion query) |
+| Data / ETL pipeline | the output dataset/table/metric | row counts, column values, aggregates, schema, by querying the output | the job run that writes the output | the deployed DAG / job version | a data test (dbt test, Great Expectations), or `receipt-cmd:` an assertion query (`… "select count(*) from t where <invariant violated>" expect:/^0$/`) |
 | ML model / pipeline | the prediction/metric on a pinned eval | a metric (accuracy/F1/loss) on a fixed eval set, or a specific prediction | the eval / scoring step | the model artifact version + serving deploy | an eval test on a pinned dataset (regression = red) |
-| Infra as Code (Terraform/k8s/Helm) | the provisioned resource's actual state | the resource attribute (a rule, a replica count), via a plan diff / cloud read-back | `apply` (convergence) | the applied state (state version / manifest) | a plan/policy test (terraform plan assert, conftest/OPA) |
-| Database / migration | the schema + data after migrating | column type/existence, row values incl. legacy rows, by querying | the migration `apply` (and rollback) | the migrated DB at the deployed sha | a migration test on a fixture incl. legacy data |
+| Infra as Code (Terraform/k8s/Helm) | the provisioned resource's actual state | the resource attribute (a rule, a replica count), via a plan diff / cloud read-back | `apply` (convergence) | the applied state (state version / manifest) | a plan/policy test (conftest/OPA), or `receipt-cmd:` the plan-diff itself (`terraform plan -detailed-exitcode` - exit 0 = converged) |
+| Database / migration | the schema + data after migrating | column type/existence, row values incl. legacy rows, by querying | the migration `apply` (and rollback) | the migrated DB at the deployed sha | a migration test on a fixture, or `receipt-cmd:` a query asserting the migrated schema/rows (incl. legacy) via `expect:/…/` |
 | Smart contract | on-chain state after a tx | balances / storage, via view calls | the state-changing tx | the deployed contract (address/bytecode) | a contract test (Foundry/Hardhat), red->green |
 | Browser extension | the injected UI / the modified page | the injected DOM/behavior, via a browser with the extension loaded | the action it triggers | the packaged extension version | an e2e with the extension loaded |
 | Embedded / firmware | device behavior (a pin/signal/serial line) | the signal / register / output, via hardware-in-the-loop or an emulator | the command that actuates | the flashed image version | an on-target / emulator test |
