@@ -19,6 +19,12 @@ const ms = (n) => (n == null ? "-" : n >= 1000 ? (n / 1000).toFixed(1) + "s" : n
 const flag = (b) => (b ? "✅" : "❌");
 // Markdown-table-safe cell: pipes and newlines break the row.
 const cell = (s) => String(s == null ? "" : s).replace(/\|/g, "\\|").replace(/\r?\n/g, " ");
+// Mention-safe text for the NON-code-span contexts (reason, warnings): `reason`/warning
+// strings carry file names and config values from the PR under review, so a crafted
+// `@user`/`@team` there would fire a live GitHub notification from the bot's comment.
+// A zero-width space after `@` breaks the mention match without visibly altering the
+// text. Code-span contexts (backticked commands/files) are already inert - leave them.
+const noMention = (s) => String(s == null ? "" : s).replace(/@(?=\w)/g, "@\u200b");
 
 function renderMarkdown(rec) {
   const r = rec || {};
@@ -26,7 +32,7 @@ function renderMarkdown(rec) {
   const icon = VERDICT_ICON[r.verdict] || "🧾";
   out.push(`## ${icon} receipts: ${r.verdict || "?"}`);
   out.push("");
-  if (r.reason) out.push(`**${cell(r.reason)}**`);
+  if (r.reason) out.push(`**${noMention(cell(r.reason))}**`);
   if (r.detail) out.push("", "```", String(r.detail).trim(), "```");
   out.push("");
 
@@ -81,7 +87,7 @@ function renderMarkdown(rec) {
   const warns = Array.isArray(r.warnings) ? r.warnings : [];
   if (warns.length) {
     out.push("### Warnings");
-    for (const w of warns) out.push(`- ${cell(w)}`);
+    for (const w of warns) out.push(`- ${noMention(cell(w))}`);
     out.push("");
   }
 

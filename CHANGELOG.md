@@ -7,8 +7,9 @@
   repo-relative absolute imports (`a.b.c` -> `a/b/c.py` / `__init__.py`), relative imports
   (`from ..shared import x`), from-import submodule forms, alias/comma lists - with
   new-file AND new-edge detection and co-located test mapping (`test_mod.py` /
-  `mod_test.py` / `tests/test_mod.py`). src/-layouts and namespace packages honestly
-  degrade to `gates.G7.graph`. Venv/site-packages are never consumers.
+  `mod_test.py` / `tests/test_mod.py`). src/-layouts and namespace packages are not
+  resolved by the built-in scan - those repos declare `gates.G7.graph`. Venv/site-packages
+  are never consumers.
 - **Monorepo support: per-package runners, one policy.** Nested `receipts.config.json`
   files (read from the trusted BASE commit, same posture as the root) contribute their
   `verify` block for the tests under them: the receipt's red/green runs per group with the
@@ -107,6 +108,30 @@
   dance restored the original SHA, not the original BRANCH - so a commit made after a
   local verify silently missed the branch (found the hard way: an amend after a verify
   left a PR pointing at the pre-amend commit). The enforcer now restores the branch.
+- **Stop hook: a decorated status value no longer evades close-out detection.** The
+  anchored match required the configured status to be the ENTIRE JSON string value, so a
+  leading emoji/symbol pill (`"[x] Pending Retest"`) or a trailing note
+  (`"Pending Retest - awaiting tester"`) silently disabled the verification gate. The
+  status now matches at the start of the value (non-word prefix allowed, suffix allowed);
+  a status mentioned mid-prose still does not fire.
+- **Stop hook: hyphen/space-tolerant exit tags actually work.** The `[- ]?` / `\s+`
+  transforms in the trajectory reminder's exit-disposition regex operated on escape
+  sequences the JS escaper never emits (a Python-port artifact), so "unverified reasoned"
+  and "won't  fix" variants missed the nudge. The transforms now target the literals.
+- **PR-comment report: `reason`/warning text cannot fire live @-mentions.** Both render
+  outside code spans and interpolate PR-controlled text (file names, config values); a
+  crafted `@user` would have notified via the bot's comment. A zero-width space now breaks
+  the mention without altering the visible text.
+- **G6: a comment right after a colon is stripped like any other comment.** The URL guard
+  protected ANY `://`, so `x: string //note` and `onPage://TODO: wire Pagination` leaked
+  comment text into the tokenizer and a twin could read as having adopted an affordance it
+  only mentions in a comment. Only known URL schemes (`https://`, `wss://`, ...) survive.
+- **G7 Python: a from-import name guess no longer fabricates a phantom dependent.**
+  `from pkg.mod import thing` guessed `pkg/mod/thing` as a module path even when
+  `pkg/mod.py` exists (so `thing` is a symbol); an unrelated file at that path made its
+  importer a false dependent - re-running (or in block mode, failing) the wrong tests.
+  The guess is now dropped when the parent module file exists in the tree; real
+  submodule imports (`from myapp import models`) are unaffected.
 
 ### Changed
 - **Test/suite commands now default to a 20-minute timeout** (`verify.command_timeout_ms`;

@@ -189,3 +189,40 @@ test("unsupported stack with no graph -> not computed (honest, no false all-clea
   assert.equal(r.supported, false);
   assert.match(r.note, /not computed/i);
 });
+
+// ------------------------- python from-import guesses: phantom-dependent guard
+
+test("pyImportScan separates definite keys from from-import name guesses", () => {
+  const { pyImportScan } = require("../g7.js");
+  const { keys, guesses } = pyImportScan("consumer.py", "from pkg.mod import thing\nimport pkg.other\n");
+  assert.ok(keys.includes("pkg/mod"));
+  assert.ok(keys.includes("pkg/other"));
+  assert.ok(guesses.includes("pkg/mod/thing"));
+  assert.ok(!keys.includes("pkg/mod/thing"));
+});
+
+test("a from-import guess is dropped when the parent module FILE exists (phantom dependent)", () => {
+  // `from pkg.mod import thing` where pkg/mod.py exists: the import resolves to the
+  // module file and `thing` is a symbol - an unrelated pkg/mod/thing.py changing must
+  // NOT make consumer.py a dependent.
+  const baseFiles = { "pkg/mod.py": "def thing():\n    return 1\n", "pkg/mod/thing.py": "X = 1\n" };
+  const headFiles = { ...baseFiles, "consumer.py": "from pkg.mod import thing\n" };
+  const pick = (ref) => (ref === "b" ? baseFiles : headFiles);
+  const r = computeNewDependents({
+    base: "b", head: "h", changedSource: ["pkg/mod/thing.py"],
+    listAt: (ref) => Object.keys(pick(ref)), readAt: (ref, f) => pick(ref)[f] || "",
+  });
+  assert.deepEqual(r.newDependents, [], "phantom edge suppressed");
+});
+
+test("a from-import of a REAL submodule is still a dependent (no parent module file)", () => {
+  const baseFiles = { "myapp/__init__.py": "", "myapp/models.py": "A = 1\n" };
+  const headFiles = { ...baseFiles, "svc.py": "from myapp import models\n" };
+  const pick = (ref) => (ref === "b" ? baseFiles : headFiles);
+  const r = computeNewDependents({
+    base: "b", head: "h", changedSource: ["myapp/models.py"],
+    listAt: (ref) => Object.keys(pick(ref)), readAt: (ref, f) => pick(ref)[f] || "",
+  });
+  assert.equal(r.newDependents.length, 1, "the real submodule edge survives");
+  assert.equal(r.newDependents[0].file, "svc.py");
+});

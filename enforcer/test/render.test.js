@@ -101,3 +101,22 @@ test("explain --md renders the same report from the CLI (one renderer, no drift)
   assert.match(md, /## ✅ receipts: PASS/);
   assert.match(md, /red on base: ✅ · green on head: ✅/);
 });
+
+test("reason/warning text cannot fire live @-mentions in the PR comment", () => {
+  // reason + warnings interpolate PR-controlled text (file names, config values) OUTSIDE
+  // code spans; a crafted "@user"/"@everyone" there would notify via the bot's comment.
+  const md = renderMarkdown({
+    schema: "receipts/receipt@1", verdict: "WARN",
+    reason: "file @everyone-report.test.js deleted without acknowledgment",
+    warnings: ["G11: skip added in @channel.spec.ts"],
+    commands: [],
+  });
+  assert.ok(!md.includes("@everyone"), "mention broken by a zero-width space");
+  assert.ok(!md.includes("@channel"), "warning mention broken too");
+  assert.match(md, /everyone-report\.test\.js/, "the text itself is still readable");
+  // code-span contexts (labels like receipt-red@base) are inert and must stay verbatim
+  const table = renderMarkdown({ schema: "receipts/receipt@1", verdict: "PASS", commands: [
+    { label: "receipt-red@base", command: "npm test", ok: true, exit_code: 0, duration_ms: 5 },
+  ]});
+  assert.match(table, /receipt-red@base/);
+});

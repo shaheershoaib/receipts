@@ -159,3 +159,38 @@ test("stop_hook_active short-circuits (never loop)", () => {
   }).trim();
   assert.equal(out, "");
 });
+
+// ---------------------------------------------- anchored statuses: value decoration
+
+test("an emoji/symbol-decorated status value is still a close-out (prefix tolerance)", () => {
+  // Some trackers render the status pill INTO the value ("[x] Pending Retest",
+  // "🔁 Pending Retest"). A non-word prefix must not defeat detection.
+  blocks([tu("mcp__notion__notion-update-page", {
+    properties: { Status: { select: { name: "🔁 Pending Retest" } } },
+  })]);
+});
+
+test("a status value carrying a trailing note is still a close-out (suffix tolerance)", () => {
+  blocks([tu("mcp__linear__update_issue", { state: "Pending Retest - awaiting tester" })]);
+});
+
+test("a WORD-prefixed value stays excluded (prose is not a status)", () => {
+  silent([tu("mcp__notion__notion-update-page", {
+    properties: { "Resolution Note": "will move to Pending Retest after the tester run" },
+  })]);
+});
+
+// ------------------------------- trajectory exit tags: hyphen/space tolerance
+
+test("exit-tag variants ('unverified reasoned', \"won't  fix\") still nudge the trajectory append", () => {
+  const spaced = blocks([
+    tu("Skill", { skill: "gates" }),
+    tu("mcp__linear__update_issue", { comment: "closing: unverified reasoned, cannot drive the UI here" }),
+  ]);
+  assert.match(spaced.reason, /append_trajectory/, "space variant of a downgrade tag counts as a loop exit");
+  const wontFix = blocks([
+    tu("Skill", { skill: "gates" }),
+    tu("mcp__linear__update_issue", { comment: "closing as won't  fix per triage" }),
+  ]);
+  assert.match(wontFix.reason, /append_trajectory/, "whitespace-run in won't fix still counts");
+});

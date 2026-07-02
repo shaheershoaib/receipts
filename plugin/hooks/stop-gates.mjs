@@ -141,11 +141,18 @@ function makeMatchers(cfg) {
     deployedHost: extend(DEFAULT_DEPLOYED_HOST_SRC, build.deploy_host_patterns),
     stagingQuery: extend(DEFAULT_STAGING_QUERY_SRC, agent.staging_query_patterns),
     downgrade: extend(DEFAULT_DOWNGRADE_SRC, claim.downgrade_tags),
-    // ANCHORED: the configured status must appear as a JSON string VALUE
-    // (`: "Pending Retest"`), covering flat ({"status": "..."}), and nested
-    // (Notion {"select": {"name": "..."}}) shapes - but NOT a status mentioned
-    // inside a longer comment string.
-    statusValue: new RegExp(`:\\s*"\\s*(?:${statuses.map(escapeRe).join("|")})\\s*"`, "i"),
+    // ANCHORED: the configured status must appear at the START of a JSON string
+    // VALUE (`: "Pending Retest"`), covering flat ({"status": "..."}), nested
+    // (Notion {"select": {"name": "..."}}) shapes, decorated values (a leading
+    // emoji/symbol pill like ": \"[x] Pending Retest\"") and a trailing note
+    // (": \"Pending Retest - awaiting tester\"") - but NOT a status mentioned
+    // mid-prose inside a longer comment string ("moved to Pending Retest
+    // earlier"), which has WORD characters between the opening quote and the
+    // status and so does not match.
+    statusValue: new RegExp(
+      `:\\s*"[^"a-zA-Z0-9]*(?:${statuses.map(escapeRe).join("|")})(?![a-zA-Z0-9])`,
+      "i",
+    ),
   };
 }
 
@@ -258,7 +265,12 @@ function verificationGate(seq, cfg, m) {
 // ------------------------------------------------------ trajectory-reminder pieces
 
 function exitDispositionRe(tags) {
-  const alts = tags.filter(Boolean).map((t) => escapeRe(t).replace(/\\-/g, "[- ]?").replace(/\\ /g, "\\s+"));
+  // Hyphen/space tolerance: "unverified-reasoned" also matches "unverified reasoned"
+  // (or fused), "won't fix" also matches across any whitespace run. escapeRe leaves
+  // `-` and ` ` unescaped, so transform those literals AFTER escaping - spaces first
+  // (`\s+`), then hyphens (`[- ]?`; the class's own space is inserted after the space
+  // pass, so the two replacements cannot interact).
+  const alts = tags.filter(Boolean).map((t) => escapeRe(t).replace(/ /g, "\\s+").replace(/-/g, "[- ]?"));
   return alts.length ? new RegExp(alts.join("|"), "i") : /(?!x)x/;
 }
 
