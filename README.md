@@ -146,6 +146,13 @@ edits, no `claude mcp add`:
   `receipts observe` probes the live build, checks the output MEETS its expectation, and binds
   it to the build sha (set `agent.evidence: "live-receipt"` to make it the ONLY accepted
   evidence, so "a screenshot happened" no longer clears the gate).
+- the **in-session tripwires** (`pre-gates.mjs`, a PreToolUse hook) - two small guards that
+  fire AT the risky action, between the Stop hook and the enforcer: a `git commit` right after
+  a production-source edit with no test / `receipts observe` run in between is denied
+  (commit-without-verification), and editing a TEST file whose test was just seen FAILING is
+  denied (G11-live: fix the code, not the referee). Both are deny-by-default with an explicit,
+  greppable escape (`RECEIPTS_ACK='<why>'` / `--no-verify-receipts` / a `test-removal:` note) -
+  an honest note, never a silent skip; tune under `agent.tripwires`.
 - the **`trajectory-kb` MCP** - the verification memory the skill queries and appends.
 
 These form a gradient: the skill is a model-layer **nudge** (it is invoked by
@@ -177,6 +184,7 @@ Built and working today:
 - the **verification engine** as both a **CI enforcer** (`enforcer/`, a GitHub Action) and a **local CLI** (`receipts verify` / `replay` / `explain` / `observe`) - one engine, the red->green re-verification at the PR or on your machine
 - **replayable receipts** - every verification can emit a machine-readable evidence artifact (`--receipt-out`, schema in `spec/RECEIPT.md`): base/head, verdict, every command run with its exit code, the red->green proof. `receipts replay` re-runs it; `receipts explain` reads it
 - **live receipts** (`receipts observe`, schema in `spec/LIVE-RECEIPT.md`) - machine-validated deployed-build evidence for the Stop hook: probe the live build (a deployed URL / staging query / installed CLI), check the output MEETS an expectation, bind it to the build sha, emit one `LIVE-RECEIPT` line. Replaces "a screenshot happened" with a re-runnable value check bound to the build; `agent.evidence: "live-receipt"` makes it mandatory
+- **in-session tripwires** (`pre-gates.mjs`, a PreToolUse hook) - a commit-without-verification guard (deny a `git commit` that follows a production-source edit with no test / `receipts observe` in between) and a G11-live referee guard (deny editing a TEST file just seen failing). Deny-by-default with an explicit greppable escape (`RECEIPTS_ACK` / `--no-verify-receipts` / `test-removal:`); tune under `agent.tripwires`
 - **G7 dependent-test-selection** - the enforcer re-runs the tests of consumers that newly route through the changed surface (JS/TS scan + an explicit graph for any stack)
 - the enforcer **verifies itself**: an adversarial test suite (per gate: valid / invalid / malicious receipt) runs in CI, and receipts' enforcer gates receipts' own PRs
 
