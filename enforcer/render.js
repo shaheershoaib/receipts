@@ -65,6 +65,8 @@ function renderMarkdown(rec) {
   }
   const trigger = r.is_fix_claim ? "fix-claim" : (r.work_type ? `work-type: ${r.work_type}` : "unclaimed");
   out.push(`| trigger | ${trigger}${r.strict ? " (strict: any-source-change)" : ""} |`);
+  if (r.lock)
+    out.push(`| receipt-lock | ${r.lock.matched ? "✅ matched" : "❌ MISMATCH"} \`${String(r.lock.hash || "").slice(0, 12)}…\` (the approved rubric${r.lock.matched ? " was carried intact" : " was NOT what the PR carries"}) |`);
   out.push(`| config | read from ${r.config_source || "?"}${r.config_source === "head" ? " ⚠️ (first-setup: the PR controlled its own gate config)" : ""} |`);
   out.push("");
 
@@ -97,6 +99,8 @@ function renderMarkdown(rec) {
   }
   if (g.G12 && Array.isArray(g.G12.findings) && g.G12.findings.length)
     findings.push(`**G12 silencing shapes:** ${g.G12.findings.map((f) => `\`${cell(f.file)}\` (${cell(f.name)})`).join(", ")}`);
+  if (g.G14 && Array.isArray(g.G14.survived) && g.G14.survived.length)
+    findings.push(`**G14 surviving mutants (${g.G14.survived.length}/${g.G14.tried}):** ${g.G14.survived.map((s) => `\`${cell(s.file)}:${s.line}\` (${cell(s.op)})`).join(", ")} — the receipt cannot tell these broken variants from the fix`);
   if (findings.length) {
     out.push("### Gate findings");
     for (const f of findings) out.push(`- ${f}`);

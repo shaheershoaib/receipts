@@ -122,6 +122,34 @@ key: the grammar lives entirely in the PR body.
 | CLI stdout | `receipt-cmd: mytool --version expect:/^mytool 2\./` |
 | Infra plan-diff | `receipt-cmd: terraform plan -detailed-exitcode` (exit 0 = no drift; the fix converges it) |
 
+## The receipt lock (trusted authorship — the split-authorship primitive)
+
+Every check above verifies the receipt's *behavior*; none verifies its *authorship*. When
+the same untrusted agent writes both the code and the acceptance test, the gate verifies
+self-consistency, not correctness — a weak agent writes a weak rubric and then satisfies
+it. The lock splits the roles: a trusted party (a human, a stronger model) writes or
+approves the receipt FIRST and pins its **content**:
+
+```
+receipts lock tests/receipts/issue-42.test.js          # run from the repo root
+# -> receipt-lock: 3f8a…64-hex…c21                     # paste into the issue / PR body
+```
+
+The enforcer recomputes the hash over what the PR **actually carries at head** — the
+receipt test files (path + content, CRLF-normalized, order-independent) and/or the
+`receipt-cmd:` lines — and **BLOCKS on mismatch**: the agent makes the locked rubric go
+green; it cannot weaken, replace, or "adjust" it. A lock line must be a single 64-hex
+token (malformed = BLOCK — someone tried and typo'd; prose after the colon is ignored).
+Multiple lock lines = any-of (an issue may pre-approve alternative receipts). The result
+is recorded as `lock: { present, matched, hash }` in the artifact.
+
+**The untrusted-agent posture:** set `claim.require_receipt_lock: true` and every
+verified claim must carry a matching lock — combined with `gates.G11/G12/G14.mode:
+"block"`, the weak agent's "it's done" is backed by: an approved rubric it could not
+touch, red on base, green on head, deterministic, mutation-checked, suite-green, with no
+deleted tests, no silenced alarms, and no CI-sniffing. That chain does not care how weak
+the generator is. That is the point.
+
 ## The browser receipt (the web medium — head-only)
 
 A rendered-UI symptom (a button that never enabled, a modal that never opened, a value that
