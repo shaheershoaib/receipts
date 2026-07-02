@@ -24,8 +24,12 @@ const CHART_BASE = 'module.exports=()=>"static";\n';
 const CHART_HEAD_BREAKS = 'const {field}=require("./field");module.exports=()=>field().toUpperCase();\n';
 const CHART_HEAD_STABLE_IMPORT = CHART_HEAD_BREAKS; // same broken body, used for the "stable edge" case
 const CHART_TEST = 'const chart=require("./chart");const r=chart();if(typeof r!=="string")process.exit(1);console.log("ok");\n';
+// A NARROW suite: it exercises the CHANGED surface (field) only, and is GREEN on head - it
+// never runs chart's test, so it cannot see chart's downstream break. This is the #35 hole:
+// a passing-but-narrow suite must NOT suppress G7's re-run of the new dependent's own test.
+const NARROW_SUITE = 'const {field}=require("./field");if(field()!==42)process.exit(1);console.log("suite ok");\n';
 
-function scenario(over = {}, { withChartTest = true, chartBase = CHART_BASE } = {}) {
+function scenario(over = {}, { withChartTest = true, chartBase = CHART_BASE, narrowSuite = false } = {}) {
   const baseFiles = {
     "field.js": FIELD_BASE,
     "chart.js": chartBase,
@@ -37,6 +41,7 @@ function scenario(over = {}, { withChartTest = true, chartBase = CHART_BASE } = 
     "field.test.js": RECEIPT,
   };
   if (withChartTest) { baseFiles["chart.test.js"] = CHART_TEST; } // pre-existing, unchanged
+  if (narrowSuite) { baseFiles["suite.js"] = NARROW_SUITE; headFiles["suite.js"] = NARROW_SUITE; }
   return makeRepo({ baseFiles, headFiles });
 }
 
@@ -82,4 +87,30 @@ test("G7 verify_all_dependents widens the scope to a stable consumer too", () =>
   const v = runVerify({ ...r, prBody: FIX });
   assert.equal(v.verdict, "BLOCK", v.raw); // now the stable consumer's regression is caught
   assert.match(v.reason, /G7 dependent regression/i);
+});
+
+// Regression for #35 - the suite-green shortcut hole. A NARROW suite_command that passes green
+// on head (it exercises only the changed surface, never the new dependent's test) used to trip
+// verify.js's `!(suite && suite.ok)` shortcut and SUPPRESS the G7 re-run, letting the
+// downstream break ship. The fix runs the (cheap, bounded) new-dependent subset even under a
+// green suite. Same fixture, now WITH a passing narrow suite -> the break is still caught.
+test("G7 block: a passing-but-NARROW suite does NOT suppress the dependent re-run (#35)", () => {
+  const r = scenario(
+    { gates: { G7: { mode: "block" } }, verify: { test_command: "node {test}", suite_command: "node suite.js" } },
+    { narrowSuite: true });
+  const v = runVerify({ ...r, prBody: FIX });
+  // The narrow suite is green (it only checks field), yet chart's break is caught anyway.
+  assert.equal(v.verdict, "BLOCK", v.raw);
+  assert.match(v.reason, /G7 dependent regression/i);
+});
+
+test("G7 warn (default): a passing-but-NARROW suite still surfaces the dependent break (#35)", () => {
+  const r = scenario(
+    { verify: { test_command: "node {test}", suite_command: "node suite.js" } }, // no G7.mode -> warn
+    { narrowSuite: true });
+  const v = runVerify({ ...r, prBody: FIX });
+  assert.equal(v.exitCode, 0, v.raw); // warn, not block - matches existing G7 default semantics
+  assert.ok(
+    (v.warnings || []).some((w) => /G7 dependent regression/i.test(w)),
+    "expected a G7 regression warning under a green narrow suite: " + JSON.stringify(v.warnings));
 });
