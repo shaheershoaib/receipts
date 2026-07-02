@@ -21,6 +21,25 @@
   new exposure over the PR's own test code the enforcer already runs, with a read-only token and
   the same exec path as test commands. Full grammar + a worked example per medium in
   `spec/RECEIPT.md`; `spec/MEDIA.md` maps the executable receipt form per medium.
+- **gates-bench: a deterministic weak-agent behavior matrix** (`bench/`, repo-only, not
+  shipped to npm). Measures whether the harness turns weak-agent output into reliable
+  verdicts, WITHOUT calling a live LLM: a "weak agent" is simulated as scripted misbehavior
+  classes (wrong-fix-claims-fixed, no-receipt, weak-receipt, delete-failing-test,
+  silence-alarm, partial-rollout, breaks-dependent, rides-along) run through the REAL
+  enforcer, plus a hook lane (close-without-evidence / honest-downgrade /
+  bound+observed) run through the real Stop hook. Fixtures are generated on the fly
+  (`makeRepo`, no committed repos, no network, no npm install) across 4 stacks - node,
+  python, bash, and a data/no-test-runner stack that intentionally degrades to document the
+  Phase-1 gap - all on `ubuntu-latest` preinstalled tooling. `node bench/run.js` runs the
+  task x behavior matrix, prints per-gate catch rate + escape rate + false-block rate
+  (`--json` for machine reads), and exits non-zero on any UNDECLARED escape or false-block;
+  declared-expected escapes (weak-receipt) are reported but do not fail. `--gates-off` gives
+  the A/B baseline. Current result: 48 cells, 71% catch, 29% escape (all declared:
+  weak-receipt + the config-permitted no-receipt-warn hatch), 0% false-block; gates-off
+  baseline 82% escape. The bench exposed two harness surprises (G7's
+  suite-green shortcut over-trusting a narrow `suite_command`; G6's JS-only auto-heuristic
+  needing a declared family for multi-language rollouts) - documented in `bench/README.md`,
+  not yet fixed.
 - **G7 speaks Python.** The dependent-selection scan now covers Python alongside JS/TS:
   repo-relative absolute imports (`a.b.c` -> `a/b/c.py` / `__init__.py`), relative imports
   (`from ..shared import x`), from-import submodule forms, alias/comma lists - with
