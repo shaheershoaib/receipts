@@ -123,4 +123,63 @@ function renderComment(rec) {
   return COMMENT_MARKER + "\n" + renderMarkdown(rec);
 }
 
-module.exports = { renderMarkdown, renderComment, COMMENT_MARKER };
+/*
+ * Aggregate a set of receipt artifacts into team-level signals. Every gated PR emits a
+ * receipt (uploaded as a CI artifact) - collected over time they answer the questions an
+ * eng lead actually has: how many claims carry real proof, how often the honesty ladder
+ * is used (a rising `speculative` rate is a team drowning), which gates catch things,
+ * how often a receipt was weak or flaky. Pure; the CLI feeds it files.
+ */
+function aggregateReceipts(records) {
+  const agg = {
+    total: 0,
+    verdicts: { PASS: 0, WARN: 0, BLOCK: 0, other: 0 },
+    real_receipts: 0,        // red on base AND green on head
+    pinned: 0,
+    fix_claims: 0,
+    work_types: {},          // refactor / feature / ...
+    honest_downgrades: 0,    // the pressure valve being used (tracked, not clean-claimed)
+    weak_receipts: 0,        // passed on base - proved nothing
+    flaky_receipts: 0,
+    head_configs: 0,         // config came from the PR head (weaker provenance)
+    gate_warnings: {},       // Gn -> count, from warning texts
+  };
+  for (const r of records || []) {
+    if (!r || typeof r !== "object") continue;
+    agg.total++;
+    if (agg.verdicts[r.verdict] != null) agg.verdicts[r.verdict]++; else agg.verdicts.other++;
+    if (r.red === true && r.green === true) agg.real_receipts++;
+    if (r.pinned) agg.pinned++;
+    if (r.is_fix_claim) agg.fix_claims++;
+    if (r.work_type) agg.work_types[r.work_type] = (agg.work_types[r.work_type] || 0) + 1;
+    if (/honest downgrade/i.test(r.reason || "")) agg.honest_downgrades++;
+    if (/weak receipt/i.test(r.reason || "")) agg.weak_receipts++;
+    if (/flaky (receipt|green)/i.test(r.reason || "")) agg.flaky_receipts++;
+    if (r.config_source === "head") agg.head_configs++;
+    for (const w of r.warnings || []) {
+      const m = String(w).match(/^(G1[0-4]|G[0-9])\b/);
+      if (m) agg.gate_warnings[m[1]] = (agg.gate_warnings[m[1]] || 0) + 1;
+    }
+  }
+  return agg;
+}
+
+function renderReportText(agg) {
+  const pct = (n) => (agg.total ? Math.round((n / agg.total) * 100) + "%" : "-");
+  const out = [];
+  out.push(`receipts report - ${agg.total} receipt(s)`);
+  out.push(`  verdicts       PASS ${agg.verdicts.PASS} · WARN ${agg.verdicts.WARN} · BLOCK ${agg.verdicts.BLOCK}${agg.verdicts.other ? ` · other ${agg.verdicts.other}` : ""}`);
+  out.push(`  real receipts  ${agg.real_receipts} (${pct(agg.real_receipts)}) red-on-base -> green-on-head${agg.pinned ? ` · ${agg.pinned} pinned` : ""}`);
+  out.push(`  triggers       ${agg.fix_claims} fix-claim(s)${Object.keys(agg.work_types).length ? " · " + Object.entries(agg.work_types).map(([k, v]) => `${k} ${v}`).join(" · ") : ""}`);
+  out.push(`  honesty ladder ${agg.honest_downgrades} downgrade(s) - the pressure valve; a RISING rate is a team drowning`);
+  if (agg.weak_receipts || agg.flaky_receipts)
+    out.push(`  rejected proof ${agg.weak_receipts} weak · ${agg.flaky_receipts} flaky`);
+  if (agg.head_configs)
+    out.push(`  provenance     ${agg.head_configs} receipt(s) ran on a HEAD-sourced config (weaker - first-setup only)`);
+  const gates = Object.entries(agg.gate_warnings).sort();
+  if (gates.length)
+    out.push(`  gate findings  ${gates.map(([g, n]) => `${g} x${n}`).join(" · ")}`);
+  return out.join("\n") + "\n";
+}
+
+module.exports = { renderMarkdown, renderComment, COMMENT_MARKER, aggregateReceipts, renderReportText };

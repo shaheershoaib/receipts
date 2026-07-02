@@ -49,7 +49,7 @@ const LOAD_ERROR = /cannot find module|module ?not ?found|cannot import|importer
 // Not production source: docs, license/changelog, CI workflows, the receipts config itself,
 // VCS meta. Used by the "any-source-change" strict trigger to decide whether a non-fix-claim
 // PR touched anything that needs a receipt. (Test files are excluded separately via TEST_PATH.)
-const DOC_OR_META = /(^|\/)(LICENSE|CHANGELOG)|\.(md|markdown|txt|rst|adoc)$|(^|\/)\.github\/|(^|\/)receipts\.config\.json$|(^|\/)\.gitignore$/i;
+const DOC_OR_META = /(^|\/)(LICENSE|CHANGELOG)|\.(md|markdown|mdc|txt|rst|adoc)$|(^|\/)\.github\/|(^|\/)receipts\.config\.json$|(^|\/)\.gitignore$/i;
 
 let ARGS = {};
 const WARNINGS = [];

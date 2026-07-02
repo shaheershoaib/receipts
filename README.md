@@ -212,11 +212,32 @@ Built and working today:
 - **live receipts** (`receipts observe`, schema in `spec/LIVE-RECEIPT.md`) - machine-validated deployed-build evidence for the Stop hook: probe the live build (a deployed URL / staging query / installed CLI), check the output MEETS an expectation, bind it to the build sha, emit one `LIVE-RECEIPT` line. Replaces "a screenshot happened" with a re-runnable value check bound to the build; `agent.evidence: "live-receipt"` makes it mandatory
 - **in-session tripwires** (`pre-gates.mjs`, a PreToolUse hook) - a commit-without-verification guard (deny a `git commit` that follows a production-source edit with no test / `receipts observe` in between) and a G11-live referee guard (deny editing a TEST file just seen failing). Deny-by-default with an explicit greppable escape (`RECEIPTS_ACK` / `--no-verify-receipts` / `test-removal:`); tune under `agent.tripwires`
 - **G7 dependent-test-selection** - the enforcer re-runs the tests of consumers that newly route through the changed surface (JS/TS scan + an explicit graph for any stack)
-- the enforcer **verifies itself**: an adversarial test suite (per gate: valid / invalid / malicious receipt) runs in CI, and receipts' enforcer gates receipts' own PRs
+- a runnable **caught-wrong-fix demo**: `npm run demo` ([examples/caught-wrong-fix](examples/caught-wrong-fix/)) - the founding scar (a height cap shipped for a too-narrow modal), blocked live by the real enforcer, then the exact-value fix passing
+- **`receipts report`** - aggregate the receipt artifacts CI already uploads into team signals: verdicts, real-receipt rate, honesty-ladder usage (a rising downgrade rate is a team drowning), weak/flaky rejections, per-gate findings; `--json` for dashboards
+- **generated agent adapters** (`npm run build:adapters`): the gates skill compiled to [adapters/AGENTS.md](adapters/AGENTS.md) (any rules-file agent) and [adapters/cursor/receipts.mdc](adapters/cursor/receipts.mdc) - the enforcer never cared who wrote the code; the teaching layer doesn't either
+- a **GitLab CI example** ([enforcer/gitlab-ci.example.yml](enforcer/gitlab-ci.example.yml)) - the engine is CLI-first; the GitHub Action is just one wrapper
+- the enforcer **verifies itself**: an adversarial test suite (per gate: valid / invalid / malicious receipt) runs in CI, receipts' enforcer gates receipts' own PRs, and `bench/` measures the whole harness against scripted weak-agent misbehavior (85% catch, 0% false-block, every escape declared)
 
 Next: `verify.live_drive` in CI for symptoms a unit/e2e test can't express (drive the deployed
-app from the enforcer, complementing the agent-side `receipts observe`), and an `examples/` demo
-of a caught wrong-fix.
+app from the enforcer, complementing the agent-side `receipts observe`).
+
+## The hotfix playbook (the pressure valve)
+
+Production is down at 2am and the gate wants a receipt? **Ship with the ladder**: put
+`speculative:` (or `unverified-reasoned: <why>`) in the PR body and the enforcer passes it -
+*tracked as unverified, never counted as a clean fix*. That is the design, not a loophole: a
+gate teams cannot bypass under incident pressure gets ripped out the first bad night; a gate
+that converts bypasses into visible, queryable debt survives. Next morning: re-verify, land
+the real receipt, record the trajectory. `receipts report` over your receipt artifacts shows
+the downgrade rate - if it is climbing, that is the signal, not the individual 2am call.
+
+## Receipts accumulate (the regression suite you get for free)
+
+Every merged receipt is the reported symptom's own acceptance test - **leave it in the
+suite** (a `tests/receipts/` directory keeps them legible). Then G9 re-proves every past
+symptom on every future PR, forever, and G11 makes deleting one a loud, named event. Two
+years in, your suite is not "tests someone thought to write" - it is the complete record of
+everything that ever actually broke, still standing guard.
 
 ## Releasing (maintainer)
 
