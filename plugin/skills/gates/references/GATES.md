@@ -2,6 +2,8 @@
 
 A standard for trusting AI-written fixes.
 
+**Spec version: `receipts/gates@1.0`**
+
 A fix is **not** done because the agent says so, because CI is green, because a unit
 test passed, or because the code "looks right." It is done when the **reported
 symptom is observably gone on the deployed build.** The Gates are what it takes
@@ -10,6 +12,22 @@ to earn that claim.
 Each gate exists because skipping it shipped a wrong or unverified "fix" at least
 once. The scar is included with each - the gates are not theory, they are scar
 tissue.
+
+**Versioning.** The spec is versioned as `receipts/gates@MAJOR.MINOR`. An additive change
+(a new gate, a new enforcer assist, a clarified mandate) bumps the MINOR; a change to a
+gate's MEANING (redefining what it requires, or removing a gate) bumps the MAJOR. Each gate
+below carries an *Enforcement* line stating whether it is enforced `executable` (an enforcer
+re-check), `agent-judgment` (carried by the agent adapter, no PR-side artifact), or `hybrid`
+(agent judgment with an enforcer assist), and WHERE.
+
+## Enforcement scorecard
+
+Of the 14 gates: **7 executable** (G6, G7, G8, G9, G10, G11, G13), **4 hybrid** (G0, G1, G3,
+G12), **3 agent-judgment** (G2, G4, G5). The roadmap's durability metric is moving gates
+RIGHTWARD - from judgment to executable - because an executable gate a machine re-runs does
+not depend on which agent, or how careful an agent, produced the work; the wholly-judgment
+gates are the model-dependent surface, and shrinking that surface is how the standard stops
+being only as good as the agent holding it.
 
 ## What a receipt is
 
@@ -77,6 +95,7 @@ genuinely cannot reproduce it, you do not get a clean "fixed" - see *The honesty
 ladder* below.
 
 *Kind: verify (re-runnable at the PR).*
+*Enforcement: hybrid - agent-side reproduction (the skill records the symptom before the fix), backed by the enforcer's red-on-base re-run (the receipt must FAIL on base to prove it reproduced) and the Stop hook's verification-gate close-out block.*
 
 ## G1 - Assert the rendered VALUE, never presence or the placeholder
 
@@ -107,6 +126,7 @@ be true, not what should be gone.
 taken at the far end of the path (not the layer you changed).
 
 *Kind: verify (re-runnable at the PR).*
+*Enforcement: hybrid - agent-side by-value read live, machine-validated by a `receipts observe` live-receipt in the Stop hook (a `met:true` value bound to the build) and, for web apps, a browser-receipt head-only acceptance check in CI.*
 
 ## G2 - Pin the EXACT flow / component the reporter means
 
@@ -128,6 +148,7 @@ went into the one the reporter never used.
 makes the parallel flows visible before you pin the fix.)
 
 *Kind: target (agent-side).*
+*Enforcement: agent-judgment - the skill pins the reporter's exact flow + runtime context; there is no PR-side artifact for "you picked the right component" (a code graph makes the parallel flows visible but does not decide).*
 
 ## G3 - Verify on the build that contains YOUR commit
 
@@ -145,6 +166,7 @@ was still being served.
 **Receipt.** sha(deployed) == sha(your fix). Trivially checkable in CI.
 
 *Kind: verify (PR-checkable).*
+*Enforcement: hybrid - a live receipt binds the observation to the build sha (`--sha-cmd`) and a browser receipt asserts `sha_match` against the preview deployment; agent-side for the config/flag-bucket half of "the right build."*
 
 ## G4 - The fix must land on the surface the reporter SEES
 
@@ -159,6 +181,7 @@ page-level card. The change was real, tested, and invisible to the reporter.
 **Enforcement.** Agent-side.
 
 *Kind: target (agent-side).*
+*Enforcement: agent-judgment - after deploy the agent drives the reporter's actual screen and reverts a wrong-surface change; a code search finds a matching component but cannot tell which screen the reporter sees.*
 
 ## G5 - Drive the changed flow to its TERMINAL action
 
@@ -177,6 +200,7 @@ blocker one day later.
 value (constructing the state via the app's own API is a legitimate, faster repro).
 
 *Kind: verify (re-runnable at the PR).*
+*Enforcement: agent-judgment - the agent drives the flow to its terminal action (accepting pre-filled defaults), assisted by a live receipt that reads the persisted terminal state by value; the enforcer cannot itself walk a multi-step UI.*
 
 ## G6 - Sweep the changed pattern's PARALLEL surfaces before closing
 
@@ -204,6 +228,7 @@ Default warn (the heuristic is best-effort); `gates.G6.mode`
 guesswork into a named list.
 
 *Kind: target + verify (agent-side judgment; enforcer flags incomplete rollout).*
+*Enforcement: executable - the enforcer statically scans every PR (`enforcer/g6.js`): declared families (glob + marker, any language) and a JS/TS same-named-twin heuristic (the heuristic is best-effort - multi-language rollouts need a declared family).*
 
 ## G7 - Verify the DEPENDENTS of what you changed, especially newly-pulled ones
 
@@ -234,6 +259,7 @@ dependency is new since the merge base, and run their tests too - not only the c
 receipt. See `enforcer/GENERALIZATION.md` (dependent-test-selection).
 
 *Kind: target (agent-side; enforcer can re-run the dependents' tests).*
+*Enforcement: executable - the enforcer computes new dependents (`enforcer/g7.js`: JS/TS + Python import scan, or a declared `gates.G7.graph` for any stack) and re-runs their co-located tests on head; the "green suite short-circuits the re-run" shortcut was removed (#35), so a narrow suite no longer suppresses the check.*
 
 ## G8 - Verify on a base that is even with origin (the fresh-base gate)
 
@@ -260,6 +286,7 @@ number collisions. The recon half is agent-side: fetch and work from origin's ti
 long-lived local checkout.
 
 *Kind: target + verify (agent-side recon; enforcer base-freshness + re-green).*
+*Enforcement: executable - the enforcer asserts base is an ancestor of head (`git merge-base --is-ancestor`, else a behind-by-N block) and re-runs the receipt green on the rebased tree, with a migration-number collision check; the recon-from-tip half is agent-side.*
 
 ## G9 - The receipt's green must be trustworthy (full-scope, unmasked, representative)
 
@@ -287,6 +314,7 @@ flakes are a live risk, `verify.receipt_runs: N` requires red N/N on base and gr
 head - a mixed result is a flaky-receipt block, not evidence.
 
 *Kind: verify (re-runnable at the PR).*
+*Enforcement: executable - the enforcer runs the full suite on head itself (a user command cannot stand in), rejects exit-masking commands (`masksExit`), honors `on_load_error_red` (an import/collection error is not a real red), and enforces `verify.receipt_runs` N/N determinism.*
 
 ## G10 - A contract change must survive the deploy window (the rollout-compatibility gate)
 
@@ -311,6 +339,7 @@ expectations; a deploy-order assertion when the units are coupled); agent-side f
 the contract pair and the safe order.
 
 *Kind: target + verify (agent-side sequencing; enforcer back-compat contract test).*
+*Enforcement: executable - the enforcer runs a structural breaking-diff on changed contract files (`enforcer/verify.js` `checkContracts`: removed JSON field/path/enum -> a consumer breaks); a best-effort heuristic, not a full contract differ, so declaring the contract pair + safe order stays agent-side.*
 
 ## G11 - A green earned by shrinking the suite proves nothing (referee integrity)
 
@@ -337,6 +366,7 @@ warn; `gates.G11.mode` -> block. The `test-removal:` acknowledgment is tracked, 
 blocked - the honesty ladder applied to the referee itself.
 
 *Kind: verify (statically checkable at the PR).*
+*Enforcement: executable - the enforcer statically scans the rename-aware diff (`enforcer/g11.js`) for deleted test files, added skip/focus markers (multi-framework), and snapshot churn (always warn-only); a `test-removal: <why>` acknowledgment is tracked, never blocked.*
 
 ## G12 - Fix the CAUSE, not the alarm (the silencing gate)
 
@@ -361,6 +391,7 @@ some fixes legitimately remove an over-strict check, so the heuristic asks rathe
 answers.
 
 *Kind: target (agent-side judgment; enforcer flags the silencing shapes).*
+*Enforcement: hybrid - the skill asks the cause-vs-alarm question at fix time (agent-judgment); the enforcer (`enforcer/g12.js`) flags a fix-claim whose diff removes throw/raise statements or adds empty/swallowing catches (warn-only by default - the heuristic asks, the human answers).*
 
 ## G13 - The receipt must EXERCISE the diff (claim-scope congruence)
 
@@ -381,6 +412,7 @@ every changed line no test executed. Default warn; `gates.G13.mode` -> block. No
 command, no check - and no false all-clear.
 
 *Kind: verify (re-runnable at the PR; opt-in).*
+*Enforcement: executable, opt-in - with `gates.G13.coverage_command` set, the enforcer (`enforcer/g13.js`) runs the suite under coverage on head, parses the lcov, and intersects executed lines with the diff's added production lines; no coverage command configured -> the gate does not run (and never a false all-clear).*
 
 ---
 
