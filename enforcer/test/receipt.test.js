@@ -82,3 +82,78 @@ test("a >1MiB chatty test is not a false failure (execSync maxBuffer)", () => {
   assert.equal(v.exitCode, 0, "chatty green must be accepted, not ENOBUFS-blocked: " + v.raw);
   assert.match(v.reason, /receipt verified/i);
 });
+
+// ---------------------------------------------------------------- issue #44
+// Data/fixture files under a tests/ dir are INPUTS to tests, never receipts.
+// On a real PR they (a) tripped the metacharacter refusal on their filenames and
+// (b) polluted the receipt-lock hash. Both must be structurally impossible.
+
+// Like testAsserting, but living under tests/ (requires ../mod).
+const NESTED_TEST = (expected) =>
+  `const f=require("../mod");const v=f();if(v!==${expected}){console.error("FAIL got "+v);process.exit(1)}console.log("ok");\n`;
+const V2_TEST = (expected) => NESTED_TEST(expected) + "// v2: receipt updated with the fix\n";
+
+test("non-runnable fixtures under tests/ never enter the receipt set (issue #44)", () => {
+  const { dir, base, head } = makeRepo({
+    baseFiles: {
+      "receipts.config.json": cfg({ verify: { suite_command: "node tests/mod.test.js" } }),
+      "mod.js": modReturning(1),
+      "tests/mod.test.js": NESTED_TEST(1),
+    },
+    headFiles: {
+      "mod.js": modReturning(2),
+      "tests/mod.test.js": V2_TEST(2),
+      // HOSTILE-NAMED data fixtures riding along under tests/.
+      "tests/fixtures/PR APRIL - Popeyes, LLC (8663).pdf": "%PDF-1.7 fake",
+      "tests/fixtures/expected values.json": '{"gross": 100}',
+      "tests/fixtures/sample.xlsx": "PK fake xlsx",
+    },
+  });
+  const receiptOut = path.join(os.tmpdir(), `receipt-44-${process.pid}.json`);
+  const r = runVerify({ dir, base, head, prBody: "closes #1", receiptOut });
+  // No metacharacter refusal, no fixture pollution: the verdict PASSes on the real
+  // receipt and the receipt set contains ONLY the runnable test source.
+  assert.equal(r.verdict, "PASS", r.reason);
+  const rec = JSON.parse(fs.readFileSync(receiptOut, "utf8"));
+  assert.deepEqual(rec.tests, ["tests/mod.test.js"], "fixtures must not be receipts");
+  fs.rmSync(receiptOut, { force: true });
+});
+
+test("the receipt lock hashes only runnable receipts, so fixtures cannot invalidate it (issue #44)", () => {
+  const { computeReceiptLock } = require("../verify.js");
+  const lockJustTest = computeReceiptLock({
+    files: [{ path: "tests/mod.test.js", content: V2_TEST(2) }],
+    cmds: [],
+  });
+  const { dir, base, head } = makeRepo({
+    baseFiles: {
+      "receipts.config.json": cfg({ verify: { suite_command: "node tests/mod.test.js" } }),
+      "mod.js": modReturning(1),
+      "tests/mod.test.js": NESTED_TEST(1),
+    },
+    headFiles: {
+      "mod.js": modReturning(2),
+      "tests/mod.test.js": V2_TEST(2),
+      "tests/fixtures/data (v2).pdf": "%PDF fake",
+    },
+  });
+  const r = runVerify({ dir, base, head, prBody: `closes #1\nreceipt-lock: ${lockJustTest}` });
+  assert.equal(r.verdict, "PASS", `lock over the runnable receipt must match: ${r.reason}`);
+});
+
+test("pinning a data file as the receipt blocks by name (issue #44)", () => {
+  const { dir, base, head } = makeRepo({
+    baseFiles: {
+      "receipts.config.json": cfg({ verify: { suite_command: "node tests/mod.test.js" } }),
+      "mod.js": modReturning(1),
+      "tests/mod.test.js": NESTED_TEST(1),
+    },
+    headFiles: {
+      "mod.js": modReturning(2),
+      "tests/fixtures/expected.json": "{}",
+    },
+  });
+  const r = runVerify({ dir, base, head, prBody: "closes #1\nreceipt: tests/fixtures/expected.json" });
+  assert.equal(r.verdict, "BLOCK");
+  assert.match(r.reason, /not a RUNNABLE test source/);
+});
