@@ -40,6 +40,10 @@ const g14 = require("./g14.js");
 const browser = require("./browser.js");
 
 const TEST_PATH = /(\.test\.|\.spec\.|_test\.|(^|\/)test_|(^|\/)tests?\/|\/__tests__\/|_spec\.)/i;
+// A receipt must be RUNNABLE test SOURCE. Data/binary fixtures under a tests/ dir
+// (PDFs, expected JSONs, xlsx/csv, images) match TEST_PATH but are inputs to tests -
+// never receipts (issue #44). Test-source extensions across stacks:
+const RUNNABLE_TEST_EXT = /\.(py|js|jsx|ts|tsx|mjs|cjs|rb|go|rs|java|kt|kts|cs|php|ex|exs|sh|bats|pl|scala|swift|clj|fs|r)$/i;
 // JSON keys that are documentation, not contract surface - removing them is not breaking.
 const DOC_KEYS = new Set(["description", "summary", "title", "example", "examples", "comment", "$comment", "externalDocs", "deprecated"]);
 // A path with any of these would break out of the (shell) test command we interpolate it into.
@@ -682,10 +686,14 @@ function main() {
   // Parsing is strict-but-forgiving: a single path-looking token is a pin (and is blocked
   // if invalid); a line with prose after the colon is ignored.
   // Excluded from the receipt set: a test DELETED by the PR (it cannot run on head; its
-  // absence is G11's finding, not a receipt) and snapshot ARTIFACTS (.snap matches the
-  // test-path shape but is not runnable - churn is G11's finding too).
+  // absence is G11's finding, not a receipt), snapshot ARTIFACTS (.snap matches the
+  // test-path shape but is not runnable - churn is G11's finding too), and NON-RUNNABLE
+  // fixture/data files living under a tests/ dir (payroll PDFs, expected JSONs, images,
+  // CSVs - inputs TO tests, not tests; issue #44: they tripped the metacharacter refusal
+  // on their names and polluted the receipt-lock hash on a real PR).
   const changedTests = changed.filter((f) =>
-    TEST_PATH.test(f) && !g11.SNAPSHOT_PATH.test(f) && git(repo, ["cat-file", "-e", `${head}:${f}`]).ok);
+    TEST_PATH.test(f) && RUNNABLE_TEST_EXT.test(f) && !g11.SNAPSHOT_PATH.test(f) &&
+    git(repo, ["cat-file", "-e", `${head}:${f}`]).ok);
   const pins = [];
   const pinRe = /^\s*receipt\s*:\s*(\S+)\s*$/gim;
   let pm;
@@ -694,6 +702,8 @@ function main() {
   for (const p of pathish) {
     if (!TEST_PATH.test(p))
       emit("BLOCK", `pinned receipt '${p}' is not a test file - \`receipt:\` must name the acceptance test that flips red->green`);
+    if (!RUNNABLE_TEST_EXT.test(p))
+      emit("BLOCK", `pinned receipt '${p}' is not a RUNNABLE test source (a data/fixture file cannot be a receipt) - pin the test that consumes it, or use a receipt-cmd`);
     if (!git(repo, ["cat-file", "-e", `${head}:${p}`]).ok)
       emit("BLOCK", `pinned receipt '${p}' does not exist at head`);
   }
