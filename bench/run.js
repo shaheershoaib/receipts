@@ -75,7 +75,7 @@ function runMatrix({ gatesOff = false } = {}) {
         baseFiles = { ...baseFiles, "receipts.config.json": toGatesOff(baseFiles["receipts.config.json"]) };
       }
       const repo = makeRepo({ baseFiles, op: scen.op, headFiles: scen.headFiles });
-      const v = runVerify({ ...repo, prBody: scen.prBody });
+      const v = runVerify({ ...repo, prBody: scen.prBody, env: scen.env });
       const row = {
         lane: "enforcer",
         stack: task.stack,

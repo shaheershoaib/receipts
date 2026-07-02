@@ -29,6 +29,11 @@
           "items": { "type": "string" },
           "description": "Tags that mark a PR as NOT claiming a clean fix (the honesty ladder); these pass the gate but are tracked, not treated as 'fixed'.",
           "default": ["unverified-reasoned", "speculative", "reverted"]
+        },
+        "require_receipt_lock": {
+          "type": "boolean",
+          "description": "The untrusted-agent posture: every verified claim must carry a `receipt-lock: <sha256>` line matching the receipt content at head. The acceptance test is authored/approved by a trusted party FIRST (`receipts lock` prints the line), and the agent's only job is to make the LOCKED rubric pass - it cannot weaken, replace, or 'adjust' it. Without the lock, whoever writes the code also grades it.",
+          "default": false
         }
       }
     },
@@ -180,12 +185,12 @@
           "default": "all",
           "oneOf": [
             { "const": "all" },
-            { "type": "array", "items": { "type": "string", "pattern": "^G(1[0-3]|[0-9])$" } }
+            { "type": "array", "items": { "type": "string", "pattern": "^G(1[0-4]|[0-9])$" } }
           ]
         },
         "disabled": {
           "type": "array",
-          "items": { "type": "string", "pattern": "^G(1[0-3]|[0-9])$" },
+          "items": { "type": "string", "pattern": "^G(1[0-4]|[0-9])$" },
           "description": "Gate IDs to turn off even if `enabled` includes them; takes precedence over `enabled`.",
           "default": []
         },
@@ -324,6 +329,24 @@
               "enum": ["warn", "block"],
               "description": "What uncovered changed lines do: warn (default) or block.",
               "default": "warn"
+            }
+          }
+        },
+        "G14": {
+          "type": "object",
+          "additionalProperties": false,
+          "description": "Receipt strength - the mutation referee. Red->green proves the receipt notices THE fix, not that it would notice a WRONG one (a receipt asserting 'not the old value' goes green for any change). G14 deliberately breaks each changed line (a small operator set: flipped comparisons, &&/||, true/false, numbers nudged) and requires the receipt to go red; a SURVIVOR is a changed line the receipt cannot tell from broken. Runs whenever a receipt exists; capped and diff-scoped, so it costs a handful of receipt re-runs.",
+          "properties": {
+            "mode": {
+              "enum": ["warn", "block"],
+              "description": "What a surviving mutant does: warn (default - a survivor can be an equivalent mutant) or block (the untrusted-agent posture).",
+              "default": "warn"
+            },
+            "max_mutants": {
+              "type": "integer",
+              "minimum": 1,
+              "description": "Budget: at most this many mutants are tried, round-robin across changed files (breadth before depth). Each costs one receipt re-run.",
+              "default": 12
             }
           }
         }
