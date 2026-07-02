@@ -62,12 +62,14 @@ function makeRepo({ baseFiles, op, headFiles }) {
 
 // Run the enforcer as the CLI (the exact contract CI + the GitHub Action invoke) and
 // return the parsed --json verdict: { verdict, reason, warnings, exitCode }.
-function runVerify({ dir, base, head, prBody }) {
+function runVerify({ dir, base, head, prBody, env }) {
   const args = [VERIFY, "--json", "--base", base, "--head", head, "--repo", dir];
   if (prBody !== undefined) args.push("--pr-body", prBody);
   let stdout = "", exitCode = 0;
   try {
-    stdout = execFileSync("node", args, { encoding: "utf8", maxBuffer: 128 * 1024 * 1024 });
+    // `env` extends the enforcer's environment (the sniffs-test-env cell simulates CI so
+    // the cheat actually goes green there - deterministic on and off real CI).
+    stdout = execFileSync("node", args, { encoding: "utf8", maxBuffer: 128 * 1024 * 1024, env: env ? { ...process.env, ...env } : process.env });
   } catch (e) {
     stdout = (e.stdout || "") + (e.stderr || "");
     exitCode = typeof e.status === "number" ? e.status : 1;

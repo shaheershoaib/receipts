@@ -99,6 +99,15 @@ deployed-build gate; a `met:false` one records that the symptom is NOT gone. See
 - **G13 The receipt must exercise the diff.** One narrow receipt does not verify 500
   changed lines. Keep the diff congruent with the claim: split unrelated changes out,
   or cover them - changed lines no test executes are UNVERIFIED changes.
+- **G14 The receipt must have teeth.** The enforcer will BREAK your changed lines on
+  purpose (flipped comparisons, nudged numbers, knocked-out returns) and your receipt
+  must go red against each broken variant. Write assertions that pin EXACT values
+  ("=== 6"), never "not the old value" - a receipt that only excludes the old bug
+  passes any new one.
+- **The receipt lock.** If the PR/issue carries `receipt-lock: <sha256>`, the receipt
+  content is APPROVED and pinned - make it pass; do NOT edit, weaken, or replace it
+  (the enforcer blocks the mismatch). If you believe the locked test is wrong, say so
+  and stop: re-approval belongs to whoever owns the contract, not to you.
 
 **Target gates - did you fix the RIGHT thing, all of it?** (your judgment, as you work)
 - **G2 Pin the exact flow.** Apps grow parallel copies of the "same" feature; fix the
@@ -128,10 +137,11 @@ deployed-build gate; a `met:false` one records that the symptom is NOT gone. See
   mute its detector? If the check itself was the bug, say so explicitly in the PR.
 
 G7, G8, and G10 are the multi-dev gates: they only bite because other people push in
-parallel and the codebase changes under you. G11, G12, and G13 are the
+parallel and the codebase changes under you. G11-G14 are the
 optimizing-agent gates: they exist because "make the check green" and "make the code
 right" are different objectives - never optimize the first at the expense of the
-second.
+second. Never special-case the test/CI environment in production code
+(`process.env.CI`, `NODE_ENV === 'test'`) - G12 flags it as the gamed-gate shape.
 
 ## The honesty ladder (when you cannot clear a gate)
 

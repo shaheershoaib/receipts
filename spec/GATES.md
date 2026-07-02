@@ -46,7 +46,7 @@ existing suite stays green" (no behavior change). See `references/WORK-TYPES.md`
 
 ## Two kinds of gate
 
-- **Verify gates (G0, G1, G3, G5, G9, G11, G13)** answer *"did you actually prove it
+- **Verify gates (G0, G1, G3, G5, G9, G11, G13, G14)** answer *"did you actually prove it
   works?"* They produce receipts, and they are enforceable at the one chokepoint every
   team shares regardless of which agent they use: the pull request. An enforcer can
   re-run them.
@@ -63,11 +63,14 @@ are working in parallel and the codebase changes under you (a consumer is pulled
 base moves, the two halves of a contract deploy out of order). G9 is amplified by the same
 reality: the regression is often in code you never touched.
 
-G11, G12, and G13 are the **optimizing-agent gates**: G0-G10 defend against an agent that
-is *wrong*; these defend against an agent that is *optimizing* - making the check green
+G11-G14 are the **optimizing-agent gates**: G0-G10 defend against an agent that is
+*wrong*; these defend against an agent that is *optimizing* - making the check green
 rather than the code right. They exist because agents reward-hack: delete the failing test
 (G11), silence the alarm instead of fixing the cause (G12), shield a broad diff behind a
-narrow receipt (G13).
+narrow receipt (G13), or write a receipt too weak to notice a wrong fix (G14). The
+**receipt lock** (see `RECEIPT.md`) is the same posture applied to authorship: the
+acceptance test is approved and content-pinned BEFORE the agent starts, so the agent makes
+the rubric pass rather than writing its own.
 
 ---
 
@@ -413,6 +416,35 @@ command, no check - and no false all-clear.
 
 *Kind: verify (re-runnable at the PR; opt-in).*
 *Enforcement: executable, opt-in - with `gates.G13.coverage_command` set, the enforcer (`enforcer/g13.js`) runs the suite under coverage on head, parses the lcov, and intersects executed lines with the diff's added production lines; no coverage command configured -> the gate does not run (and never a false all-clear).*
+
+## G14 - The receipt must have TEETH (the mutation referee)
+
+**Mandate.** Red->green proves the receipt notices THE fix. It does not prove the receipt
+would notice a WRONG fix - a receipt asserting "the value is no longer the OLD one" goes
+green for any change at all. So the enforcer breaks the changed lines ON PURPOSE (flipped
+comparisons, `&&`/`||` swaps, nudged numbers, knocked-out returns) and requires the
+receipt to go red against each broken variant. A mutant that SURVIVES is a changed line
+whose behavior the receipt cannot distinguish from broken: either no test executes it
+(G13's finding) or none asserts its effect. Pin exact values ("=== 6"), never "not the
+old value".
+
+**Scar.** The bench's, measured before it was closed: `weak-receipt` - for a subtotal that
+should become 6, a receipt asserting `!== 3` - passed the red->green spine on every stack
+that could express it (5 declared escapes). A fix returning 7 would have shipped as
+verified. It is also the canonical weak-AGENT failure: a weak model writes exactly this
+receipt shape unprompted.
+
+**Enforcement.** Enforcer (`enforcer/g14.js`), on by default whenever a receipt exists:
+diff-scoped (the -U0 added lines only), budgeted (`gates.G14.max_mutants`, default 12,
+round-robin across files), string-masked (mutating a message is not mutating behavior),
+compile-cache-defeating (a same-length python mutant can otherwise run STALE bytecode).
+Default warn - a survivor can be an equivalent mutant (a genuine no-op) - and
+`gates.G14.mode: block` for the untrusted-agent posture. Honest residual: a string-shaped
+symptom with no mutable value operator on its changed lines is outside the operator set's
+reach (measured in the bench as a declared escape, not hidden).
+
+*Kind: verify (re-runnable at the PR).*
+*Enforcement: executable, default-on - `enforcer/g14.js` generates the mutants; the enforcer re-runs the CARRIED receipt (file tests and/or `receipt-cmd:`) against each and reports survivors into the receipt artifact (`gates.G14`).*
 
 ---
 
