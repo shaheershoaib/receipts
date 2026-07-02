@@ -58,6 +58,10 @@ BLOCK is recorded with the same fidelity as a PASS, so a failing gate still leav
   explicitly (`receipt: <path>` in the body) rather than inheriting every changed test file -
   the pin separates the acceptance test from incidental test churn, and may name an UNCHANGED
   test (a fix that makes an existing test flip red->green).
+- **`command_receipts`** - the command form of the receipt (see "The command receipt" below):
+  each `{ command, expect }` the PR carried as a `receipt-cmd:` line. Present only when the PR
+  used one; the command's own runs are recorded in `commands` with a `[cmd ...]` label suffix.
+  A PR may carry file receipts, command receipts, or both (all ANDed).
 - **`config_source`** records whether the gate config came from the trusted base commit, the PR
   head (first-setup fallback, with a warning), or an explicit `--config`. A receipt read from
   `head` is weaker - the PR controlled its own gate config.
@@ -66,6 +70,49 @@ BLOCK is recorded with the same fidelity as a PASS, so a failing gate still leav
   pass/fail. A `timed_out: true` marks a command killed by `verify.command_timeout_ms`.
 - **`warnings`** carries the non-blocking findings (G8 stale base, G9 suite not configured, a
   load-error red, a head-sourced config), so a PASS-with-caveats is not silently clean.
+
+## The command receipt (a receipt is any re-runnable command)
+
+A receipt does not have to be a *test file*. Plenty of software has no test runner - an HTTP
+API, a data pipeline, a CLI, infrastructure - yet still has a re-runnable check with an
+expected outcome. For these, the PR body carries a **command receipt** alongside (or instead
+of) a `receipt:` path pin:
+
+```
+receipt-cmd: <shell command>
+receipt-cmd: <shell command> expect:/<regex>/
+```
+
+The command **is** the acceptance test. The enforcer runs it against the **base** tree (it
+must FAIL its expectation - the symptom reproduces) and the **head** tree (it must MEET it -
+the symptom is gone): the identical red->green law, just with a command instead of a test
+file. One command per line; multiple `receipt-cmd:` lines are all required (ANDed, like
+multiple `receipt:` pins).
+
+**The expectation.** Default = exit code 0. The optional trailing ` expect:/<regex>/` adds a
+stdout assertion: the receipt is MET when the command exits 0 **and** (if the suffix is given)
+its output matches the regex (a JS `RegExp`, matched multiline against the command's combined
+stdout+stderr, so `expect:/^0$/` matches a `0`-on-its-own-line count). Everything before the
+` expect:/…/ ` suffix is the command verbatim - a `/` inside the command (a URL, a path) is
+not the suffix, only a trailing ` expect:/…/ ` is.
+
+**Execution & trust.** The command runs through the *same* machinery as a `test_command`: cwd
+= repo root at the checked-out ref, the same `verify.command_timeout_ms`, the same
+`verify.receipt_runs` determinism (fail-to-meet N/N on base, meet N/N on head; a mixed result
+is a flaky-receipt BLOCK), and captured into the receipt's `commands[]`. The same G9 guard
+applies: a command that can mask its own exit code (`;`, `||`, a pipe, `&`, a newline,
+`` ` ``/`$(`) is rejected - wrap it in a script. A command receipt that already MEETS its
+expectation on base is the same **weak-receipt** BLOCK as a test green-on-base. No new config
+key: the grammar lives entirely in the PR body.
+
+**One example per medium** (each is red on base, green on head):
+
+| Medium | `receipt-cmd:` |
+|---|---|
+| API / service | `receipt-cmd: test "$(curl -fsS -o /dev/null -w '%{http_code}' http://localhost:3000/orders/42)" = 200` |
+| SQL / database | `receipt-cmd: sqlite3 app.db "select count(*) from users where email is null" expect:/^0$/` |
+| CLI stdout | `receipt-cmd: mytool --version expect:/^mytool 2\./` |
+| Infra plan-diff | `receipt-cmd: terraform plan -detailed-exitcode` (exit 0 = no drift; the fix converges it) |
 
 ## Why it matters
 

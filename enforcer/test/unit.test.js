@@ -2,7 +2,7 @@
 /* Unit tests for the enforcer's pure, security-critical helpers. */
 const { test } = require("node:test");
 const assert = require("node:assert");
-const { masksExit, gateOn, isContractFile, contractBreaks, expandTestPlaceholders, resolveTimeout, unknownConfigKeys } = require("../verify.js");
+const { masksExit, gateOn, isContractFile, contractBreaks, expandTestPlaceholders, resolveTimeout, unknownConfigKeys, parseCmdReceipts, meetsExpectation } = require("../verify.js");
 
 test("resolveTimeout: 20-minute default, explicit 0 disables, positive honored", () => {
   assert.equal(resolveTimeout(undefined), 1200000, "no verify block => default");
@@ -64,6 +64,45 @@ test("masksExit: clean commands pass, exit-maskers are caught", () => {
   assert.equal(masksExit("cmd\nother"), true, "newline sequencing");
   assert.equal(masksExit("echo `cmd`"), true, "backtick substitution");
   assert.equal(masksExit("echo $(cmd)"), true, "$() substitution");
+});
+
+test("parseCmdReceipts: grammar - command, expect suffix, multiple lines, non-receipt lines ignored", () => {
+  // Bare command -> exit-0-only (expect: null)
+  assert.deepEqual(
+    parseCmdReceipts("closes #1\nreceipt-cmd: curl -fsS http://localhost:3000/health"),
+    [{ raw: "curl -fsS http://localhost:3000/health", cmd: "curl -fsS http://localhost:3000/health", expect: null }]);
+
+  // expect:/re/ suffix is split off; the command keeps its own slashes (a path is not the suffix)
+  const one = parseCmdReceipts('receipt-cmd: sqlite3 app.db "select count(*) from users where email is null" expect:/^0$/');
+  assert.equal(one.length, 1);
+  assert.equal(one[0].cmd, 'sqlite3 app.db "select count(*) from users where email is null"');
+  assert.equal(one[0].expect, "^0$");
+
+  // a command containing slashes (an http:// URL / a path) with a trailing expect: - only the
+  // trailing ` expect:/.../` is the assertion, the URL's slashes stay in the command
+  const url = parseCmdReceipts("receipt-cmd: curl -s http://localhost/api/x expect:/\"ok\":true/");
+  assert.equal(url[0].cmd, "curl -s http://localhost/api/x");
+  assert.equal(url[0].expect, '"ok":true');
+
+  // multiple receipt-cmd lines = multiple commands (ANDed by the enforcer)
+  const many = parseCmdReceipts("receipt-cmd: cmd-a\nsome prose\nreceipt-cmd: cmd-b expect:/done/");
+  assert.deepEqual(many.map((c) => c.cmd), ["cmd-a", "cmd-b"]);
+  assert.deepEqual(many.map((c) => c.expect), [null, "done"]);
+
+  // a body with no receipt-cmd line yields nothing; a bare `receipt:` path pin is NOT a cmd
+  assert.deepEqual(parseCmdReceipts("closes #1\nreceipt: src/x.test.js"), []);
+  assert.deepEqual(parseCmdReceipts(""), []);
+});
+
+test("meetsExpectation: exit-0 floor, plus optional multiline stdout regex", () => {
+  // exit-0-only: met iff the process exited 0
+  assert.equal(meetsExpectation({ ok: true, out: "whatever" }, null), true);
+  assert.equal(meetsExpectation({ ok: false, out: "whatever" }, null), false, "non-zero exit never meets");
+  // with a regex: met iff exit 0 AND output matches (multiline, so ^0$ matches a 0\n line)
+  assert.equal(meetsExpectation({ ok: true, out: "0\n" }, /^0$/m), true, "multiline ^0$ matches a trailing-newline count");
+  assert.equal(meetsExpectation({ ok: true, out: "3\n" }, /^0$/m), false, "count 3 does not match ^0$");
+  assert.equal(meetsExpectation({ ok: false, out: "0\n" }, /^0$/m), false, "regex match cannot rescue a non-zero exit");
+  assert.equal(meetsExpectation({ ok: true, out: '{"ok":true}\n' }, /"ok":true/), true);
 });
 
 test("gateOn: enabled/disabled semantics match the spec", () => {
