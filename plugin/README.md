@@ -14,18 +14,18 @@ the Gates before a PR is ever opened. This is the agent-side half of `receipts`
   change compatible across the deploy window (G10), then write the red->green receipt.
   Project-agnostic by
   design - a project supplies its own facts via `receipts.config.json`.
-- **`hooks/stop-verification-gate.py`** - the backstop: blocks a "fixed" close-out
-  that lacks deployed-build evidence (binding + observation). The local precursor to
-  the CI enforcer.
-- **`hooks/stop-trajectory-reminder.py`** - nudges the agent to record what was tried
-  on a surface and how it turned out, so the memory grows (and captures failures, not
-  just wins).
+- **`hooks/stop-gates.mjs`** - the Stop-hook backstop, both checks in ONE transcript
+  pass (Node - the plugin already needs Node for its MCP server, and python3 was never
+  a given on Windows): it blocks a "fixed" close-out that lacks deployed-build
+  evidence (binding + observation - the local precursor to the CI enforcer), and it
+  nudges the agent to record what was tried on a surface and how it turned out, so
+  the memory grows (and captures failures, not just wins).
 - Pairs with the **`../mcp/trajectory-kb`** server (the verification memory).
 
 ## Wiring
 
 Claude Code AUTO-DISCOVERS the components from the plugin root: `skills/`,
-`hooks/hooks.json` (the two Stop hooks, referenced via `${CLAUDE_PLUGIN_ROOT}`), and
+`hooks/hooks.json` (the Stop hook, referenced via `${CLAUDE_PLUGIN_ROOT}`), and
 `.mcp.json` (the `trajectory-kb` server). The manifest does NOT declare these standard
 paths - declaring a path that resolves to an auto-loaded file fails the load with a
 "Duplicate ... detected" error, so `plugin.json` carries metadata only. Installing the
@@ -45,13 +45,15 @@ central skills project + several code repos) - is supported via the agent-home l
 enforcer's verify/build config). With no config found the hooks fall back to the
 generic defaults, so a zero-config install still works:
 
-- `hooks/stop-verification-gate.py` extends, from config: the deployed-host patterns
+- `hooks/stop-gates.mjs` extends, from config: the deployed-host patterns
   (`build.deploy_host_patterns`), the by-value-query patterns
   (`agent.staging_query_patterns`), the fixed-status values
-  (`agent.closeout_fixed_statuses`), and the downgrade tags (`claim.downgrade_tags`).
-- `hooks/stop-trajectory-reminder.py` reads which skills are fix/build loops from
-  `agent.loop_skills` (the shipped `gates` plus any project loops), so the
-  reminder watches the project's actual loops, not just the bundled one.
+  (`agent.closeout_fixed_statuses` - matched as status VALUES, never as substrings of
+  the whole payload, so a ticket comment merely mentioning a status is not a
+  close-out), the downgrade tags (`claim.downgrade_tags`), and which skills are
+  fix/build loops (`agent.loop_skills` - the shipped `gates` plus any project loops),
+  so the trajectory reminder watches the project's actual loops, not just the bundled
+  one.
 - `skills/gates/` stays project-agnostic. For a project with its own loop,
   `receipts init` registers it in `agent.loop_skills`; for a project with none, `init`
   scaffolds one from `templates/loop-skill/SKILL.md.tmpl` (filled with the project's

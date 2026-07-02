@@ -33,6 +33,7 @@ Usage:
   receipts replay <receipt>    Re-run the verification recorded in a receipt and check the
                                verdict reproduces (exit 1 on mismatch). [--repo <dir>]
   receipts explain <receipt>   Print a human-readable summary of a receipt artifact
+                               (--md: the same markdown report the GitHub Action posts)
 
 Options:
   --dir <path>   Target repo (default: current directory)
@@ -190,6 +191,11 @@ function buildConfig(d, a) {
       repo_name: a.repo_name || d.repo_name,
     },
   };
+  // Team memory: only written when the project opts into the repo-local store ("home"
+  // is the default and needs no config).
+  if (a.trajectory_store && a.trajectory_store !== "home") {
+    cfg.agent.trajectory_store = a.trajectory_store;
+  }
   // Which gates apply here (by ID). Safe default = all on; the project disables what
   // does not fit. The skill reads this to know what to apply; the enforcer, which checks to run.
   cfg.gates = {
@@ -240,6 +246,11 @@ async function init(opts) {
   // Agent-home = skills + session cwd with no tests and no deploy (e.g. a skills
   // project separate from the code repos): write an agent-only config (no build/verify).
   const agentHome = !d.test_command && d.platform === "none";
+  // Monorepo hint: workspaces mean per-package runners - init each package; the
+  // enforcer discovers nested receipts.config.json files automatically.
+  const ws = readJson(path.join(dir, "package.json"));
+  if (exists(path.join(dir, "pnpm-workspace.yaml")) || (ws && ws.workspaces))
+    console.error("  note: workspaces detected - run `receipts init` in each package too; the\n        enforcer picks up nested receipts.config.json files (root keeps the policy).\n");
   // Diagnostics go to stderr so --print keeps stdout pure JSON.
   console.error(`receipts init - scanning ${dir}\n`);
   console.error("  detected:");
@@ -270,11 +281,14 @@ async function init(opts) {
         const yn = await ask(rl, `No project loop skill found. Scaffold one (${d.repo_name}-fix-loop) from the template?`, "Y");
         if (/^y(es)?$/i.test(yn)) a._scaffold = true;
       }
+      // Team memory: repo-local store = the whole team inherits every recorded trap.
+      const ts = await ask(rl, "Trajectory memory store? (home = private per-machine, repo = .receipts/ committed for team sharing)", "home");
+      if (ts && ts !== "home") a.trajectory_store = ts;
       const xh = list(await ask(rl, "Extra deploy/prod hosts beyond detected? (comma-separated, blank to skip)", ""));
       if (xh.length) a.extra_hosts = xh;
       const sq = list(await ask(rl, "By-value query hosts/tools (e.g. a DB proxy host)? (blank to skip)", ""));
       if (sq.length) a.staging_query_patterns = sq;
-      // Gate applicability (G0-G10): default all-on; disable what does not fit this project.
+      // Gate applicability (G0-G13): default all-on; disable what does not fit this project.
       if (!agentHome) {
         a.medium = await ask(rl, "Project type / medium? (web/api/library/cli/data/infra/mobile/desktop/...)", d.medium);
         a.integration_branch = await ask(rl, "Integration branch for fresh-base checks (G8)?", d.default_branch || "main");
@@ -383,11 +397,17 @@ function replay(rest) {
 }
 
 // `receipts explain <receipt>` - human-readable summary of a receipt artifact.
+// `--md` renders the same markdown report the GitHub Action posts (one renderer, no drift).
 function explain(rest) {
   const receiptPath = firstPositional(rest);
-  if (!receiptPath) { console.error("usage: receipts explain <receipt.json>"); process.exit(1); }
+  if (!receiptPath) { console.error("usage: receipts explain <receipt.json> [--md]"); process.exit(1); }
   const rec = readJson(receiptPath);
   if (!rec) { console.error(`cannot read receipt: ${receiptPath}`); process.exit(1); }
+  if (rest.includes("--md")) {
+    const { renderMarkdown } = require("../enforcer/render.js");
+    process.stdout.write(renderMarkdown(rec));
+    return;
+  }
   const sha = (s) => String(s || "").slice(0, 12) || "?";
   const out = [];
   out.push(`receipt (${rec.schema || "?"}) - ${rec.verdict || "?"}`);

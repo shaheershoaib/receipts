@@ -1,5 +1,147 @@
 # Changelog
 
+## Unreleased
+
+### Added
+- **G7 speaks Python.** The dependent-selection scan now covers Python alongside JS/TS:
+  repo-relative absolute imports (`a.b.c` -> `a/b/c.py` / `__init__.py`), relative imports
+  (`from ..shared import x`), from-import submodule forms, alias/comma lists - with
+  new-file AND new-edge detection and co-located test mapping (`test_mod.py` /
+  `mod_test.py` / `tests/test_mod.py`). src/-layouts and namespace packages are not
+  resolved by the built-in scan - those repos declare `gates.G7.graph`. Venv/site-packages
+  are never consumers.
+- **Monorepo support: per-package runners, one policy.** Nested `receipts.config.json`
+  files (read from the trusted BASE commit, same posture as the root) contribute their
+  `verify` block for the tests under them: the receipt's red/green runs per group with the
+  nearest config's `test_command`, cwd'd to the package, evidence labeled per package
+  (`receipt-red@base [packages/a]`). G9 runs the root suite or the AFFECTED packages'
+  suites; a refactor with no root suite proves itself on every package suite. `claim` /
+  `degrade` / `gates` stay root-only. A package missing a usable `test_command` blocks by
+  name; G7 dependent tests in a runner-less package are skipped loudly. `receipts init`
+  hints when it detects workspaces.
+- **G13 claim-scope congruence is now enforced** (opt-in). With
+  `gates.G13.coverage_command` configured, the enforcer runs the suite under coverage on
+  head, parses the lcov (`gates.G13.lcov_path`, default `coverage/lcov.info`), intersects
+  executed lines with the diff's ADDED production lines, and NAMES every changed line no
+  test executed - the 497 lines riding along behind a 3-line receipt. Warn default,
+  `gates.G13.mode` -> block; a failed coverage run or missing lcov degrades loudly
+  ("G13 not evaluated"), never silently. lcov because every ecosystem can emit it
+  (c8/nyc, coverage.py, SimpleCov, JaCoCo converters).
+- **Team-shared trajectory memory** (`agent.trajectory_store`). `home` (default) keeps
+  the store private and per-machine; `repo` moves it to `.receipts/trajectories.jsonl` -
+  committed, so the whole team inherits every recorded trap and dead end instead of each
+  laptop learning alone. Append-only JSONL merges trivially. `receipts init` asks;
+  `RECEIPTS_TRAJECTORY_STORE` overrides for tests/redirects.
+
+### Changed (breaking for hook customizers only)
+- **The two python3 Stop hooks are now ONE Node hook** (`plugin/hooks/stop-gates.mjs`).
+  Same backstops - the unverified-close-out block and the trajectory nudge - in a single
+  transcript pass instead of two, and one runtime instead of two: the plugin already
+  requires Node for its MCP server, and python3 was never a given on Windows. If both
+  checks fire, one decision carries both reasons. Anyone who patched the old .py files
+  re-applies against the .mjs; behavior is 1:1 (the python test suite was ported, plus
+  regression cases) with one deliberate fix below.
+
+### Fixed
+- **A ticket comment mentioning a status no longer reads as a close-out.** The old hook
+  matched configured fixed-statuses as SUBSTRINGS of the whole tracker payload, so an
+  update whose comment said "moved to Pending Retest earlier" false-fired the
+  verification gate. Statuses are now matched as status VALUES (`: "Pending Retest"`),
+  which still covers flat and nested (Notion select) shapes. Spurious Stop-blocks are
+  how hook plugins get uninstalled.
+
+### Added
+- **The verdict now explains itself.** Every enforcer run renders a markdown report -
+  verdict, red/green evidence, every re-run command with exit code and duration, per-gate
+  findings (G6/G7/G11/G12), warnings - to the GitHub job step summary; `comment: true` on
+  the action posts the same report as ONE upserted PR comment (needs
+  `permissions: pull-requests: write`). `receipts explain <receipt> --md` renders the
+  identical report locally - one renderer (`enforcer/render.js`), no drift. A failing
+  gate that reads as a bare red X gets resented; one that explains itself gets acted on.
+- **G3 assist in the report** (advisory): when `build.sha_source` is
+  `github-deployments`, the report looks up whether any deployment reached the head sha -
+  "no deployment carries this sha yet" means anything observed on a deployed URL is still
+  the OLD build. Reporting is a side-channel: it can never flip a verdict or fail the job.
+- **Three new gates - the optimizing-agent gates.** G0-G10 defend against an agent that is
+  *wrong*; these defend against an agent that is *optimizing* (making the check green
+  rather than the code right):
+  - **G11 referee integrity** ("don't shoot the referee"): flags a PR that DELETES test
+    files (rename-aware), adds skip/focus markers (`.skip` / `xit` / `@pytest.mark.skip` /
+    `t.Skip` / `@Disabled` / `.only` - multi-framework), or rewrites snapshot artifacts.
+    A green earned by shrinking the suite's assertion power proves nothing: G9 checks the
+    suite passes, G11 that it kept its teeth. Honest escape hatch: a `test-removal: <why>`
+    line acknowledges intentional removals (tracked, never blocked). Default warn,
+    `gates.G11.mode` -> block; snapshot churn always warn-only. Runs statically on every PR.
+  - **G12 fix the cause, not the alarm** (the silencing gate): on a fix-claim, flags a diff
+    that REMOVES throw/raise statements or ADDS empty/swallowing catches - the 403 "fixed"
+    by deleting the permission check, the error toast by an empty catch. The receipt goes
+    red->green honestly (the alarm IS gone) and the system is broken silently. Heuristic,
+    so it asks rather than answers: warn default, `gates.G12.mode` -> block. Spec adds
+    G1's corollary: assert the POSITIVE invariant, not the absence of the complaint.
+  - **G13 claim-scope congruence** (spec + config now; enforcer coverage-run ships next):
+    the receipt must EXERCISE the diff - changed production lines no test executes are
+    unverified changes shielded by a narrow receipt.
+- **Spec amendments:** G2 now pins the reporter's RUNTIME CONTEXT (role/permissions,
+  tenant, feature-flag bucket, locale) as part of the flow; G3 notes the artifact is
+  code + CONFIG (the right sha under the wrong flag bucket is the wrong build); G9 gains
+  the determinism corollary (`verify.receipt_runs`).
+- **`receipt:` pin.** A `receipt: path/to/the.test.ts` line in the PR body names the
+  acceptance test explicitly, separating the real receipt from incidental test churn (a
+  snapshot refresh, a rename) that used to pollute the red run and mis-read as "weak
+  receipt". A pin may name an UNCHANGED test - the legitimate "my fix makes existing test
+  X flip red->green" case. An invalid pin (not a test file / absent at head) blocks.
+- **Receipt determinism** (`verify.receipt_runs`, default 1). Run the receipt N times per
+  side: red must be red N/N on base, green green N/N on head. A flaky receipt can
+  manufacture a fake red or pass a broken fix; a mixed result is now a distinct
+  `flaky receipt` / `flaky green` BLOCK instead of silently counting.
+- **Config key validation.** Unknown keys in `receipts.config.json` (a typo'd `gatez` /
+  `test_comand`) used to silently mean "default behavior" - the quietest possible
+  misconfiguration of a verification tool. The enforcer now WARNS, naming each unknown
+  key (never blocks: an older enforcer meeting a newer config keeps working, loudly).
+
+### Fixed
+- **Deleted tests and snapshot artifacts polluted the receipt set.** A test file deleted
+  by the PR (which cannot run on head) and `.snap` artifacts (which match the test-path
+  shape but are not runnable) were included in the red/green receipt run, failing the
+  green phase spuriously. Both are now excluded - their churn is G11's finding instead.
+- **Local `receipts verify` left the repo on a detached HEAD.** The base/head checkout
+  dance restored the original SHA, not the original BRANCH - so a commit made after a
+  local verify silently missed the branch (found the hard way: an amend after a verify
+  left a PR pointing at the pre-amend commit). The enforcer now restores the branch.
+- **Stop hook: a decorated status value no longer evades close-out detection.** The
+  anchored match required the configured status to be the ENTIRE JSON string value, so a
+  leading emoji/symbol pill (`"[x] Pending Retest"`) or a trailing note
+  (`"Pending Retest - awaiting tester"`) silently disabled the verification gate. The
+  status now matches at the start of the value (non-word prefix allowed, suffix allowed);
+  a status mentioned mid-prose still does not fire.
+- **Stop hook: hyphen/space-tolerant exit tags actually work.** The `[- ]?` / `\s+`
+  transforms in the trajectory reminder's exit-disposition regex operated on escape
+  sequences the JS escaper never emits (a Python-port artifact), so "unverified reasoned"
+  and "won't  fix" variants missed the nudge. The transforms now target the literals.
+- **PR-comment report: `reason`/warning text cannot fire live @-mentions.** Both render
+  outside code spans and interpolate PR-controlled text (file names, config values); a
+  crafted `@user` would have notified via the bot's comment. A zero-width space now breaks
+  the mention without altering the visible text.
+- **G6: a comment right after a colon is stripped like any other comment.** The URL guard
+  protected ANY `://`, so `x: string //note` and `onPage://TODO: wire Pagination` leaked
+  comment text into the tokenizer and a twin could read as having adopted an affordance it
+  only mentions in a comment. Only known URL schemes (`https://`, `wss://`, ...) survive.
+- **G7 Python: a from-import name guess no longer fabricates a phantom dependent.**
+  `from pkg.mod import thing` guessed `pkg/mod/thing` as a module path even when
+  `pkg/mod.py` exists (so `thing` is a symbol); an unrelated file at that path made its
+  importer a false dependent - re-running (or in block mode, failing) the wrong tests.
+  The guess is now dropped when the parent module file exists in the tree; real
+  submodule imports (`from myapp import models`) are unaffected.
+
+### Changed
+- **Test/suite commands now default to a 20-minute timeout** (`verify.command_timeout_ms`;
+  explicit `0` restores no-timeout). A hung test used to hold the CI job to its own
+  multi-hour ceiling.
+- **G6's heuristic ignores comments.** An affordance mentioned only in a comment is not a
+  rollout (a license-header sweep is not pagination), a commented-out import is not an
+  edge, and a twin whose only mention of the marker is a "TODO: add it" comment counts as
+  UNCOVERED rather than adopted.
+
 ## 0.2.1
 
 The distribution release: the published artifact now proves itself the way the tool

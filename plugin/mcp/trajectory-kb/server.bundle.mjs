@@ -3229,8 +3229,8 @@ var require_utils = __commonJS({
       }
       return ind;
     }
-    function removeDotSegments(path2) {
-      let input = path2;
+    function removeDotSegments(path3) {
+      let input = path3;
       const output = [];
       let nextSlash = -1;
       let len = 0;
@@ -3482,8 +3482,8 @@ var require_schemes = __commonJS({
         wsComponent.secure = void 0;
       }
       if (wsComponent.resourceName) {
-        const [path2, query] = wsComponent.resourceName.split("?");
-        wsComponent.path = path2 && path2 !== "/" ? path2 : void 0;
+        const [path3, query] = wsComponent.resourceName.split("?");
+        wsComponent.path = path3 && path3 !== "/" ? path3 : void 0;
         wsComponent.query = query;
         wsComponent.resourceName = void 0;
       }
@@ -7129,10 +7129,10 @@ function mergeDefs(...defs) {
 function cloneDef(schema) {
   return mergeDefs(schema._zod.def);
 }
-function getElementAtPath(obj, path2) {
-  if (!path2)
+function getElementAtPath(obj, path3) {
+  if (!path3)
     return obj;
-  return path2.reduce((acc, key) => acc?.[key], obj);
+  return path3.reduce((acc, key) => acc?.[key], obj);
 }
 function promiseAllObject(promisesObj) {
   const keys = Object.keys(promisesObj);
@@ -7541,11 +7541,11 @@ function explicitlyAborted(x, startIndex = 0) {
   }
   return false;
 }
-function prefixIssues(path2, issues) {
+function prefixIssues(path3, issues) {
   return issues.map((iss) => {
     var _a3;
     (_a3 = iss).path ?? (_a3.path = []);
-    iss.path.unshift(path2);
+    iss.path.unshift(path3);
     return iss;
   });
 }
@@ -7692,16 +7692,16 @@ function flattenError(error2, mapper = (issue2) => issue2.message) {
 }
 function formatError(error2, mapper = (issue2) => issue2.message) {
   const fieldErrors = { _errors: [] };
-  const processError = (error3, path2 = []) => {
+  const processError = (error3, path3 = []) => {
     for (const issue2 of error3.issues) {
       if (issue2.code === "invalid_union" && issue2.errors.length) {
-        issue2.errors.map((issues) => processError({ issues }, [...path2, ...issue2.path]));
+        issue2.errors.map((issues) => processError({ issues }, [...path3, ...issue2.path]));
       } else if (issue2.code === "invalid_key") {
-        processError({ issues: issue2.issues }, [...path2, ...issue2.path]);
+        processError({ issues: issue2.issues }, [...path3, ...issue2.path]);
       } else if (issue2.code === "invalid_element") {
-        processError({ issues: issue2.issues }, [...path2, ...issue2.path]);
+        processError({ issues: issue2.issues }, [...path3, ...issue2.path]);
       } else {
-        const fullpath = [...path2, ...issue2.path];
+        const fullpath = [...path3, ...issue2.path];
         if (fullpath.length === 0) {
           fieldErrors._errors.push(mapper(issue2));
         } else {
@@ -15452,10 +15452,39 @@ var StdioServerTransport = class {
 // index.js
 import { randomUUID } from "node:crypto";
 import fs from "fs/promises";
-import path from "path";
-import os from "os";
-var STORE_DIR = path.join(os.homedir(), ".claude/mcp-servers/trajectory-kb/data");
-var STORE = path.join(STORE_DIR, "trajectories.jsonl");
+import path2 from "path";
+
+// store.mjs
+import { readFileSync } from "node:fs";
+import path from "node:path";
+import os from "node:os";
+var HOME_STORE = path.join(os.homedir(), ".claude/mcp-servers/trajectory-kb/data/trajectories.jsonl");
+function resolveStore(startDir, env = process.env) {
+  if (env.RECEIPTS_TRAJECTORY_STORE) return path.resolve(env.RECEIPTS_TRAJECTORY_STORE);
+  let d = path.resolve(startDir || process.cwd());
+  for (let i = 0; i < 40; i++) {
+    let cfg = null;
+    try {
+      cfg = JSON.parse(readFileSync(path.join(d, "receipts.config.json"), "utf8"));
+    } catch (e) {
+      if (e && e.code !== "ENOENT") return HOME_STORE;
+    }
+    if (cfg) {
+      const want = cfg.agent && cfg.agent.trajectory_store;
+      if (!want || want === "home") return HOME_STORE;
+      if (want === "repo") return path.join(d, ".receipts", "trajectories.jsonl");
+      return path.resolve(d, String(want));
+    }
+    const parent = path.dirname(d);
+    if (parent === d) break;
+    d = parent;
+  }
+  return HOME_STORE;
+}
+
+// index.js
+var STORE = resolveStore();
+var STORE_DIR = path2.dirname(STORE);
 var VALID_OUTCOMES = ["fixed", "unverified-reasoned", "speculative", "reverted"];
 var VALID_TIERS = ["top", "cheap", "mixed"];
 var nowIso = () => (/* @__PURE__ */ new Date()).toISOString();

@@ -32,6 +32,9 @@ const fs = require("fs");
 const path = require("path");
 const g7 = require("./g7.js");
 const g6 = require("./g6.js");
+const g11 = require("./g11.js");
+const g12 = require("./g12.js");
+const g13 = require("./g13.js");
 
 const TEST_PATH = /(\.test\.|\.spec\.|_test\.|(^|\/)test_|(^|\/)tests?\/|\/__tests__\/|_spec\.)/i;
 // JSON keys that are documentation, not contract surface - removing them is not breaking.
@@ -160,6 +163,76 @@ function expandTestPlaceholders(cmd, files) {
     .split("{test}").join(files.map((f) => `"${f}"`).join(" "))
     .split("{test_dirs}").join(dirs.map((d) => `"${d}"`).join(" "))
     .split("{test_classes}").join(classes.join(","));
+}
+
+// Monorepo grouping: each receipt test runs with the test_command of the NEAREST
+// receipts.config.json above it (nested configs are read from the trusted BASE commit,
+// same posture as the root config, and contribute ONLY their verify block - the policy
+// surface (claim / degrade / gates) stays root-only: one gate, many test runners).
+// Returns [{ dir, verify, tests }] with tests RELATIVE to dir (commands run with cwd=dir).
+function groupTestsByPackage(tests, pkgVerify, rootVerify) {
+  const dirs = [...(pkgVerify || new Map()).keys()].sort((a, b) => b.length - a.length); // deepest first
+  const groups = new Map(); // "" = the root group
+  for (const t of tests || []) {
+    const dir = dirs.find((d) => t.startsWith(d + "/")) || "";
+    if (!groups.has(dir)) groups.set(dir, { dir, verify: (dir ? pkgVerify.get(dir) : rootVerify) || {}, tests: [] });
+    groups.get(dir).tests.push(dir ? t.slice(dir.length + 1) : t);
+  }
+  return [...groups.values()].sort((a, b) => a.dir.localeCompare(b.dir));
+}
+
+// What to restore after the base/head checkout dance: the BRANCH when on one, else the
+// sha. Restoring the sha alone leaves a local `receipts verify` run on a detached HEAD -
+// the user's next commit then silently misses their branch (found the hard way: an amend
+// after a local verify left a PR pointing at the pre-amend commit).
+function originalRef(repo) {
+  const branch = git(repo, ["symbolic-ref", "--short", "-q", "HEAD"]);
+  return branch.ok && branch.out.trim() ? branch.out.trim() : git(repo, ["rev-parse", "HEAD"]).out.trim();
+}
+
+// Per-command timeout resolution: DEFAULT 20 minutes - a hung test must not hold the CI
+// job to its own multi-hour ceiling. An explicit 0 opts out (the job's timeout still
+// applies); any positive number is honored as-is.
+function resolveTimeout(verify) {
+  if (verify && verify.command_timeout_ms === 0) return 0;
+  const n = Number(verify && verify.command_timeout_ms);
+  return n > 0 ? n : 1200000;
+}
+
+// Schema-lite key validation. The repo ships a real JSON schema, but validating against
+// it would need a dependency - so this mirrors just the KEY SETS. A typo'd key ("gatez",
+// "test_comand") silently meaning "default behavior" is exactly the quiet
+// misconfiguration a verification tool must not allow. Unknown keys WARN, never block
+// (forward-compat: an older enforcer meeting a newer config keeps working, loudly).
+const KNOWN_KEYS = {
+  "": ["$schema", "version", "claim", "build", "verify", "degrade", "gates", "agent"],
+  claim: ["issue_link", "require_receipt_for", "downgrade_tags"],
+  build: ["sha_source", "platform", "deploy_host_patterns", "environments", "verify_against"],
+  verify: ["test_command", "suite_command", "require_fresh_base", "on_load_error_red", "command_timeout_ms", "receipt_runs", "live_drive"],
+  degrade: ["on_no_receipt", "on_unreachable_build"],
+  gates: ["medium", "work_type", "enabled", "disabled", "G6", "G7", "G8", "G10", "G11", "G12", "G13"],
+  "gates.G6": ["mode", "auto", "surfaces"],
+  "gates.G7": ["mode", "graph", "verify_all_dependents"],
+  "gates.G8": ["integration_branch"],
+  "gates.G10": ["contract_paths", "mode", "contract_pairs"],
+  "gates.G11": ["mode"],
+  "gates.G12": ["mode"],
+  "gates.G13": ["coverage_command", "lcov_path", "mode"],
+  agent: ["loop_skills", "staging_query_patterns", "closeout_fixed_statuses", "repo_name", "trajectory_store"],
+};
+function unknownConfigKeys(cfg) {
+  const out = [];
+  const walk = (obj, prefix) => {
+    const known = KNOWN_KEYS[prefix];
+    if (!known || !obj || typeof obj !== "object" || Array.isArray(obj)) return;
+    for (const k of Object.keys(obj)) {
+      if (!known.includes(k)) { out.push(prefix ? `${prefix}.${k}` : k); continue; }
+      const next = prefix ? `${prefix}.${k}` : k;
+      if (KNOWN_KEYS[next]) walk(obj[k], next);
+    }
+  };
+  walk(cfg, "");
+  return out;
 }
 
 function gateOn(gates, id) {
@@ -292,14 +365,19 @@ function main() {
     cfg.claim = {}; cfg.degrade = {}; cfg.gates = {};
   }
 
+  // A typo'd key silently becoming default behavior is a quiet misconfiguration - warn.
+  const badKeys = unknownConfigKeys(cfg);
+  if (badKeys.length)
+    warn(`config: unknown key(s) not read by the enforcer: ${badKeys.join(", ")} - a typo here silently becomes default behavior; check receipts.config.schema.json for the valid keys.`);
+
   const claim = cfg.claim || {};
   const degrade = cfg.degrade || {};
   const verify = cfg.verify || {};
   const gates = cfg.gates || {};
   const noReceiptMode = degrade.on_no_receipt || "require-downgrade-tag";
-  // Optional per-command timeout (ms) for the test/suite commands; 0 / unset = no timeout
-  // (preserves prior behavior). Guards a hung test from hanging the whole job.
-  const cmdTimeout = Number(verify.command_timeout_ms) || 0;
+  // Per-command timeout for the test/suite commands: default 20 min (a hung test must not
+  // hold the CI job to its ceiling); verify.command_timeout_ms overrides, explicit 0 disables.
+  const cmdTimeout = resolveTimeout(verify);
   // Trigger scope. Default ("issue-link"): only a fix-claim (closes #N) must carry a receipt.
   // Opt-in ("any-source-change"): a PR that touches production source without a receipt, an
   // honest downgrade tag, or an explicit work-type is also blocked - closing the "omit the
@@ -321,6 +399,21 @@ function main() {
     strict, work_type: workType || null, is_fix_claim: isFixClaim,
   });
   RECEIPT.gates = { enabled: gates.enabled || "all", disabled: gates.disabled || [] };
+
+  // Monorepo: discover nested receipts.config.json files at the trusted BASE commit.
+  // Each contributes its verify block for the tests under its directory.
+  const pkgVerify = new Map();
+  for (const f of git(repo, ["ls-tree", "-r", "--name-only", base]).out.split("\n").map((s) => s.trim())) {
+    if (!f.endsWith("/receipts.config.json")) continue;
+    const raw = git(repo, ["show", `${base}:${f}`]);
+    if (!raw.ok) continue;
+    const dir = f.slice(0, -"/receipts.config.json".length);
+    try {
+      const c = JSON.parse(raw.out);
+      if (c && c.verify) pkgVerify.set(dir, c.verify);
+    } catch { warn(`monorepo: ${f} is not valid JSON - its package is treated as config-less`); }
+  }
+  if (pkgVerify.size) RECEIPT.packages = [...pkgVerify.keys()].sort();
 
   // The PR's changed files - computed early so G6 can run on EVERY PR (fix-claim or not).
   const diff = git(repo, ["diff", "--name-only", `${base}..${head}`]);
@@ -350,6 +443,42 @@ function main() {
       if ((g6cfg.mode || "warn") === "block") emit("BLOCK", msg);
       warn(msg);
     }
+  }
+
+  // G11 referee-integrity (the "don't shoot the referee" gate): a green earned by DELETING
+  // the failing test, SKIPPING it, or regenerating snapshots wholesale is a suite that lost
+  // its teeth - G9 verifies the suite passes, G11 watches that it kept its assertion power.
+  // Static over the -M name-status diff (renames are not deletions), every PR, like G6.
+  if (gateOn(gates, "G11")) {
+    const g11cfg = (gates && gates.G11) || {};
+    const ns = git(repo, ["diff", "--name-status", "-M", `${base}..${head}`]);
+    const nameStatus = !ns.ok ? [] : ns.out.split("\n").map((l) => l.trim()).filter(Boolean).map((l) => {
+      const parts = l.split(/\t/);
+      const status = parts[0][0]; // "R100" -> "R"
+      return status === "R" ? { status, file: parts[1], to: parts[2] } : { status, file: parts[1] };
+    });
+    const readAt = (c, p) => { const r = git(repo, ["show", `${c}:${p}`]); return r.ok ? r.out : null; };
+    let g11res = { deletions: [], skips: [], snapshots: [] };
+    try { g11res = g11.computeG11({ nameStatus, readAt, base, head }); } catch { /* keep empty */ }
+    const acknowledged = g11.testRemovalAcknowledged(prBody);
+    if (g11res.deletions.length || g11res.skips.length || g11res.snapshots.length)
+      RECEIPT.gates.G11 = { deletions: g11res.deletions, skips: g11res.skips, snapshots: g11res.snapshots, acknowledged };
+    const hard = [];
+    if (g11res.deletions.length) hard.push(`deleted test file(s): ${g11res.deletions.join(", ")}`);
+    if (g11res.skips.length) hard.push(`skip/focus marker(s) added: ${g11res.skips.map((s) => `${s.file} (${s.marker} +${s.added})`).join(", ")}`);
+    if (hard.length) {
+      if (acknowledged) {
+        warn(`G11: test removal/skip acknowledged via 'test-removal:' - ${hard.join("; ")} (tracked, not blocked).`);
+      } else {
+        const msg = `G11 referee integrity: this PR removes or mutes tests - ${hard.join("; ")}. A green earned by shrinking the suite proves nothing: G9 checks that the suite passes, G11 that it kept its teeth. Restore them, or acknowledge honestly with a 'test-removal: <why>' line in the PR body.`;
+        if ((g11cfg.mode || "warn") === "block") emit("BLOCK", msg);
+        warn(msg);
+      }
+    }
+    if (g11res.snapshots.length)
+      // Snapshots update legitimately with intended changes - always warn-only, framed as
+      // the question it is.
+      warn(`G11: ${g11res.snapshots.length} snapshot file(s) rewritten (${g11res.snapshots.slice(0, 6).join(", ")}${g11res.snapshots.length > 6 ? ` +${g11res.snapshots.length - 6} more` : ""}) - confirm they encode the INTENDED behavior, not a regeneration that makes whatever the code now does the expectation.`);
   }
 
   // Strict trigger: an unclaimed code change that touched no PRODUCTION source (docs / tests /
@@ -385,6 +514,26 @@ function main() {
   // G10 rollout compatibility.
   checkContracts(repo, base, head, gates);
 
+  // G12 fix-the-cause-not-the-alarm (the silencing assist): a fix-claim whose diff REMOVES
+  // throw/raise statements or ADDS empty catches may have silenced the symptom rather than
+  // repaired the invariant - the receipt goes red->green honestly (the alarm IS gone) and
+  // the fix is wrong in the worst way. Heuristic, so it ASKS; the judgment is the agent's
+  // and the reviewer's (some fixes legitimately remove an over-strict check).
+  if (isFixClaim && gateOn(gates, "G12") && changedSource.length) {
+    const g12cfg = (gates && gates.G12) || {};
+    const readAt = (c, p) => { const r = git(repo, ["show", `${c}:${p}`]); return r.ok ? r.out : null; };
+    let g12res = { findings: [] };
+    try { g12res = g12.computeG12({ changedSource, readAt, base, head }); } catch { /* keep empty */ }
+    if (g12res.findings.length) {
+      RECEIPT.gates.G12 = { findings: g12res.findings };
+      const detail = g12res.findings.map((f) =>
+        f.kind === "removed-throw" ? `${f.file}: ${f.removed} throw/raise removed` : `${f.file}: ${f.name} added`).join("; ");
+      const msg = `G12 fix the cause, not the alarm: this fix ${detail}. If the symptom disappeared because its DETECTOR did (a permission check deleted to cure a 403, an exception swallowed to cure an error toast), the bug is still there - now unreported. If the check itself was the bug, say so in the PR; a receipt asserting the POSITIVE behavior (the value arrives, the action succeeds) beats one asserting the complaint is gone.`;
+      if ((g12cfg.mode || "warn") === "block") emit("BLOCK", msg);
+      warn(msg);
+    }
+  }
+
   // G7 dependent-test-selection: compute the NEW dependents of the changed source - consumers
   // that newly route through it (a freshly-added file, or a freshly-added import edge). Their
   // co-located tests get re-run on head below, so an integration break the carried receipt
@@ -406,35 +555,67 @@ function main() {
   // point each command actually RUNS (below), so a command that will NOT run - a masked
   // test_command on an inverted or no-receipt path, or a suite_command with G9 off - is never
   // a false block.
-  const testCmd = verify.test_command;
 
   // Inverted receipt: a refactor/chore changes no behavior, so the proof is the full suite
-  // staying green on head - not a red->green on a new test.
+  // staying green on head - not a red->green on a new test. In a monorepo with no root
+  // suite, EVERY package suite is the proof (no behavior change anywhere).
   if (inverted) {
-    const suiteCmd = verify.suite_command;
-    if (!suiteCmd || /REPLACE_ME/.test(suiteCmd))
+    const rootSuiteCmd = verify.suite_command;
+    const invRunners = rootSuiteCmd && !/REPLACE_ME/.test(rootSuiteCmd)
+      ? [{ dir: "", cmd: rootSuiteCmd }]
+      : [...pkgVerify.entries()]
+          .filter(([, v]) => v.suite_command && !/REPLACE_ME/.test(v.suite_command))
+          .map(([d, v]) => ({ dir: d, cmd: v.suite_command }));
+    if (!invRunners.length)
       emit(noReceiptMode === "warn" ? "WARN" : "BLOCK",
         `${workType}: a ${workType} changes no behavior, so its receipt is the FULL suite staying green on head - but verify.suite_command is not set. Set it, or tag the PR honestly.`);
-    if (masksExit(suiteCmd))
-      emit("BLOCK", "verify.suite_command can mask its own exit code - a green cannot be trusted (G9). Use a clean command or a script.");
+    for (const s of invRunners)
+      if (masksExit(s.cmd))
+        emit("BLOCK", `verify.suite_command${s.dir ? ` for package '${s.dir}'` : ""} can mask its own exit code - a green cannot be trusted (G9). Use a clean command or a script.`);
     RECEIPT.gates.work_type_inverted = workType;
-    const original = git(repo, ["rev-parse", "HEAD"]).out.trim();
-    let suite;
+    const original = originalRef(repo);
+    let bad = null;
     try {
       if (!git(repo, ["checkout", "-q", "-f", head]).ok) emit("BLOCK", `cannot checkout head ${head}`);
-      suite = runCmd(repo, suiteCmd, cmdTimeout);
-      record(`${workType}-suite@head`, suiteCmd, suite);
+      for (const s of invRunners) {
+        const r = runCmd(path.join(repo, s.dir), s.cmd, cmdTimeout);
+        record(s.dir ? `${workType}-suite@head [${s.dir}]` : `${workType}-suite@head`, s.cmd, r);
+        if (!r.ok && !bad) bad = r;
+      }
     } finally {
       git(repo, ["checkout", "-q", "-f", original]);
     }
-    if (!suite.ok)
-      emit("BLOCK", `${workType}: the full suite is NOT green on head - a ${workType} must not change behavior`, (suite.out || "").split("\n").slice(-8).join("\n"));
+    if (bad)
+      emit("BLOCK", `${workType}: the full suite is NOT green on head - a ${workType} must not change behavior`, (bad.out || "").split("\n").slice(-8).join("\n"));
     finish(`${workType} verified: the full suite is green on head (no behavior change) - G9`);
   }
 
-  // The receipt = test files added/changed between base and head.
-  const tests = changed.filter((f) => TEST_PATH.test(f));
+  // The receipt = test files added/changed between base and head - unless the PR PINS it:
+  // a `receipt: <path>` line in the body names the acceptance test explicitly, separating
+  // the real receipt from incidental test churn (a snapshot refresh, a rename) that would
+  // otherwise pollute the red run and mis-read as "weak receipt". A pin may also name an
+  // UNCHANGED test - the legitimate "my fix makes existing test X flip red->green" case.
+  // Parsing is strict-but-forgiving: a single path-looking token is a pin (and is blocked
+  // if invalid); a line with prose after the colon is ignored.
+  // Excluded from the receipt set: a test DELETED by the PR (it cannot run on head; its
+  // absence is G11's finding, not a receipt) and snapshot ARTIFACTS (.snap matches the
+  // test-path shape but is not runnable - churn is G11's finding too).
+  const changedTests = changed.filter((f) =>
+    TEST_PATH.test(f) && !g11.SNAPSHOT_PATH.test(f) && git(repo, ["cat-file", "-e", `${head}:${f}`]).ok);
+  const pins = [];
+  const pinRe = /^\s*receipt\s*:\s*(\S+)\s*$/gim;
+  let pm;
+  while ((pm = pinRe.exec(prBody))) pins.push(pm[1]);
+  const pathish = [...new Set(pins.filter((p) => /[/.]/.test(p)))];
+  for (const p of pathish) {
+    if (!TEST_PATH.test(p))
+      emit("BLOCK", `pinned receipt '${p}' is not a test file - \`receipt:\` must name the acceptance test that flips red->green`);
+    if (!git(repo, ["cat-file", "-e", `${head}:${p}`]).ok)
+      emit("BLOCK", `pinned receipt '${p}' does not exist at head`);
+  }
+  const tests = pathish.length ? pathish : changedTests;
   RECEIPT.tests = tests;
+  RECEIPT.pinned = pathish.length > 0;
   if (!tests.length) {
     if (noReceiptMode === "warn") emit("WARN", "no receipt (no test added/changed) - allowed by config, but unverified");
     emit("BLOCK", "no receipt: this change adds no acceptance test. Add a test that FAILS before and PASSES after the change, or tag the PR 'unverified-reasoned' / 'speculative'. (A behavior-preserving change: tag it `work-type: refactor`.)");
@@ -446,55 +627,149 @@ function main() {
   if (unsafe.length)
     emit("BLOCK", `refusing to run: changed test path(s) are unsafe (shell metacharacters, or a leading - / : a test runner or git pathspec could misread): ${unsafe.join(", ")}`);
 
-  if (!testCmd || /REPLACE_ME/.test(testCmd))
-    emit("BLOCK", "verify.test_command is not set in receipts.config.json (run `receipts init`)");
-  const cmdFor = (files) => expandTestPlaceholders(testCmd, files);
+  // Group the receipt tests by their nearest config (monorepo: nested configs supply
+  // per-package test runners) and validate every group's runner up front.
+  const groups = groupTestsByPackage(tests, pkgVerify, verify);
+  for (const gp of groups) {
+    const tc = gp.verify.test_command;
+    const where = gp.dir ? ` for package '${gp.dir}'` : "";
+    if (!tc || /REPLACE_ME/.test(tc))
+      emit("BLOCK", `verify.test_command is not set${where} in receipts.config.json (run \`receipts init\`${gp.dir ? " there" : ""})`);
+    if (masksExit(tc))
+      emit("BLOCK", `verify.test_command${where} can mask its own exit code (; , || , pipe, background &, newline, or command substitution), so a green from it cannot be trusted (G9). Use a single command whose own exit is the test result, or wrap it in a script.`);
+  }
+  // One labeled command per group; the aggregate is ok only when EVERY group is.
+  const runGroups = (gs, label) => {
+    const agg = { ok: true, out: "", timedOut: false };
+    for (const gp of gs) {
+      const cmd = expandTestPlaceholders(gp.verify.test_command, gp.tests);
+      const r = runCmd(path.join(repo, gp.dir), cmd, cmdTimeout);
+      record(gp.dir ? `${label} [${gp.dir}]` : label, cmd, r);
+      agg.ok = agg.ok && r.ok;
+      agg.out += r.out || "";
+      agg.timedOut = agg.timedOut || !!r.timedOut;
+    }
+    return agg;
+  };
 
+  // G9 suite runners: the root suite when configured; else the AFFECTED packages' suites.
   const suiteCmd = verify.suite_command;
-  const haveSuite = suiteCmd && !/REPLACE_ME/.test(suiteCmd);
+  const suiteRunners = suiteCmd && !/REPLACE_ME/.test(suiteCmd)
+    ? [{ dir: "", cmd: suiteCmd }]
+    : groups
+        .filter((gp) => gp.dir && gp.verify.suite_command && !/REPLACE_ME/.test(gp.verify.suite_command))
+        .map((gp) => ({ dir: gp.dir, cmd: gp.verify.suite_command }));
+  const haveSuite = suiteRunners.length > 0;
+  // G13 claim-scope congruence is opt-in: only with a coverage command configured (root only).
+  const g13cfg = (gates && gates.G13) || {};
+  const haveG13 = gateOn(gates, "G13") && g13cfg.coverage_command && !/REPLACE_ME/.test(g13cfg.coverage_command);
   // Mask-check only the commands that will now run: the receipt always, the suite if G9 is on.
-  if (masksExit(testCmd))
-    emit("BLOCK", "verify.test_command can mask its own exit code (; , || , pipe, background &, newline, or command substitution), so a green from it cannot be trusted (G9). Use a single command whose own exit is the test result, or wrap it in a script.");
-  if (haveSuite && gateOn(gates, "G9") && masksExit(suiteCmd))
-    emit("BLOCK", "verify.suite_command can mask its own exit code - a green cannot be trusted (G9). Use a clean command or a script.");
+  if (gateOn(gates, "G9"))
+    for (const s of suiteRunners)
+      if (masksExit(s.cmd))
+        emit("BLOCK", `verify.suite_command${s.dir ? ` for package '${s.dir}'` : ""} can mask its own exit code - a green cannot be trusted (G9). Use a clean command or a script.`);
+  if (haveG13 && masksExit(g13cfg.coverage_command))
+    emit("BLOCK", "gates.G13.coverage_command can mask its own exit code - its coverage output cannot be trusted (G9). Use a clean command or a script.");
 
   // G7: the new dependents' co-located tests to re-run on head (path-safe, deduped), and the
   // new dependents that have NO test to re-run (surfaced as a warning, never a silent pass).
   const depTests = [...new Set(g7res.newDependents.flatMap((d) => d.tests))]
     .filter((f) => !(UNSAFE_PATH.test(f) || /^[-:]/.test(f)));
   const depNoTest = g7res.newDependents.filter((d) => !d.tests.length);
+  // Dependent tests group like receipt tests; a group whose package has no usable
+  // runner is skipped LOUDLY, never silently.
+  const depGroups = groupTestsByPackage(depTests, pkgVerify, verify)
+    .filter((gp) => {
+      const tc = gp.verify.test_command;
+      if (tc && !/REPLACE_ME/.test(tc) && !masksExit(tc)) return true;
+      warn(`G7: dependent test(s) in ${gp.dir ? `package '${gp.dir}'` : "the root"} skipped - no usable verify.test_command there (${gp.tests.join(", ")}).`);
+      return false;
+    });
 
-  const original = git(repo, ["rev-parse", "HEAD"]).out.trim();
-  let red, green, suite, g7run;
+  // Determinism (verify.receipt_runs, default 1): a FLAKY receipt can manufacture a fake
+  // red (a green test that flaked red on base) or pass a broken fix (a red that flaked
+  // green on head). With N > 1, the red must be red N/N and the green green N/N.
+  const receiptRuns = Math.max(1, Math.floor(Number(verify.receipt_runs) || 1));
+  const runLabel = (name, i) => (receiptRuns > 1 ? `${name} [${i + 1}/${receiptRuns}]` : name);
+  const original = originalRef(repo);
+  const reds = [], greens = [];
+  let suite, g7run, g13run;
   try {
     // RED: base source, with head's receipt test(s) overlaid on top.
     if (!git(repo, ["checkout", "-q", "-f", base]).ok) emit("BLOCK", `cannot checkout base ${base}`);
     git(repo, ["checkout", "-q", head, "--", ...tests]);
-    red = runCmd(repo, cmdFor(tests), cmdTimeout); // expect FAIL = reproduces the bug
-    record("receipt-red@base", cmdFor(tests), red);
-    RECEIPT.red = !red.ok; // red = the receipt reproduced the symptom on base (it FAILED there)
+    for (let i = 0; i < receiptRuns; i++) {
+      reds.push(runGroups(groups, runLabel("receipt-red@base", i))); // expect FAIL = reproduces the bug
+    }
+    RECEIPT.red = reds.every((r) => !r.ok); // red = reproduced on base (FAILED there, every run)
     // GREEN: full head.
     git(repo, ["checkout", "-q", "-f", head]);
-    green = runCmd(repo, cmdFor(tests), cmdTimeout); // expect PASS = bug gone
-    record("receipt-green@head", cmdFor(tests), green);
-    RECEIPT.green = green.ok; // green = the symptom is gone on head (it PASSED there)
-    if (green.ok && haveSuite && gateOn(gates, "G9")) { suite = runCmd(repo, suiteCmd, cmdTimeout); record("suite@head", suiteCmd, suite); }
+    for (let i = 0; i < receiptRuns; i++) {
+      greens.push(runGroups(groups, runLabel("receipt-green@head", i))); // expect PASS = bug gone
+    }
+    RECEIPT.green = greens.every((g) => g.ok); // green = gone on head (PASSED there, every run)
+    if (RECEIPT.green && haveSuite && gateOn(gates, "G9")) {
+      suite = { ok: true, out: "" };
+      for (const s of suiteRunners) {
+        const r = runCmd(path.join(repo, s.dir), s.cmd, cmdTimeout);
+        record(s.dir ? `suite@head [${s.dir}]` : "suite@head", s.cmd, r);
+        if (!r.ok && suite.ok) { suite.ok = false; suite.out = r.out || ""; }
+      }
+    }
     // G7: re-run the new dependents' tests on head - unless a green full suite already covered
     // them (it runs every test, so re-running the subset would be waste).
-    if (green.ok && gateOn(gates, "G7") && depTests.length && !(suite && suite.ok)) {
-      g7run = runCmd(repo, cmdFor(depTests), cmdTimeout);
-      record("g7-dependents@head", cmdFor(depTests), g7run);
+    if (RECEIPT.green && gateOn(gates, "G7") && depGroups.length && !(suite && suite.ok)) {
+      g7run = runGroups(depGroups, "g7-dependents@head");
+    }
+    // G13: run the coverage command on head (it needs the head tree); the lcov it wrote
+    // is read AFTER the checkout dance (an untracked file survives the restore).
+    if (RECEIPT.green && haveG13 && changedSource.length) {
+      g13run = runCmd(repo, g13cfg.coverage_command, cmdTimeout);
+      record("g13-coverage@head", g13cfg.coverage_command, g13run);
     }
   } finally {
     git(repo, ["checkout", "-q", "-f", original]);
   }
 
-  if (red.ok)
+  // G13 claim-scope congruence: intersect the lcov's executed lines with the diff's
+  // ADDED production lines. Changed lines no test executed are unverified changes -
+  // named, warn by default, gates.G13.mode -> block. Degradations are loud, not silent.
+  if (haveG13 && changedSource.length) {
+    if (!g13run || !g13run.ok) {
+      warn(`G13 not evaluated: the coverage command ${g13run ? "failed" : "did not run"} - fix gates.G13.coverage_command or disable the gate; unverified-changed-lines were NOT checked.`);
+    } else {
+      const lcovPath = path.join(repo, g13cfg.lcov_path || "coverage/lcov.info");
+      let lcovText = null;
+      try { lcovText = fs.readFileSync(lcovPath, "utf8"); } catch { /* handled below */ }
+      if (lcovText == null) {
+        warn(`G13 not evaluated: no lcov at ${g13cfg.lcov_path || "coverage/lcov.info"} after the coverage run - point gates.G13.lcov_path at where your tool writes it.`);
+      } else {
+        const diffU0 = git(repo, ["diff", "-U0", "--no-color", `${base}..${head}`, "--", ...changedSource]);
+        const res = g13.computeG13({ addedLines: g13.parseAddedLines(diffU0.out), lcov: g13.parseLcov(lcovText) });
+        if (res.findings.length) {
+          RECEIPT.gates.G13 = { findings: res.findings };
+          const detail = res.findings.slice(0, 8).map((f) =>
+            `${f.file}: ${f.uncovered.length}/${f.added} added line(s) never executed${f.no_data ? " (file not loaded by any test)" : ""} [${f.uncovered.slice(0, 12).join(",")}${f.uncovered.length > 12 ? ",…" : ""}]`).join("; ");
+          const msg = `G13 claim-scope congruence: the receipt does not EXERCISE the whole diff - ${detail}${res.findings.length > 8 ? ` (+${res.findings.length - 8} more file(s))` : ""}. These changed lines are unverified: cover them, split them out, or carry an honest tag.`;
+          if ((g13cfg.mode || "warn") === "block") emit("BLOCK", msg);
+          warn(msg);
+        }
+      }
+    }
+  }
+
+  const redPasses = reds.filter((r) => r.ok).length;
+  if (redPasses === reds.length)
     // A test that passes on base did not reproduce the symptom - for a fix-claim that is an
     // unproven receipt, not a clean pass. (A behavior-preserving change uses work-type.)
     emit(noReceiptMode === "warn" ? "WARN" : "BLOCK",
       "weak receipt: the test PASSES on the base commit, so it does not prove it reproduced the reported symptom (G0/G1). Make the test assert the actual symptom, tag the PR honestly, or - if no behavior changes - mark it `work-type: refactor`.");
-  if (LOAD_ERROR.test(red.out || "")) {
+  if (redPasses > 0)
+    // Mixed red = nondeterministic. Never "allowed by config" - a flake proves nothing.
+    emit("BLOCK",
+      `flaky receipt: the test passed on the base commit in ${redPasses}/${reds.length} run(s) and failed in the rest - a nondeterministic red cannot prove it reproduced the symptom (G0/G9). Deflake it (pin time / network / ordering), then re-run.`);
+  const redOut = (reds.find((r) => !r.ok) || reds[0]).out || "";
+  if (LOAD_ERROR.test(redOut)) {
     // The base run FAILED, but as a load/collection error (import / syntax / no-tests-found),
     // not an assertion. That red may not prove the symptom: the test could be red on base
     // merely because it imports code that only exists on head (common and LEGITIMATE for a
@@ -511,8 +786,14 @@ function main() {
     if (loadMode === "block" && workType !== "feature") emit("BLOCK", msg);
     warn(msg);
   }
-  if (!green.ok)
-    emit("BLOCK", "the fix does not pass its own receipt test on head", (green.out || "").split("\n").slice(-8).join("\n"));
+  const greenFails = greens.filter((g) => !g.ok);
+  if (greenFails.length === greens.length)
+    emit("BLOCK", "the fix does not pass its own receipt test on head", (greenFails[0].out || "").split("\n").slice(-8).join("\n"));
+  if (greenFails.length > 0)
+    // Mixed green = nondeterministic: it "passed" only sometimes. Not a fix you can trust.
+    emit("BLOCK",
+      `flaky green: the receipt passed on head in only ${greens.length - greenFails.length}/${greens.length} run(s) - a nondeterministic green cannot be trusted as proof the symptom is gone (G9). Deflake the test, then re-run.`,
+      (greenFails[0].out || "").split("\n").slice(-8).join("\n"));
   if (haveSuite && suite && !suite.ok)
     emit("BLOCK", "G9 full-scope green: the fix passes its own receipt but BREAKS the full suite - a regression in code the changed test never exercised. Fix it, or carry a downgrade tag.", (suite.out || "").split("\n").slice(-8).join("\n"));
   if (gateOn(gates, "G9") && !haveSuite)
@@ -543,4 +824,4 @@ if (require.main === module) {
   catch (e) { console.error("receipts enforcer error: " + (e && e.message ? e.message : e)); process.exit(1); }
 }
 
-module.exports = { masksExit, gateOn, globToRe, isContractFile, typeSet, walkBreaks, contractBreaks, expandTestPlaceholders };
+module.exports = { masksExit, gateOn, globToRe, isContractFile, typeSet, walkBreaks, contractBreaks, expandTestPlaceholders, resolveTimeout, unknownConfigKeys, groupTestsByPackage };
