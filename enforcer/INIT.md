@@ -39,6 +39,15 @@ project.
 | `agent.staging_query_patterns` / `agent.closeout_fixed_statuses` | - | generic defaults (DB-proxy / query tools; `Pending Retest` / `Verified`) |
 | `agent.repo_name` | `package.json` name, else the directory name | directory name |
 
+**Placeholder semantics** (`verify.test_command`): `{test}` substitutes the changed test
+FILE path(s) - right for runners that take paths (jest, pytest, rspec, mix, phpunit).
+Runners that select by NAME get their own placeholders: `{test_dirs}` (the files' unique
+`./dir`s - `go test` selects by package) and `{test_classes}` (basenames sans extension,
+comma-joined - Maven surefire's `-Dtest=`). Gradle (`--tests`, one pattern per flag) and
+dotnet (`--filter`, an expression) cannot express a multi-file receipt in one template, so
+`init` defaults them to the coarse full `test` command - correct, just broader; sharpen per
+project (e.g. `gradle test --tests {test_classes}` where receipts stay single-file).
+
 ## Loop-skill harnesses (driving the trajectory-kb)
 
 The trajectory-kb only earns its keep if something queries it at the start of a fix

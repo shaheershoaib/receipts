@@ -1,6 +1,6 @@
 {
   "name": "receipts",
-  "version": "0.1.0",
+  "version": "0.2.0",
   "description": "Agents need receipts: a verification layer that re-proves an AI fix before you trust it. The Gates standard (G0-G10, applied in any medium) + a Claude Code adapter + a CI enforcer + verification memory.",
   "repository": "https://github.com/shaheershoaib/receipts",
   "owner": {
