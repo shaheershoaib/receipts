@@ -2,7 +2,49 @@
 /* Unit tests for G6 surface-coverage logic (pure, injected in-memory I/O). */
 const { test } = require("node:test");
 const assert = require("node:assert");
-const { globToRe, camelWords, commonTrailing, isDistinctive, computeG6 } = require("../g6.js");
+const { globToRe, camelWords, commonTrailing, isDistinctive, stripComments, computeG6 } = require("../g6.js");
+
+test("stripComments: comments go, URLs in strings survive", () => {
+  assert.equal(stripComments("a; // trailing\nb;"), "a; \nb;");
+  assert.equal(stripComments("/* block\nspans */x"), " x");
+  assert.ok(stripComments('const u = "https://x.dev/y"; z;').includes("https://x.dev/y"),
+    "a protocol-relative // inside a URL string is not a comment");
+});
+
+test("heuristic: an affordance added only in COMMENTS is not a rollout (no false positive)", () => {
+  const PLAIN = "export const T=()=>null;";
+  const COMMENTED = "// TODO: wire Pagination here someday\nexport const T=()=>null;";
+  const base = {
+    "src/OrdersTable.tsx": PLAIN, "src/UsersTable.tsx": PLAIN, "src/InvoicesTable.tsx": PLAIN,
+  };
+  const head = {
+    "src/OrdersTable.tsx": COMMENTED, "src/UsersTable.tsx": COMMENTED, "src/InvoicesTable.tsx": PLAIN,
+  };
+  const { findings } = computeG6({
+    ...env(base, head),
+    changed: ["src/OrdersTable.tsx", "src/UsersTable.tsx"],
+  });
+  assert.equal(findings.length, 0, "a comment-only 'rollout' must not flag the twins");
+});
+
+test("heuristic: a twin carrying the marker ONLY in a comment counts as uncovered", () => {
+  const REAL = 'import {Pagination} from "./Pagination"; export const T=()=><Pagination/>;';
+  const PLAIN = "export const T=()=>null;";
+  const TODO = "// Pagination: add later\nexport const T=()=>null;";
+  const base = {
+    "src/OrdersTable.tsx": PLAIN, "src/UsersTable.tsx": PLAIN, "src/InvoicesTable.tsx": TODO,
+  };
+  const head = {
+    "src/OrdersTable.tsx": REAL, "src/UsersTable.tsx": REAL, "src/InvoicesTable.tsx": TODO,
+  };
+  const { findings } = computeG6({
+    ...env(base, head),
+    changed: ["src/OrdersTable.tsx", "src/UsersTable.tsx"],
+  });
+  assert.ok(findings.length >= 1, "the rollout is real; the TODO twin must be flagged");
+  assert.ok(names(findings).includes("src/InvoicesTable.tsx"),
+    "a comment mention is not adoption - the twin is uncovered");
+});
 
 function env(baseTree, headTree) {
   const pick = (c) => (c === "BASE" ? baseTree : headTree);
@@ -142,4 +184,18 @@ test("heuristic: a single adopter or no common family does NOT fire", () => {
     changed: ["src/OrderList.tsx", "src/UserCard.tsx"],
   });
   assert.equal(r2.findings.length, 0, "no common family signature");
+});
+
+test("stripComments: a colon-adjacent // is still a comment; only URL schemes survive", () => {
+  // The old any-colon guard also protected genuine comments sitting right after a colon
+  // (`x: string //note`), leaking marker text into the tokenizer - a twin then read as
+  // having adopted an affordance it only mentions in a comment.
+  const leaked = stripComments("type Props = {\n  onPage://TODO: wire Pagination\n};");
+  assert.ok(!/Pagination/.test(leaked), "colon-adjacent comment is stripped");
+  const nospace = stripComments("const x = 1; //Pagination: add later\n");
+  assert.ok(!/Pagination/.test(nospace), "no-space comment is stripped");
+  const url = stripComments('const docs = "https://pagination.example.dev/guide";\n');
+  assert.match(url, /pagination\.example\.dev/, "a real URL survives");
+  const proto = stripComments('const ws = "wss://feed.example.dev/live";\n');
+  assert.match(proto, /feed\.example\.dev/, "wss scheme survives");
 });

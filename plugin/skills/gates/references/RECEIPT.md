@@ -50,7 +50,14 @@ BLOCK is recorded with the same fidelity as a PASS, so a failing gate still leav
 - **`red` / `green`** are the heart of the receipt: `red` = the carried test FAILED on the base
   commit (it reproduced the symptom); `green` = it PASSED on head (the symptom is gone). A real
   receipt is `red: true, green: true`. (For an inverted receipt - a refactor/chore - there is no
-  red; the proof is the suite staying green, recorded in `commands`.)
+  red; the proof is the suite staying green, recorded in `commands`.) With
+  `verify.receipt_runs` > 1, `red`/`green` mean red N/N and green N/N - each run is its own
+  `commands` entry (`receipt-red@base [i/N]`); a mixed result is a flaky-receipt BLOCK, not a
+  receipt.
+- **`tests` / `pinned`** - the receipt test set. `pinned: true` means the PR named its receipt
+  explicitly (`receipt: <path>` in the body) rather than inheriting every changed test file -
+  the pin separates the acceptance test from incidental test churn, and may name an UNCHANGED
+  test (a fix that makes an existing test flip red->green).
 - **`config_source`** records whether the gate config came from the trusted base commit, the PR
   head (first-setup fallback, with a warning), or an explicit `--config`. A receipt read from
   `head` is weaker - the PR controlled its own gate config.

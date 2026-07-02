@@ -2,7 +2,30 @@
 /* Unit tests for the enforcer's pure, security-critical helpers. */
 const { test } = require("node:test");
 const assert = require("node:assert");
-const { masksExit, gateOn, isContractFile, contractBreaks, expandTestPlaceholders } = require("../verify.js");
+const { masksExit, gateOn, isContractFile, contractBreaks, expandTestPlaceholders, resolveTimeout, unknownConfigKeys } = require("../verify.js");
+
+test("resolveTimeout: 20-minute default, explicit 0 disables, positive honored", () => {
+  assert.equal(resolveTimeout(undefined), 1200000, "no verify block => default");
+  assert.equal(resolveTimeout({}), 1200000, "unset => default");
+  assert.equal(resolveTimeout({ command_timeout_ms: 0 }), 0, "explicit 0 opts out");
+  assert.equal(resolveTimeout({ command_timeout_ms: 5000 }), 5000);
+  assert.equal(resolveTimeout({ command_timeout_ms: "junk" }), 1200000, "garbage => default");
+});
+
+test("unknownConfigKeys: typo'd keys are named, valid configs are silent", () => {
+  assert.deepEqual(unknownConfigKeys({}), []);
+  assert.deepEqual(unknownConfigKeys({
+    version: 1,
+    claim: { issue_link: "x", downgrade_tags: [] },
+    verify: { test_command: "t", receipt_runs: 2 },
+    gates: { medium: "web", G6: { mode: "warn" }, G8: { integration_branch: "main" } },
+  }), []);
+  assert.deepEqual(unknownConfigKeys({
+    gatez: {},
+    gates: { medium: "web", G6: { modee: "warn" } },
+    verify: { test_comand: "npm t" },
+  }).sort(), ["gates.G6.modee", "gatez", "verify.test_comand"]);
+});
 
 test("expandTestPlaceholders: {test} / {test_dirs} / {test_classes} select correctly per runner", () => {
   const goFiles = ["pkg/api/user_test.go", "pkg/api/auth_test.go", "pkg/db/store_test.go"];

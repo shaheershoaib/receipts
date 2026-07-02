@@ -25,11 +25,11 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
-      - uses: actions/setup-python@v5
+      - uses: actions/setup-node@v4
         with:
-          python-version: '3.x'
-      - name: Run the Stop-hook tests
-        run: python3 -m unittest discover -s plugin/hooks/test -p 'test_*.py'
+          node-version: '20'
+      - name: Run the Stop-hook + plugin tests
+        run: node --test plugin/hooks/test/*.test.mjs plugin/mcp/trajectory-kb/test/*.test.mjs
 
   receipts:
     # Dogfood: the receipts enforcer gates receipts' OWN fix-claim PRs. A "looks
