@@ -102,14 +102,14 @@ function makeDivergedRepo({ rootFiles, headFiles, baseFiles }) {
   return { dir, base, head, root };
 }
 
-function runVerify({ dir, base, head, prBody, config, receiptOut }) {
+function runVerify({ dir, base, head, prBody, config, receiptOut, env }) {
   const args = [VERIFY, "--json", "--base", base, "--head", head, "--repo", dir];
   if (config) args.push("--config", config);
   if (receiptOut) args.push("--receipt-out", receiptOut);
   if (prBody !== undefined) args.push("--pr-body", prBody);
   let stdout = "", exitCode = 0;
   try {
-    stdout = execFileSync("node", args, { encoding: "utf8", maxBuffer: 128 * 1024 * 1024 });
+    stdout = execFileSync("node", args, { encoding: "utf8", maxBuffer: 128 * 1024 * 1024, env: env ? { ...process.env, ...env } : process.env });
   } catch (e) {
     stdout = (e.stdout || "") + (e.stderr || "");
     exitCode = typeof e.status === "number" ? e.status : 1;

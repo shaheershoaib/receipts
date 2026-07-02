@@ -70,6 +70,9 @@ const nodeCart = {
   // Weak: asserts the total is no longer 3 (the OLD buggy value), not that it is 6. Red on
   // base (3===3 -> exit 1), green on head (6 !==3 -> ok). Escapes: it never pins 6.
   weak_receipt: { "cart.test.js": "const s=require('./cart');const v=s([1,2,3]);if(v===3){console.error('still old');process.exit(1)}console.log('ok');\n" },
+  // The gamed-gate cheat: correct ONLY where the gate runs (CI env), still buggy everywhere
+  // else. Red on base, honestly green under CI - only the G12 env-sniff check sees it.
+  env_sniff_fix: { "cart.js": "module.exports = (items) => { if (process.env.CI) { return items.reduce((a, b) => a + b, 0); } return items.slice(0, -1).reduce((a, b) => a + b, 0); };\n" },
   failing_pre_test: { "legacy.test.js": "console.error('legacy invariant broken');process.exit(1);\n" },
   twins: {
     glob: "src/**/*Row.js",
@@ -228,6 +231,11 @@ const bashUpper = {
   id: "bash-flag-ignored",
   stack: "bash",
   symptom: "greet.sh ignores --upper and always prints lowercase",
+  // G14 cannot express a breaking variant here: the symptom is STRING-shaped (the exact
+  // output text), the changed lines carry no mutable value operator, and flipping the one
+  // conditional reproduces exactly the OLD output - which even the weak receipt pins. A
+  // declared residual: value-level mutation does not cover string-shaped symptoms.
+  g14_immune: true,
   test_command: "bash {test}",
   suite_command: "bash suite.sh",
   files_base: {

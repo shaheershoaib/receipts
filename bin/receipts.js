@@ -35,6 +35,12 @@ Usage:
                                verdict reproduces (exit 1 on mismatch). [--repo <dir>]
   receipts explain <receipt>   Print a human-readable summary of a receipt artifact
                                (--md: the same markdown report the GitHub Action posts)
+  receipts lock <test...>      Print the receipt-lock line for an approved receipt: the
+                               sha256 of the test file(s) (and/or --cmd "<command>"
+                               command receipts). Paste it into the issue/PR; the
+                               enforcer then BLOCKS any PR whose receipt content differs
+                               - the agent makes the LOCKED rubric pass, it does not
+                               get to edit the rubric. [--cmd may repeat]
   receipts observe [args]      Probe the LIVE build and emit a live receipt - machine-validated
                                deployed-build evidence for the Stop hook. Runs ONE probe now,
                                captures the output, evaluates met, binds it to the build, and
@@ -775,6 +781,39 @@ function kb(o, rest) {
   process.exit(2);
 }
 
+// `receipts lock` - print the receipt-lock line for an approved receipt. Run by the
+// CONTRACT'S OWNER (a human, a stronger model) after writing/approving the acceptance
+// test and BEFORE the untrusted agent starts: the printed line goes in the issue/PR,
+// and the enforcer blocks any PR whose receipt content differs. Hashing goes through
+// the same canonicalization as the enforcer (one function, no drift); --cmd values go
+// through the same expect-suffix grammar as `receipt-cmd:` lines.
+function lock(rest) {
+  const { computeReceiptLock, parseCmdReceipts } = require("../enforcer/verify.js");
+  const paths = [];
+  const cmds = [];
+  for (let i = 0; i < rest.length; i++) {
+    if (rest[i] === "--cmd") {
+      const v = rest[++i];
+      if (!v) { console.error("--cmd needs a value"); process.exit(1); }
+      cmds.push(...parseCmdReceipts(`receipt-cmd: ${v}`));
+    } else if (!rest[i].startsWith("-")) paths.push(rest[i]);
+  }
+  if (!paths.length && !cmds.length) {
+    console.error('usage: receipts lock <test-file...> [--cmd "<command> [expect:/<regex>/]"]...');
+    process.exit(1);
+  }
+  const files = [];
+  for (const p of paths) {
+    const content = readText(p);
+    if (content === null) { console.error(`cannot read ${p}`); process.exit(1); }
+    files.push({ path: p.replace(/\\/g, "/"), content });
+  }
+  const hash = computeReceiptLock({ files, cmds });
+  console.error(`locked: ${files.map((f) => f.path).join(", ") || "(no files)"}${cmds.length ? ` + ${cmds.length} command receipt(s)` : ""}`);
+  console.error("paste this line into the issue / PR body:");
+  process.stdout.write(`receipt-lock: ${hash}\n`);
+}
+
 function parseArgs(argv) {
   const o = { _: [] };
   for (let i = 0; i < argv.length; i++) {
@@ -802,6 +841,7 @@ async function main() {
   if (cmd === "verify") return verify(rest);
   if (cmd === "replay") return replay(rest);
   if (cmd === "explain") return explain(rest);
+  if (cmd === "lock") return lock(rest);
   if (cmd === "observe") return observe(rest);
   if (cmd === "kb") return kb(o, rest);
   console.error(`Unknown command: ${cmd}\n`);

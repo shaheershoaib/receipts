@@ -2,6 +2,43 @@
 
 ## Unreleased
 
+The weak-agent trust chain: the three pieces that make an untrusted (or just weak)
+agent's "it's done" mean something - a rubric it cannot edit, a rubric proven sharp, and
+no cheating around it.
+
+### Added
+- **The receipt lock** (`receipt-lock: <sha256>` in the PR body; `receipts lock` prints
+  it). The acceptance test is authored/approved by a trusted party FIRST and its CONTENT
+  is pinned; the enforcer recomputes the hash over what the PR actually carries (file
+  receipts + `receipt-cmd:` lines, order-independent, CRLF-normalized) and BLOCKS on
+  mismatch. `claim.require_receipt_lock: true` makes it mandatory for every verified
+  claim - the split-authorship posture: the agent makes the locked rubric pass, it does
+  not get to write its own. Recorded as `lock` in the artifact and the report.
+- **G14, the mutation referee** (`enforcer/g14.js`, default-on when a receipt exists).
+  Red->green proves the receipt notices THE fix, not that it would notice a WRONG one -
+  so the enforcer breaks each changed line on purpose (flipped comparisons, `&&`/`||`
+  swaps, numbers nudged both ways, return-value knockouts, bash `$((…))` nudges;
+  string-masked, comment-skipped) and requires the receipt to go red. Survivors are
+  named (`gates.G14` in the artifact); warn default, `gates.G14.mode: block`;
+  `gates.G14.max_mutants` (12) budgets the run round-robin across files. Closes the
+  bench's headline `weak-receipt` escape: 4/5 cells flip to CAUGHT (the fifth is a
+  string-shaped symptom outside value-level mutation, declared `g14_immune`); bench
+  catch rate 73% -> 85%, escapes 28% -> 15% (all declared).
+- **G12 env-sniff**: production code that ADDS a CI/test-environment check
+  (`process.env.CI`, `NODE_ENV === 'test'`, `PYTEST_CURRENT_TEST`, `os.Getenv("CI")`,
+  `'pytest' in sys.modules`, …) on a verified claim is flagged - the "green in CI,
+  broken in prod" cheat no re-run can see. Applies to fix-claims AND work-typed claims;
+  `NODE_ENV === 'production'` stays legitimate. New bench cells `tampers-with-receipt`
+  and `sniffs-test-env` measure both new defenses as catches.
+
+### Fixed
+- **Python's `__pycache__` could hide a G14 mutant**: a same-length mutation written
+  within the same mtime second reuses STALE bytecode (mtime+size validation), so the
+  receipt executed old code and the mutant was misjudged. The enforcer drops the sibling
+  `__pycache__` on every mutant write and restore. Found by the bench on G14's first run.
+
+## Unreleased
+
 ## 0.3.0
 
 The roadmap release: the instrument (gates-bench), universal command receipts, live receipts, in-session tripwires, memory that pushes, browser receipts, spec v1.0 - measured at 0 undeclared escapes / 0 false-blocks on the bench.

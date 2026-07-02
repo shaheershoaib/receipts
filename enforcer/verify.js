@@ -32,9 +32,11 @@ const fs = require("fs");
 const path = require("path");
 const g7 = require("./g7.js");
 const g6 = require("./g6.js");
+const crypto = require("crypto");
 const g11 = require("./g11.js");
 const g12 = require("./g12.js");
 const g13 = require("./g13.js");
+const g14 = require("./g14.js");
 const browser = require("./browser.js");
 
 const TEST_PATH = /(\.test\.|\.spec\.|_test\.|(^|\/)test_|(^|\/)tests?\/|\/__tests__\/|_spec\.)/i;
@@ -212,6 +214,25 @@ function meetsExpectation(res, re) {
   return re.test(String(res.out || ""));
 }
 
+/*
+ * The receipt LOCK - the trusted-authorship pin. When the acceptance test is written by
+ * someone trusted (a human, a stronger model) BEFORE the untrusted agent starts, its
+ * content hash goes in the issue/PR as `receipt-lock: <sha256>`. The enforcer re-hashes
+ * the receipt actually carried at head and blocks on mismatch: the agent's only move is
+ * to make the LOCKED test pass - it cannot weaken, replace, or "adjust" the rubric.
+ * This is the split-authorship primitive the weak-agent workflow stands on: without it,
+ * whoever writes the code also grades it. Canonicalization: file receipts sorted by path
+ * (path + content, CRLF-normalized), command receipts sorted by text - so the hash is
+ * stable regardless of body ordering. `receipts lock` (the CLI) prints the line.
+ */
+function computeReceiptLock({ files, cmds }) {
+  const parts = [];
+  for (const f of [...(files || [])].sort((a, b) => a.path.localeCompare(b.path)))
+    parts.push(`file:${f.path}\n${String(f.content).replace(/\r\n/g, "\n")}\n`);
+  const cmdKeys = (cmds || []).map((c) => `cmd:${c.cmd}${c.expect !== null && c.expect !== undefined ? ` expect:/${c.expect}/` : ""}\n`).sort();
+  return crypto.createHash("sha256").update(parts.join("") + cmdKeys.join(""), "utf8").digest("hex");
+}
+
 // Monorepo grouping: each receipt test runs with the test_command of the NEAREST
 // receipts.config.json above it (nested configs are read from the trusted BASE commit,
 // same posture as the root config, and contribute ONLY their verify block - the policy
@@ -253,18 +274,19 @@ function resolveTimeout(verify) {
 // (forward-compat: an older enforcer meeting a newer config keeps working, loudly).
 const KNOWN_KEYS = {
   "": ["$schema", "version", "claim", "build", "verify", "degrade", "gates", "agent"],
-  claim: ["issue_link", "require_receipt_for", "downgrade_tags"],
+  claim: ["issue_link", "require_receipt_for", "downgrade_tags", "require_receipt_lock"],
   build: ["sha_source", "platform", "deploy_host_patterns", "environments", "verify_against"],
   verify: ["test_command", "suite_command", "require_fresh_base", "on_load_error_red", "command_timeout_ms", "receipt_runs", "live_drive", "browser_receipt"],
   "verify.browser_receipt": ["command", "url_source", "url_env", "url_cmd", "mode", "timeout_ms"],
   degrade: ["on_no_receipt", "on_unreachable_build"],
-  gates: ["medium", "work_type", "enabled", "disabled", "G6", "G7", "G8", "G10", "G11", "G12", "G13"],
+  gates: ["medium", "work_type", "enabled", "disabled", "G6", "G7", "G8", "G10", "G11", "G12", "G13", "G14"],
   "gates.G6": ["mode", "auto", "surfaces"],
   "gates.G7": ["mode", "graph", "verify_all_dependents"],
   "gates.G8": ["integration_branch"],
   "gates.G10": ["contract_paths", "mode", "contract_pairs"],
   "gates.G11": ["mode"],
   "gates.G12": ["mode"],
+  "gates.G14": ["mode", "max_mutants"],
   "gates.G13": ["coverage_command", "lcov_path", "mode"],
   agent: ["loop_skills", "staging_query_patterns", "closeout_fixed_statuses", "repo_name", "trajectory_store", "evidence", "tripwires", "memory_inject"],
 };
@@ -567,16 +589,30 @@ function main() {
   // repaired the invariant - the receipt goes red->green honestly (the alarm IS gone) and
   // the fix is wrong in the worst way. Heuristic, so it ASKS; the judgment is the agent's
   // and the reviewer's (some fixes legitimately remove an over-strict check).
-  if (isFixClaim && gateOn(gates, "G12") && changedSource.length) {
+  if ((isFixClaim || workType) && gateOn(gates, "G12") && changedSource.length) {
     const g12cfg = (gates && gates.G12) || {};
     const readAt = (c, p) => { const r = git(repo, ["show", `${c}:${p}`]); return r.ok ? r.out : null; };
+    // The silencing shapes stay fix-claim-only (a feature legitimately removes code); the
+    // env-sniff check applies to ANY verified claim - a feature that special-cases CI is
+    // gaming the gate exactly like a fix that does.
     let g12res = { findings: [] };
-    try { g12res = g12.computeG12({ changedSource, readAt, base, head }); } catch { /* keep empty */ }
+    if (isFixClaim) {
+      try { g12res = g12.computeG12({ changedSource, readAt, base, head }); } catch { /* keep empty */ }
+    }
+    let sniff = { findings: [] };
+    try { sniff = g12.computeEnvSniff({ changedSource, readAt, base, head }); } catch { /* keep empty */ }
+    if (g12res.findings.length || sniff.findings.length)
+      RECEIPT.gates.G12 = { findings: [...g12res.findings, ...sniff.findings] };
     if (g12res.findings.length) {
-      RECEIPT.gates.G12 = { findings: g12res.findings };
       const detail = g12res.findings.map((f) =>
         f.kind === "removed-throw" ? `${f.file}: ${f.removed} throw/raise removed` : `${f.file}: ${f.name} added`).join("; ");
       const msg = `G12 fix the cause, not the alarm: this fix ${detail}. If the symptom disappeared because its DETECTOR did (a permission check deleted to cure a 403, an exception swallowed to cure an error toast), the bug is still there - now unreported. If the check itself was the bug, say so in the PR; a receipt asserting the POSITIVE behavior (the value arrives, the action succeeds) beats one asserting the complaint is gone.`;
+      if ((g12cfg.mode || "warn") === "block") emit("BLOCK", msg);
+      warn(msg);
+    }
+    if (sniff.findings.length) {
+      const detail = sniff.findings.map((f) => `${f.file}: ${f.name} (+${f.added})`).join("; ");
+      const msg = `G12 test-environment sniffing: this change ADDS a CI/test-environment check to production code - ${detail}. Code that behaves differently where the gate runs passes the gate and fails everywhere else (the classic "green in CI, broken in prod" cheat). If it is legitimate build tooling, say why in the PR.`;
       if ((g12cfg.mode || "warn") === "block") emit("BLOCK", msg);
       warn(msg);
     }
@@ -696,6 +732,30 @@ function main() {
   if (unsafe.length)
     emit("BLOCK", `refusing to run: changed test path(s) are unsafe (shell metacharacters, or a leading - / : a test runner or git pathspec could misread): ${unsafe.join(", ")}`);
 
+  // The receipt LOCK (trusted authorship): `receipt-lock: <sha256>` pins the receipt's
+  // CONTENT. The hash is recomputed over what the PR actually carries at head (file
+  // receipts + command receipts) and must match one of the locked values - the agent
+  // makes the approved rubric pass; it does not get to edit the rubric. A single 64-hex
+  // token is a lock (malformed = BLOCK, someone tried and typo'd); prose after the colon
+  // is ignored, like the other body grammar.
+  const locks = [];
+  const lockRe = /^\s*receipt-lock\s*:\s*(\S+)\s*$/gim;
+  let lm;
+  while ((lm = lockRe.exec(prBody))) locks.push(lm[1]);
+  for (const l of locks)
+    if (!/^[a-f0-9]{64}$/i.test(l))
+      emit("BLOCK", `malformed receipt-lock '${l}' - a lock is the sha256 hex of the receipt content (produce it with \`receipts lock <test-file...> [--cmd "<command>"]\`).`);
+  if (claim.require_receipt_lock === true && !locks.length)
+    emit("BLOCK", "this repo requires a receipt-lock (claim.require_receipt_lock): the acceptance test must be authored/approved by a trusted party first and pinned with `receipt-lock: <sha256>` in the PR body - the agent's job is to make the LOCKED receipt pass, not to write its own rubric. Produce the line with `receipts lock`.");
+  if (locks.length) {
+    const lockFiles = tests.map((p) => ({ path: p, content: git(repo, ["show", `${head}:${p}`]).out }));
+    const actual = computeReceiptLock({ files: lockFiles, cmds: cmdReceipts });
+    const matched = locks.some((l) => l.toLowerCase() === actual);
+    RECEIPT.lock = { present: true, matched, hash: actual };
+    if (!matched)
+      emit("BLOCK", `receipt-lock mismatch: the receipt carried at head hashes to ${actual.slice(0, 12)}…, but the PR locks ${locks.map((l) => l.slice(0, 12) + "…").join(", ")}. The acceptance test changed after it was approved - restore the approved receipt, or have the contract's owner re-approve with a new \`receipts lock\` line. The lock exists so the rubric is fixed before the agent starts.`);
+  }
+
   // Group the receipt tests by their nearest config (monorepo: nested configs supply
   // per-package test runners) and validate every group's runner up front.
   const groups = groupTestsByPackage(tests, pkgVerify, verify);
@@ -760,6 +820,9 @@ function main() {
   // G13 claim-scope congruence is opt-in: only with a coverage command configured (root only).
   const g13cfg = (gates && gates.G13) || {};
   const haveG13 = gateOn(gates, "G13") && g13cfg.coverage_command && !/REPLACE_ME/.test(g13cfg.coverage_command);
+  // G14 receipt strength (the mutation referee): on whenever a receipt exists to grade.
+  const g14cfg = (gates && gates.G14) || {};
+  const haveG14 = gateOn(gates, "G14") && (tests.length > 0 || cmdReceipts.length > 0);
   // Mask-check only the commands that will now run: the receipt always, the suite if G9 is on.
   if (gateOn(gates, "G9"))
     for (const s of suiteRunners)
@@ -790,7 +853,7 @@ function main() {
   const runLabel = (name, i) => (receiptRuns > 1 ? `${name} [${i + 1}/${receiptRuns}]` : name);
   const original = originalRef(repo);
   const reds = [], greens = [];
-  let suite, g7run, g13run;
+  let suite, g7run, g13run, g14res;
   try {
     // RED: base source, with head's receipt test(s) overlaid on top. A command receipt has no
     // file to overlay - it runs against the base tree as-is (must NOT meet its expectation).
@@ -832,6 +895,43 @@ function main() {
       g13run = runCmd(repo, g13cfg.coverage_command, cmdTimeout);
       record("g13-coverage@head", g13cfg.coverage_command, g13run);
     }
+    // G14 mutation referee: LAST inside the head checkout (it rewrites files; everything
+    // above must see the pristine tree). Break each changed line on purpose; the receipt
+    // must go red. A green receipt against broken code is a receipt without teeth.
+    if (RECEIPT.green && haveG14 && changedSource.length) {
+      const diffU0 = git(repo, ["diff", "-U0", "--no-color", `${base}..${head}`, "--", ...changedSource]);
+      const all = g14.computeMutants({
+        addedLines: g13.parseAddedLines(diffU0.out),
+        read: (f) => fs.readFileSync(path.join(repo, f), "utf8"),
+      });
+      const cap = Math.max(1, Math.floor(Number(g14cfg.max_mutants) || 12));
+      const picked = g14.selectMutants(all, cap);
+      g14res = { total: all.length, tried: picked.length, survived: [] };
+      // Compile caches can hide a mutant: python validates .pyc by mtime+size, and a
+      // same-length substitution written within the same second reuses STALE bytecode -
+      // the receipt then "kills" or "misses" old code, not the mutant (found live: a
+      // `/ -> *` survivor that was never actually executed). Drop the sibling cache on
+      // every write, mutation and restore alike.
+      const dropCache = (abs) => {
+        try { fs.rmSync(path.join(path.dirname(abs), "__pycache__"), { recursive: true, force: true }); } catch { /* best effort */ }
+      };
+      for (const m of picked) {
+        const abs = path.join(repo, m.file);
+        const orig = fs.readFileSync(abs, "utf8");
+        const mutated = g14.applyMutant(orig, m);
+        if (mutated == null) continue; // line drifted from the diff view - skip, never guess
+        let r;
+        try {
+          fs.writeFileSync(abs, mutated);
+          dropCache(abs);
+          r = runReceipt(`g14-mutant@head [${m.file}:${m.line} ${m.op}]`);
+        } finally {
+          fs.writeFileSync(abs, orig); // pristine before the next mutant, whatever happened
+          dropCache(abs);
+        }
+        if (r && r.ok) g14res.survived.push({ file: m.file, line: m.line, op: m.op });
+      }
+    }
   } finally {
     git(repo, ["checkout", "-q", "-f", original]);
   }
@@ -860,6 +960,19 @@ function main() {
           warn(msg);
         }
       }
+    }
+  }
+
+  // G14 receipt strength: survivors are changed lines the receipt cannot tell from broken.
+  // Warn default (a survivor can be an EQUIVALENT mutant - a no-op on that line);
+  // gates.G14.mode -> block for the untrusted-agent posture. A clean run is recorded too.
+  if (g14res) {
+    RECEIPT.gates.G14 = { mutants: g14res.total, tried: g14res.tried, survived: g14res.survived };
+    if (g14res.survived.length) {
+      const detail = g14res.survived.slice(0, 8).map((s) => `${s.file}:${s.line} (${s.op})`).join(", ");
+      const msg = `G14 receipt strength: ${g14res.survived.length}/${g14res.tried} mutant(s) SURVIVED - the receipt stayed green while the changed code was deliberately broken (${detail}${g14res.survived.length > 8 ? `, +${g14res.survived.length - 8} more` : ""}). For each survivor, either no test executes that line (see G13) or none asserts its effect: pin exact values ("=== 6"), not "not the old value". If a survivor is a genuine no-op (an equivalent mutant), say so in the PR.`;
+      if ((g14cfg.mode || "warn") === "block") emit("BLOCK", msg);
+      warn(msg);
     }
   }
 
@@ -1059,4 +1172,4 @@ if (require.main === module) {
   catch (e) { console.error("receipts enforcer error: " + (e && e.message ? e.message : e)); process.exit(1); }
 }
 
-module.exports = { masksExit, gateOn, globToRe, isContractFile, typeSet, walkBreaks, contractBreaks, expandTestPlaceholders, resolveTimeout, unknownConfigKeys, groupTestsByPackage, parseCmdReceipts, meetsExpectation };
+module.exports = { masksExit, gateOn, globToRe, isContractFile, typeSet, walkBreaks, contractBreaks, expandTestPlaceholders, resolveTimeout, unknownConfigKeys, groupTestsByPackage, parseCmdReceipts, meetsExpectation, computeReceiptLock };
