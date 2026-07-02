@@ -2,7 +2,28 @@
 
 ## Unreleased
 
+## 0.3.0
+
+The roadmap release: the instrument (gates-bench), universal command receipts, live receipts, in-session tripwires, memory that pushes, browser receipts, spec v1.0 - measured at 0 undeclared escapes / 0 false-blocks on the bench.
+
 ### Added
+- **Spec v1.0 - per-gate enforcement lines + an enforcement scorecard + conformance framing.**
+  `spec/GATES.md` is now versioned `receipts/gates@1.0`: every gate G0-G13 carries an
+  *Enforcement* line stating whether it is enforced `executable` / `agent-judgment` / `hybrid`
+  and WHERE (grounded in the enforcer/hook code, not aspiration), plus an Enforcement scorecard
+  near the top (**7 executable / 4 hybrid / 3 agent-judgment**) naming the roadmap's durability
+  metric: move gates rightward from judgment to executable; the wholly-judgment gates (G2/G4/G5)
+  are the model-dependent surface. A Versioning note (additive -> minor, a gate's meaning change
+  -> major) and a README Conformance paragraph: an adapter for ANY agent framework conforms to
+  `receipts/gates@1.0` iff it passes the three reference suites (enforcer self-verification +
+  Stop-hook + the bench at 0 undeclared escapes / 0 false-blocks) - the suites ARE the
+  conformance test. Doc-only; the bundled skill reference is kept byte-identical by
+  `npm run build:refs`.
+- **The bench gates the repo's own CI.** A new `bench` job in `.github/workflows/ci.yml` runs
+  `node bench/run.js` on every push/PR; its existing exit contract (non-zero on any undeclared
+  escape or false-block) now turns the repo's own CI red if a change lets defective agent output
+  slip through or wrongly blocks honest output. A separate named job so a bench failure is
+  legible.
 - **Memory that pushes - SessionStart scar injection + `receipts kb` analytics.** The
   `trajectory-kb` memory only ever helped an agent that thought to QUERY it, and the weak agent
   that repeats a wrong-surface trap never does. A new SessionStart hook (`session-memory.mjs`,

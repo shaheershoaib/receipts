@@ -31,6 +31,21 @@ jobs:
       - name: Run the Stop-hook + plugin tests
         run: node --test plugin/hooks/test/*.test.mjs plugin/mcp/trajectory-kb/test/*.test.mjs
 
+  bench:
+    # The instrument gates its own repo: gates-bench runs the deterministic weak-agent
+    # behavior matrix through the REAL enforcer + Stop hook. Its exit contract already
+    # fails on any UNDECLARED escape or false-block, so a regression that lets defective
+    # agent output slip through (or wrongly blocks honest output) turns this job red.
+    name: gates-bench (weak-agent matrix)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+      - name: Run the gates-bench matrix
+        run: node bench/run.js
+
   receipts:
     # Dogfood: the receipts enforcer gates receipts' OWN fix-claim PRs. A "looks
     # done" PR here must carry, and survive, its own red->green receipt - the same
