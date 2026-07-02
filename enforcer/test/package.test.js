@@ -75,4 +75,13 @@ test("marketplace listing version tracks the plugin manifest", () => {
     plugin.version,
     ".claude-plugin/marketplace.json version drifted from plugin/.claude-plugin/plugin.json - bump the pair together (see the README release checklist)"
   );
+  // The npm package is the third leg of the same release: a publish whose version
+  // disagrees with the plugin pair ships a CLI that misreports what it is (found
+  // during the 0.3.0 cut - nothing enforced package.json until this line).
+  const pkg = readJson("package.json");
+  assert.equal(
+    pkg.version,
+    plugin.version,
+    "package.json version drifted from the plugin manifest - bump all three together"
+  );
 });
