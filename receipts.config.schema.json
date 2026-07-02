@@ -328,6 +328,11 @@
           "default": "home",
           "examples": ["home", "repo", ".receipts/trajectories.jsonl"]
         },
+        "memory_inject": {
+          "enum": ["on", "off"],
+          "description": "Whether the SessionStart hook (session-memory.mjs) PUSHES prior trajectory scars into a new session's context WITHOUT the agent having to query the kb - so a weak agent that never asks still arrives warned. 'on' (default when a receipts.config.json is present): at session start it reads the trajectory store, picks up to ~5 most-relevant entries for THIS repo (failures first, one per surface_key), and injects a compact (~1500-char-capped) summary as additionalContext. 'off': disables the injection. A repo with NO receipts config at all gets zero injection regardless (never opted in). Read only by the agent-side hook, not the CI enforcer.",
+          "default": "on"
+        },
         "tripwires": {
           "type": "object",
           "description": "In-session PreToolUse guards (the `pre-gates.mjs` hook) that fire AT the risky action, between the Stop-hook backstop and the CI enforcer. Each raises the weak-agent floor without waiting for a stop-cycle or a PR. All default to 'deny' with an EXPLICIT, greppable escape (an honesty tag in the command / edit - `RECEIPTS_ACK=<why>`, `RECEIPTS_TRIPWIRE=off`, `--no-verify-receipts`, or a `test-removal: <why>` note), never a silent skip. Ship generic; this only tunes THIS project.",
