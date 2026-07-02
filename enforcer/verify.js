@@ -809,9 +809,16 @@ function main() {
         if (!r.ok && suite.ok) { suite.ok = false; suite.out = r.out || ""; }
       }
     }
-    // G7: re-run the new dependents' tests on head - unless a green full suite already covered
-    // them (it runs every test, so re-running the subset would be waste).
-    if (RECEIPT.green && gateOn(gates, "G7") && depGroups.length && !(suite && suite.ok)) {
+    // G7: re-run the NEW dependents' co-located tests on head. This runs even when a full
+    // suite already passed: a green suite is only proof the NEW dependent was covered if the
+    // suite_command demonstrably exercises it, and the enforcer cannot know that - a NARROW
+    // suite (one that does not run the new dependent's test) passes green yet leaves the
+    // downstream break uncaught (the old `!(suite && suite.ok)` shortcut over-trusted it; #35).
+    // The subset is cheap and already bounded - only the new dependents' own tests (depGroups,
+    // capped by the reverse-dep computation) - so always running it costs little and closes
+    // the hole. A stable-edge consumer covered by the green suite is out of G7's default scope
+    // anyway (it is not a NEW dependent), so this does not re-run the whole world.
+    if (RECEIPT.green && gateOn(gates, "G7") && depGroups.length) {
       g7run = runGroups(depGroups, "g7-dependents@head");
     }
     // G13: run the coverage command on head (it needs the head tree); the lcov it wrote

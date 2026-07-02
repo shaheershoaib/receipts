@@ -35,6 +35,11 @@
  *                                  whose co-located test fails on head (G7)
  *   rider                          rides-along: a large unrelated added file the receipt
  *                                  never executes (G13 names its uncovered lines)
+ *   cmd_receipt                    { cmd, suite }: a Phase-1 COMMAND receipt (`receipt-cmd:`)
+ *                                  for a no-runner stack - a re-runnable command that FAILS
+ *                                  its expectation on base and MEETS it on head. `suite` is a
+ *                                  trivial always-green suite so control-good is a clean PASS.
+ *                                  Only the data stack carries it (the stack whose gap it closes).
  *
  * Not every stack can express every primitive (bash has no cheap coverage tool; the data
  * stack has no test runner at all) - a missing primitive means "this behavior is N/A for
@@ -263,6 +268,19 @@ const dataTotals = {
   broken_fix: { "totals.csv": "region,total\nEast,91\nWest,50\n" },
   // A "receipt" file exists in shape, but there is no runner to make it red->green.
   receipt: { "totals_check.sh": "#!/usr/bin/env bash\nv=$(sqlite3 :memory: \"CREATE TABLE t(region TEXT,total INT);.mode csv\\n.import totals.csv t\\nSELECT total FROM t WHERE region='East';\" 2>/dev/null)\n[ \"$v\" = \"100\" ] || exit 1\necho ok\n" },
+  // Phase 1 CLOSES this stack's gap: a `receipt-cmd:` line IS the receipt for software with no
+  // test runner. This command asserts the FIXED value (East == 100) by reading the CSV with a
+  // ubuntu-preinstalled tool (python3). It FAILS on base (East is 90) and MEETS on head (100),
+  // the same red->green law as a file receipt - through the same exec path. It is `;`-free so
+  // it passes the exit-masking guard (a `;` inside the -c string would trip masksExit).
+  //   cmd       the command receipt itself (goes on the PR body as `receipt-cmd: <cmd>`)
+  //   suite     a trivial always-green suite, so a control-good verdict is a clean PASS (with no
+  //             suite it would be WARN for lack of a G9 full-suite - still an accept, but PASS
+  //             matches the other stacks' control-good convention).
+  cmd_receipt: {
+    cmd: "python3 -c \"exit(0 if next(__import__('csv').DictReader(open('totals.csv')))['total']=='100' else 1)\"",
+    suite: "python3 -c \"exit(0)\"",
+  },
 };
 
 // A second data task: a sqlite query returns NULL where a JOIN should match (a stale FK).
