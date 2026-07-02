@@ -1,6 +1,31 @@
 # Changelog
 
-## Unreleased
+## 0.2.1
+
+The distribution release: the published artifact now proves itself the way the tool
+makes everyone else's fixes prove themselves.
+
+### Fixed
+- **The published CLI was dead on arrival.** 0.2.0's npm package shipped
+  `enforcer/verify.js` without `enforcer/g6.js` (its own require), so
+  `npx receipts-cli verify` / `replay` crashed with MODULE_NOT_FOUND. The `files`
+  allowlist now carries it - and two receipts make the class structurally hard to
+  re-ship: a static require-graph test (every module reachable from a shipped entry
+  point must be covered by `files`) and a packed-tarball smoke test (`npm pack` ->
+  run a real red->green verification through the extracted bin). CI was green while
+  the artifact was broken because CI tests the repo tree, where every module exists
+  regardless of `files` - a green that tested the wrong artifact, on our own release
+  pipeline.
+- **`init` wrote receipt-breaking test commands for Go / Maven / Gradle / .NET.**
+  `{test}` substitutes FILE paths, but `go test -run` / `mvn -Dtest=` / `--tests` /
+  `--filter` select by test NAME - a path matches nothing and exits 0: a "red" phase
+  that ran no test, so every legitimate fix on those stacks was mis-flagged as a weak
+  receipt. New placeholders: `{test_dirs}` (unique `./dir`s - Go selects by package)
+  and `{test_classes}` (basenames, comma-joined - surefire). Gradle / dotnet default
+  to the coarse full `test` command (correct, just broader), with a sharpening note
+  in INIT.md.
+- The plugin marketplace listing's version had drifted (0.1.0) from the plugin
+  manifest (0.2.0); now in lockstep, enforced by a test.
 
 ### Changed
 - **G1 sharpened for multi-hop paths.** A value that crosses layers to reach its output
@@ -9,6 +34,11 @@
   ARRIVED at the far end (persisted/rendered), never that the caller sent it or that a
   middle layer received it; adds a multi-hop scar (a picked field dropped by BOTH the
   client mutation and the proxy route). Doc-only; no behavior change.
+- **Honest-docs pass on config fields that outran the code.** `build.sha_source` and
+  `degrade.on_unreachable_build` / `verify.live_drive` are now marked for what they are
+  today (read by the agent-side Stop hook / reserved for the designed enforcer features)
+  instead of implying CI-enforcer support; `enforcer/GENERALIZATION.md` says plainly that
+  the G3 deployments-API check is design, not yet code.
 
 ## 0.2.0
 

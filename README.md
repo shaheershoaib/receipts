@@ -176,7 +176,7 @@ and an `examples/` demo of a caught wrong-fix.
 
 `receipts-cli` is on npm. To cut a new version:
 
-1. Bump `version` in `package.json` (and `plugin/.claude-plugin/plugin.json` too if the plugin itself changed).
+1. Bump `version` in `package.json` (and, if the plugin itself changed, `plugin/.claude-plugin/plugin.json` **plus** `.claude-plugin/marketplace.json` - a test keeps that pair in lockstep).
 2. If you edited `spec/GATES.md`, run `npm run build:refs` to sync the bundled skill reference (`plugin/skills/gates/references/GATES.md`, the deep how-to the agent reads on a stranger's install), then commit it.
 3. If you edited `plugin/mcp/trajectory-kb/index.js`, rebuild the bundled MCP server: `cd plugin/mcp/trajectory-kb && npm run build`, then commit the regenerated `server.bundle.mjs`.
 4. `npm publish`.

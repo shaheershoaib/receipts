@@ -2,7 +2,28 @@
 /* Unit tests for the enforcer's pure, security-critical helpers. */
 const { test } = require("node:test");
 const assert = require("node:assert");
-const { masksExit, gateOn, isContractFile, contractBreaks } = require("../verify.js");
+const { masksExit, gateOn, isContractFile, contractBreaks, expandTestPlaceholders } = require("../verify.js");
+
+test("expandTestPlaceholders: {test} / {test_dirs} / {test_classes} select correctly per runner", () => {
+  const goFiles = ["pkg/api/user_test.go", "pkg/api/auth_test.go", "pkg/db/store_test.go"];
+  assert.equal(
+    expandTestPlaceholders("go test {test_dirs}", goFiles),
+    'go test "./pkg/api" "./pkg/db"',
+    "go selects by package dir - a file path fed to -run matches nothing and exits 0");
+  assert.equal(
+    expandTestPlaceholders("go test {test_dirs}", ["main_test.go"]),
+    'go test "./"',
+    "a root-level test maps to the root package");
+  assert.equal(
+    expandTestPlaceholders("mvn -Dtest={test_classes} test", ["src/test/java/FooTest.java", "src/test/java/BarTest.java"]),
+    "mvn -Dtest=FooTest,BarTest test",
+    "surefire takes comma-joined class names, not paths");
+  assert.equal(
+    expandTestPlaceholders("npm test -- {test}", ["a b.test.js"]),
+    'npm test -- "a b.test.js"',
+    "file paths stay quoted");
+  assert.equal(expandTestPlaceholders("pytest {test}", ["tests/test_x.py"]), 'pytest "tests/test_x.py"');
+});
 
 test("masksExit: clean commands pass, exit-maskers are caught", () => {
   // allowed: a single command whose own exit is the result
