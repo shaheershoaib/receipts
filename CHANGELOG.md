@@ -3,6 +3,26 @@
 ## Unreleased
 
 ### Added
+- **Live receipts - machine-validated deployed-build evidence for the Stop hook.** The
+  deployed-build backstop used to accept prose/pattern-matched evidence: "a navigate happened,
+  then a screenshot happened" cleared the gate even when the value on screen was wrong. A new
+  `receipts observe` verb produces a `receipts/live-receipt@1` artifact instead - ONE command a
+  weak agent can be right by running: it probes the LIVE build (`--cmd '<curl/query>'` or
+  `--url '<https>'`), captures the output (bounded ~2KB), computes `met` with the SAME red/green
+  law a command receipt uses (exit-0 / 2xx floor + optional `--expect '/regex/'`), binds the
+  observation to the build (`--sha-cmd '<print the sha>'` / `--sha <id>`, else `artifact.kind:
+  "none"` - allowed but weaker), and prints exactly one `LIVE-RECEIPT: {json}` line (exit 0 iff
+  met, but the marker ALWAYS prints - a failed observation is evidence too). `--cmd`/`--sha-cmd`
+  are exit-masking-guarded (a masked exit fakes met - G9) and `--url` must be https/localhost.
+  The Stop hook (`stop-gates.mjs`) now scans the close-out window for the marker (robustly, from
+  inside the JSON-stringified tool_result it lands in): a `met:true` receipt bound to the build
+  satisfies BOTH the deploy-binding and the observation at once; a `met:false`-only close-out
+  blocks with a precise "the observation FAILED - the symptom is not gone" message. Additive and
+  backward compatible - the existing navigate+screenshot heuristics still count by default. New
+  opt-in strictness: `agent.evidence: "live-receipt"` makes a valid live receipt the ONLY thing
+  that clears the gate, and the block message then tells the agent the exact command to run.
+  Schema + docs in `spec/LIVE-RECEIPT.md`; new config key `agent.evidence` (schema + enforcer
+  KNOWN_KEYS). No version bump.
 - **Command receipts - a receipt is any re-runnable command with an expected outcome.**
   Alongside `receipt: <path>`, a PR body may carry `receipt-cmd: <shell command>` lines: the
   command IS the receipt, so software with no test runner (an API, a data pipeline, a CLI,

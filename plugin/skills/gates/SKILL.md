@@ -62,6 +62,16 @@ project's own test framework:
 That red -> green test is the receipt. A passing screenshot, or a green unrelated
 suite, is not.
 
+**On the deployed build (G1/G3), make the evidence machine-checkable, not a screenshot.**
+When you verify the fix on the live build, run `receipts observe` - it probes the deployed
+URL / staging query / installed CLI, checks the output MEETS your expectation, binds the
+observation to the build sha, and emits a `LIVE-RECEIPT` line the Stop hook reads as
+by-value-bound-to-build proof:
+`receipts observe --cmd '<curl/query reading the reporter's value>' --expect '/<the value>/' --sha-cmd '<print the live build sha>'`
+(or `--url <https>` for a direct fetch). A `met:true` receipt bound to the build clears the
+deployed-build gate; a `met:false` one records that the symptom is NOT gone. See
+`references/LIVE-RECEIPT.md`.
+
 ## The gates
 
 **Verify gates - did you actually prove it works?** (re-runnable at the PR)
