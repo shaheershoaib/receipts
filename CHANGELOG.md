@@ -3,6 +3,31 @@
 ## Unreleased
 
 ### Added
+- **In-session tripwires - PreToolUse guards between the Stop hook and the CI enforcer.** A new
+  `pre-gates.mjs` hook (registered under `PreToolUse` for `Bash|Edit|Write|MultiEdit`) raises the
+  weak-agent floor AT the risky action, not a stop-cycle or a PR later. Two guards:
+  (1) **commit-without-verification** - a `git commit` (command-boundary matched, so a `git commit`
+  inside a printf/string is data, not a commit) that lands right after a production-source edit
+  with NO test / `receipts observe` command run in between is DENIED: a commit is a claim it works
+  (G0/G9). (2) **G11-live referee** - editing a TEST file whose test was seen FAILING earlier in
+  the session with no passing run since is DENIED (fix the code, not the referee); conservative -
+  it needs the file named on the same output line as a fail token, and allows when unsure. Both are
+  DENY-by-default (PreToolUse has no reliable agent-visible warn channel) with an EXPLICIT, greppable
+  escape - never a silent skip: `RECEIPTS_ACK='<why>'` / `RECEIPTS_TRIPWIRE=off` / `--no-verify-receipts`
+  in the command, or a `test-removal: <why>` note in the edit. Tunable per project under
+  `agent.tripwires` (`commit_unverified`, `g11_live`, `test_command_patterns`); ships generic, works
+  zero-config. Fails SAFE on any parse/IO problem (a missed tripwire beats a spurious deny that jams
+  the agent). New config key `agent.tripwires` (schema + enforcer KNOWN_KEYS). No version bump.
+- **Stop-hook refire damping - stop re-blocking a close-out the human has already seen.** The Stop
+  gate (`stop-gates.mjs`) used to re-block the SAME unaddressed close-out on every subsequent Stop
+  (observed: ~8 redundant blocks in one session). It now records a per-session SIGNATURE of what it
+  blocked (a hash of the last close-out's index+content, which halves fired, and the merge / evidence
+  / trajectory-append indices) in a state file under `os.tmpdir()` keyed by the transcript path. Once
+  a signature has fired >= 2 times AND a fresh USER turn has entered the transcript since the last
+  block (the human saw it and moved on), the hook stands down SILENTLY for that exact signature.
+  Never damps on the 1st or 2nd firing, and any NEW close-out / merge / evidence / trajectory append
+  changes the signature -> a fresh count, enforcement fully re-arms. The state file failing to
+  read/write FAILS OPEN to the current behavior (block) - a lost damp beats a lost gate.
 - **Live receipts - machine-validated deployed-build evidence for the Stop hook.** The
   deployed-build backstop used to accept prose/pattern-matched evidence: "a navigate happened,
   then a screenshot happened" cleared the gate even when the value on screen was wrong. A new
