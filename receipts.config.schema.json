@@ -317,6 +317,11 @@
           "type": "string",
           "description": "Default repo tag for trajectory-kb appends (the agent may override per append)."
         },
+        "evidence": {
+          "enum": ["heuristic", "live-receipt"],
+          "description": "What kind of deployed-build evidence the Stop hook's verification gate accepts at a fix close-out. 'heuristic' (default, key absent): the pattern-matched signals count - a navigate to a deploy host + a screenshot / DOM read / by-value query. 'live-receipt' (opt-in strict): ONLY a valid `receipts/live-receipt@1` (produced by `receipts observe`) with met:true AND a build binding (artifact.kind != 'none') satisfies the gate - a machine-validated probe of the live build, not 'a screenshot happened'. The block message then tells the agent the exact `receipts observe ...` command to run. See spec/LIVE-RECEIPT.md.",
+          "default": "heuristic"
+        },
         "trajectory_store": {
           "type": "string",
           "description": "Where the trajectory memory lives - this decides WHO it serves. 'home' (default): ~/.claude/mcp-servers/trajectory-kb/data/trajectories.jsonl - private, per-machine, aggregates across your repos. 'repo': <repo>/.receipts/trajectories.jsonl - COMMIT it and the whole team inherits every recorded trap and dead end (append-only JSONL merges trivially). Any other value: an explicit path, resolved against this config's directory.",
