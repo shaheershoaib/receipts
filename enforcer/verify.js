@@ -261,7 +261,7 @@ const KNOWN_KEYS = {
   "gates.G11": ["mode"],
   "gates.G12": ["mode"],
   "gates.G13": ["coverage_command", "lcov_path", "mode"],
-  agent: ["loop_skills", "staging_query_patterns", "closeout_fixed_statuses", "repo_name", "trajectory_store", "evidence"],
+  agent: ["loop_skills", "staging_query_patterns", "closeout_fixed_statuses", "repo_name", "trajectory_store", "evidence", "tripwires"],
 };
 function unknownConfigKeys(cfg) {
   const out = [];
