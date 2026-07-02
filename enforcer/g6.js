@@ -99,13 +99,18 @@ const STOPWORDS = new Set([
 
 // Strip comments before the heuristic tokenizes: an affordance named only in a COMMENT is
 // not a rollout (a license-header sweep across two `*Table.tsx` files is not pagination),
-// and a commented-out import is not an edge. The `[^:]` guard keeps a URL in a string
-// ("https://...") from being clipped as a line comment. Regex-level like everything here -
-// a `//` inside a non-URL string is mis-stripped, an acceptable trade for the FP class.
+// and a commented-out import is not an edge. A `//` is kept ONLY when it follows a known
+// URL scheme ("https://..."), so a URL in a string survives while a comment that happens
+// to sit right after a colon (`x: string //note`, `onPage://TODO: wire Pagination`) is
+// still stripped - the bare any-colon guard protected those too and leaked comment text
+// into the tokenizer (a marker mentioned only there read as adopted). Regex-level like
+// everything here - an exotic-scheme URL loses its tail from tokenization, an acceptable
+// trade for closing the comment-leak class.
+const URL_SCHEME = /(?<!(?:https?|wss?|ftps?|file|ssh|git|s3|gs|rediss?|postgres(?:ql)?|mysql|mongodb(?:\+srv)?|amqps?):)\/\/.*$/gm;
 function stripComments(src) {
   return String(src || "")
     .replace(/\/\*[\s\S]*?\*\//g, " ")
-    .replace(/(^|[^:])\/\/.*$/gm, "$1");
+    .replace(URL_SCHEME, "");
 }
 
 // All identifier-ish tokens in a source (regex-level; '-' kept so JSX attributes like

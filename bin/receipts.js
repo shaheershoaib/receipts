@@ -288,7 +288,7 @@ async function init(opts) {
       if (xh.length) a.extra_hosts = xh;
       const sq = list(await ask(rl, "By-value query hosts/tools (e.g. a DB proxy host)? (blank to skip)", ""));
       if (sq.length) a.staging_query_patterns = sq;
-      // Gate applicability (G0-G10): default all-on; disable what does not fit this project.
+      // Gate applicability (G0-G13): default all-on; disable what does not fit this project.
       if (!agentHome) {
         a.medium = await ask(rl, "Project type / medium? (web/api/library/cli/data/infra/mobile/desktop/...)", d.medium);
         a.integration_branch = await ask(rl, "Integration branch for fresh-base checks (G8)?", d.default_branch || "main");

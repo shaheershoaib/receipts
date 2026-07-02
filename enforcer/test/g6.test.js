@@ -185,3 +185,17 @@ test("heuristic: a single adopter or no common family does NOT fire", () => {
   });
   assert.equal(r2.findings.length, 0, "no common family signature");
 });
+
+test("stripComments: a colon-adjacent // is still a comment; only URL schemes survive", () => {
+  // The old any-colon guard also protected genuine comments sitting right after a colon
+  // (`x: string //note`), leaking marker text into the tokenizer - a twin then read as
+  // having adopted an affordance it only mentions in a comment.
+  const leaked = stripComments("type Props = {\n  onPage://TODO: wire Pagination\n};");
+  assert.ok(!/Pagination/.test(leaked), "colon-adjacent comment is stripped");
+  const nospace = stripComments("const x = 1; //Pagination: add later\n");
+  assert.ok(!/Pagination/.test(nospace), "no-space comment is stripped");
+  const url = stripComments('const docs = "https://pagination.example.dev/guide";\n');
+  assert.match(url, /pagination\.example\.dev/, "a real URL survives");
+  const proto = stripComments('const ws = "wss://feed.example.dev/live";\n');
+  assert.match(proto, /feed\.example\.dev/, "wss scheme survives");
+});
