@@ -9,7 +9,7 @@ inputs:
     required: false
     default: "false"
   github-token:
-    description: "Token for the PR comment and the G3 deployments lookup."
+    description: "Token for the PR comment, the G3 deployments lookup, and the optional browser-receipt preview-URL resolution (url_source: github-deployment)."
     required: false
     default: ${{ github.token }}
 runs:
@@ -19,10 +19,14 @@ runs:
       shell: bash
       # Pass event data through env, never interpolated into the script body
       # (avoids the classic Actions script-injection via a crafted PR body).
+      # GITHUB_TOKEN + GITHUB_REPOSITORY are for the OPTIONAL browser-receipt adapter when it
+      # resolves the preview URL via url_source: "github-deployment" (query the deployments API
+      # for the head sha's environment_url). Unused otherwise; harmless when the adapter is off.
       env:
         PR_BODY: ${{ github.event.pull_request.body }}
         BASE_SHA: ${{ github.event.pull_request.base.sha }}
         HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+        GITHUB_TOKEN: ${{ inputs.github-token }}
       run: |
         set -e
         if [ -z "$BASE_SHA" ] || [ -z "$HEAD_SHA" ]; then

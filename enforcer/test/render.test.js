@@ -67,6 +67,46 @@ test("renderMarkdown: table cells survive pipes and newlines in inputs", () => {
   assert.match(md, /run \\\| tee/);
 });
 
+test("renderMarkdown: a passing browser receipt renders a head-only row with the URL + source", () => {
+  const md = renderMarkdown({
+    ...FIXTURE,
+    browser_receipt: { configured: true, ok: true, url: "https://pr-7.vercel.app", source: "github-deployment", sha_match: true, output_tail: "ok" },
+  });
+  assert.match(md, /browser-receipt@preview \(head-only\)/);
+  assert.match(md, /✅ on preview `https:\/\/pr-7\.vercel\.app` \(via github-deployment\)/);
+  assert.match(md, /sha✓/);
+});
+
+test("renderMarkdown: a sha-mismatched browser receipt is flagged as not-the-head-build", () => {
+  const md = renderMarkdown({
+    ...FIXTURE,
+    browser_receipt: { configured: true, ok: true, url: "https://x.app", source: "github-deployment", sha_match: false },
+  });
+  assert.match(md, /preview ≠ head build/);
+});
+
+test("renderMarkdown: a degraded browser receipt (unresolved URL) reads as 'not run', not a silent absence", () => {
+  const md = renderMarkdown({
+    ...FIXTURE,
+    browser_receipt: { configured: true, ok: null, url: null, source: "env", sha_match: null, reason: "could not resolve preview URL - $RECEIPTS_PREVIEW_URL is unset or empty" },
+  });
+  assert.match(md, /browser-receipt@preview \(head-only\)/);
+  assert.match(md, /not run — could not resolve preview URL/);
+});
+
+test("renderMarkdown: a skipped (G9-masked) browser receipt reads as skipped", () => {
+  const md = renderMarkdown({
+    ...FIXTURE,
+    browser_receipt: { configured: true, ran: false, reason: "command can mask its exit code (G9) - skipped" },
+  });
+  assert.match(md, /skipped — command can mask its exit code/);
+});
+
+test("renderMarkdown: no browser row when the adapter is unconfigured", () => {
+  const md = renderMarkdown(FIXTURE); // no browser_receipt
+  assert.ok(!/browser-receipt@preview/.test(md), "no browser row when unconfigured");
+});
+
 test("report.js: writes the report to GITHUB_STEP_SUMMARY, exits 0, never throws", () => {
   const tmp = fs.mkdtempSync(path.join(os.tmpdir(), "receipts-report-"));
   const receiptPath = path.join(tmp, "receipt.json");

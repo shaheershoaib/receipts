@@ -104,6 +104,44 @@
           "type": ["string", "null"],
           "description": "OPTIONAL advanced: a command/script that drives the deployed app for symptoms a unit/e2e test can't cover. null = not used (the carried test is enough). RESERVED: declared for the roadmap; the enforcer does not execute it yet.",
           "default": null
+        },
+        "browser_receipt": {
+          "type": "object",
+          "description": "OPTIONAL web-medium adapter: run a browser/e2e script (Playwright, Cypress, etc.) against the PR's PREVIEW DEPLOYMENT as a HEAD-ONLY acceptance check. IMPORTANT - this is NOT a red->green receipt: a preview deploys only the HEAD build, so there is no base preview to run it red against. It is a G1/G3/G5-shaped acceptance check (does the fixed behavior actually work on the live deploy) that runs IN ADDITION to the carried red->green receipt and NEVER substitutes for it. Playwright is NOT a dependency of receipts: the consuming repo brings its own e2e stack; receipts only resolves the preview URL, exports it as RECEIPTS_PREVIEW_URL, runs `command`, and folds the exit code into the verdict. Runs isolated after the main dance - a thrown error / unreachable preview degrades to a WARN, never a crash and (unless mode:block) never a hard fail.",
+          "required": ["command"],
+          "additionalProperties": false,
+          "properties": {
+            "command": {
+              "type": "string",
+              "description": "How to run the browser/e2e script against the preview. It reads the preview URL from the RECEIPTS_PREVIEW_URL env var receipts exports (e.g. a playwright.config baseURL, or `page.goto(process.env.RECEIPTS_PREVIEW_URL)`). Must be a single command whose own exit is the result (exit-masking `;`/`||`/pipe/`&` is rejected - a green from a masked exit cannot be trusted, G9); wrap complex flows in a script.",
+              "examples": ["npx playwright test e2e/receipt.spec.ts", "node e2e/smoke.mjs", "npx cypress run --spec cypress/e2e/receipt.cy.ts"]
+            },
+            "url_source": {
+              "enum": ["env", "github-deployment", "command"],
+              "default": "env",
+              "description": "How to resolve the preview URL. 'env' (default): read it from an env var (url_env). 'github-deployment': query the GitHub deployments API for the PR head sha's environment_url (uses GITHUB_TOKEN + GITHUB_REPOSITORY, both provided inside the Action; works for Vercel and other platforms that post deployments). 'command': run url_cmd and read the first http(s) URL it prints. Every path degrades HONESTLY when the URL can't be resolved - a distinct 'could not resolve preview URL' WARN, never a silent pass."
+            },
+            "url_env": {
+              "type": "string",
+              "default": "RECEIPTS_PREVIEW_URL",
+              "description": "For url_source: 'env' - the env var to READ the preview URL from (your deploy step or a prior job sets it). Independent of the FIXED RECEIPTS_PREVIEW_URL name that receipts EXPORTS to `command` (so the script itself is url_source-agnostic). Default: RECEIPTS_PREVIEW_URL (set it yourself if you use the env source)."
+            },
+            "url_cmd": {
+              "type": "string",
+              "description": "For url_source: 'command' - a command that PRINTS the preview URL (the first http(s) line of its stdout is used). E.g. a Vercel/Netlify CLI call, or a `gh` query. Exit-masking is rejected (G9). Used only when url_source is 'command'.",
+              "examples": ["vercel inspect --token \"$VERCEL_TOKEN\" | grep -o 'https://[^ ]*.vercel.app'", "cat preview-url.txt"]
+            },
+            "mode": {
+              "enum": ["warn", "block"],
+              "default": "warn",
+              "description": "'warn' (default): a failing browser receipt (or a preview-is-not-the-head-build sha mismatch) surfaces as a WARN without failing the check - the preview being flaky/unreachable is often infra, not the PR's fault, and the red->green receipt is the primary gate. 'block': a definitive failure (the command ran and exited non-zero against a resolved preview) fails the check. Honest-degradation cases (URL unresolved, adapter error) are ALWAYS a WARN regardless of mode - you cannot block on a check that could not run."
+            },
+            "timeout_ms": {
+              "type": "integer",
+              "minimum": 0,
+              "description": "Per-command timeout (milliseconds) for the browser command and the url_cmd. Defaults to verify.command_timeout_ms (20 min). A hung browser run is killed and reported (timed_out), not held to the job ceiling."
+            }
+          }
         }
       }
     },

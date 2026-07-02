@@ -35,6 +35,7 @@ const g6 = require("./g6.js");
 const g11 = require("./g11.js");
 const g12 = require("./g12.js");
 const g13 = require("./g13.js");
+const browser = require("./browser.js");
 
 const TEST_PATH = /(\.test\.|\.spec\.|_test\.|(^|\/)test_|(^|\/)tests?\/|\/__tests__\/|_spec\.)/i;
 // JSON keys that are documentation, not contract surface - removing them is not breaking.
@@ -87,10 +88,13 @@ function git(repo, args) {
 // interpolated file list with UNSAFE_PATH first, and masksExit() rejects exit-masking. The
 // optional timeout (verify.command_timeout_ms) guards a hung test; default none preserves
 // prior behavior. Captures stdout+stderr and duration for the receipt.
-function runCmd(repo, cmd, timeoutMs) {
+function runCmd(repo, cmd, timeoutMs, envExtra) {
   const t0 = Date.now();
   const opts = { cwd: repo, encoding: "utf8", stdio: ["ignore", "pipe", "pipe"], maxBuffer: CMD_MAXBUF };
   if (timeoutMs && timeoutMs > 0) opts.timeout = timeoutMs;
+  // envExtra (browser receipt: RECEIPTS_PREVIEW_URL) layers over the inherited env; omitted for
+  // every existing caller, so their behavior is unchanged (env inherited as before).
+  if (envExtra) opts.env = { ...process.env, ...envExtra };
   try {
     const out = execSync(cmd, opts);
     return { ok: true, out: out || "", ms: Date.now() - t0 };
@@ -251,7 +255,8 @@ const KNOWN_KEYS = {
   "": ["$schema", "version", "claim", "build", "verify", "degrade", "gates", "agent"],
   claim: ["issue_link", "require_receipt_for", "downgrade_tags"],
   build: ["sha_source", "platform", "deploy_host_patterns", "environments", "verify_against"],
-  verify: ["test_command", "suite_command", "require_fresh_base", "on_load_error_red", "command_timeout_ms", "receipt_runs", "live_drive"],
+  verify: ["test_command", "suite_command", "require_fresh_base", "on_load_error_red", "command_timeout_ms", "receipt_runs", "live_drive", "browser_receipt"],
+  "verify.browser_receipt": ["command", "url_source", "url_env", "url_cmd", "mode", "timeout_ms"],
   degrade: ["on_no_receipt", "on_unreachable_build"],
   gates: ["medium", "work_type", "enabled", "disabled", "G6", "G7", "G8", "G10", "G11", "G12", "G13"],
   "gates.G6": ["mode", "auto", "surfaces"],
@@ -923,7 +928,127 @@ function main() {
     if (depNoTest.length)
       warn(`G7: ${depNoTest.length} new dependent(s) of the changed surface have no co-located test to re-run (${depNoTest.map((d) => d.file).join(", ")}) - verify them manually.`);
   }
+
+  // Browser receipt (Phase 3 - the web medium, an OPTIONAL adapter). Runs AFTER the main dance
+  // (the checkout/restore is complete, so we are back on `original`), fully isolated in a
+  // try/catch: a thrown error DEGRADES to a WARN, it must never crash the verdict. This is a
+  // HEAD-ONLY acceptance check (G1/G3/G5-shaped) against the PR's preview deploy - it runs IN
+  // ADDITION to the red->green receipt above, NEVER as a substitute for it (a preview has no
+  // base build to run red against). Default mode: warn; verify.browser_receipt.mode:block.
+  runBrowserReceipt(repo, verify, head);
+
   finish("receipt verified: red on base, green on fix - the symptom is reproduced and now gone");
+}
+
+// GitHub deployments lookup for url_source: "github-deployment". Synchronous (main() is), so it
+// spawns a short `node -e` that uses global fetch (node >=18) - no new dependency, no `curl`
+// assumption. Reads GITHUB_TOKEN + GITHUB_REPOSITORY (both provided by the action). Returns
+// { ok, deployments, statusesById, reason }; any failure degrades HONESTLY (ok:false + reason),
+// never throws. The API base is GITHUB_API_URL (GHES-friendly), default api.github.com.
+function ghDeployments(headSha) {
+  const token = process.env.GITHUB_TOKEN || process.env.GH_TOKEN || "";
+  const repo = process.env.GITHUB_REPOSITORY || "";
+  if (!token || !repo) return { ok: false, reason: "GITHUB_TOKEN / GITHUB_REPOSITORY not set (they are provided inside the GitHub Action; set them to use github-deployment locally)" };
+  const api = (process.env.GITHUB_API_URL || "https://api.github.com").replace(/\/$/, "");
+  // The child prints one line of JSON: { deployments, statuses:{id:[...]} }. It carries no PR-
+  // controlled input (headSha is a 40-char hex the caller validated is safe); token/repo/api
+  // come from the trusted CI env and are passed via env, never interpolated into the script.
+  const script = `
+    const api=process.env.__A, repo=process.env.__R, token=process.env.__T, sha=process.env.__S;
+    const h={authorization:"Bearer "+token,accept:"application/vnd.github+json","user-agent":"receipts-enforcer"};
+    (async()=>{
+      const dr=await fetch(api+"/repos/"+repo+"/deployments?sha="+encodeURIComponent(sha)+"&per_page=10",{headers:h});
+      if(dr.status!==200){console.log(JSON.stringify({error:"deployments "+dr.status}));return;}
+      const deps=await dr.json().catch(()=>null);
+      if(!Array.isArray(deps)){console.log(JSON.stringify({error:"deployments not an array"}));return;}
+      const statuses={};
+      for(const d of deps.slice(0,10)){
+        const sr=await fetch(api+"/repos/"+repo+"/deployments/"+d.id+"/statuses?per_page=10",{headers:h});
+        statuses[d.id]=sr.status===200?(await sr.json().catch(()=>[])):[];
+      }
+      console.log(JSON.stringify({deployments:deps,statuses}));
+    })().catch(e=>console.log(JSON.stringify({error:String(e&&e.message||e)})));`;
+  try {
+    const out = execFileSync(process.execPath, ["-e", script], {
+      encoding: "utf8", maxBuffer: CMD_MAXBUF, timeout: 30000,
+      env: { ...process.env, __A: api, __R: repo, __T: token, __S: String(headSha) },
+    });
+    const line = String(out || "").trim().split("\n").filter(Boolean).pop() || "{}";
+    const parsed = JSON.parse(line);
+    if (parsed.error) return { ok: false, reason: `deployments API: ${parsed.error}` };
+    const statusesById = new Map(Object.entries(parsed.statuses || {}).map(([k, v]) => [Number(k), v]));
+    return { ok: true, deployments: parsed.deployments || [], statusesById };
+  } catch (e) {
+    return { ok: false, reason: `deployments lookup failed (${e && e.message ? e.message : e})` };
+  }
+}
+
+// Orchestrate a browser receipt: resolve the preview URL, run the consumer's command against
+// it with RECEIPTS_PREVIEW_URL exported, fold the result into the verdict + RECEIPT artifact.
+// Isolated (try/catch) so infra flakiness or a thrown error degrades to WARN, never a crash.
+function runBrowserReceipt(repo, verify, head) {
+  const cfg = verify && verify.browser_receipt;
+  if (!cfg || typeof cfg !== "object" || !cfg.command) return; // not configured - nothing to do
+  try {
+    // The command comes from the trusted BASE config, but exit-masking still applies (a green
+    // from a `; echo` cannot be trusted - G9). A masked command is a config error, so WARN and
+    // skip rather than run something whose exit we can't believe.
+    if (masksExit(cfg.command)) {
+      warn(`browser-receipt@preview (head-only): verify.browser_receipt.command can mask its own exit code (; , || , pipe, background &, newline, or command substitution) - a green from it cannot be trusted (G9); skipped. Use a single command or wrap it in a script.`);
+      RECEIPT.browser_receipt = { configured: true, ran: false, reason: "command can mask its exit code (G9) - skipped" };
+      return;
+    }
+    if (cfg.url_cmd && masksExit(cfg.url_cmd)) {
+      warn(`browser-receipt@preview (head-only): verify.browser_receipt.url_cmd can mask its own exit code - its resolved URL cannot be trusted (G9); skipped.`);
+      RECEIPT.browser_receipt = { configured: true, ran: false, reason: "url_cmd can mask its exit code (G9) - skipped" };
+      return;
+    }
+    const bTimeout = Number(cfg.timeout_ms) > 0 ? Number(cfg.timeout_ms) : resolveTimeout(verify);
+    const result = browser.runBrowserReceipt(cfg, head, {
+      // The browser command runs at repo root on the CURRENT (restored) checkout with the preview
+      // URL exported. It probes a REMOTE deploy, not the local tree, so the checkout ref does not
+      // matter - the URL is what's under test.
+      runCmd: (cmd, envExtra) => {
+        const r = runCmd(repo, cmd, bTimeout, envExtra);
+        record("browser-receipt@preview (head-only)", cmd, r);
+        return r;
+      },
+      resolveDeps: {
+        env: process.env,
+        runCmd: (cmd) => runCmd(repo, cmd, bTimeout),
+        ghDeployments,
+      },
+    });
+
+    RECEIPT.browser_receipt = {
+      configured: true,
+      url: result.url || null,
+      source: result.source,
+      sha_match: result.sha_match,
+      ok: result.ok,
+      output_tail: result.output_tail || null,
+    };
+
+    if (result.degraded) {
+      // Honest degradation: could not resolve the URL, or could not run - a distinct WARN, never
+      // a silent pass. (Mirrors the repo's honest-degradation style: name what could not happen.)
+      warn(`browser-receipt@preview (head-only): ${result.reason}. This head-only acceptance check did not run; it is IN ADDITION to the red->green receipt, so the verdict stands on that - but the web-medium check is unverified.`);
+      return;
+    }
+    // G3 sha binding: a preview built from a sha other than the PR head is not the head build.
+    if (result.sha_match === false)
+      warn(`browser-receipt@preview (head-only): the resolved preview is NOT the head build (its deployment sha != PR head ${String(head).slice(0, 10)}) - the acceptance check ran against a different build. Re-run once the head's preview is live.`);
+    if (result.ok === false) {
+      const msg = `browser-receipt@preview (head-only): the browser receipt FAILED on the preview deploy (${result.reason || "command exited non-zero"}) - the fixed behavior does not work on the deployed head build. This is a HEAD-ONLY acceptance check (G1/G3/G5), not a red->green receipt.`;
+      if (result.mode === "block") emit("BLOCK", msg, (result.output_tail || "").split("\n").slice(-8).join("\n"));
+      warn(msg);
+    }
+  } catch (e) {
+    // The whole adapter is best-effort: a thrown error DEGRADES to a WARN. A missed browser
+    // check beats a crashed verdict on an optional add-on.
+    warn(`browser-receipt@preview (head-only): the adapter errored (${e && e.message ? e.message : e}) - skipped. The red->green receipt verdict is unaffected.`);
+    try { RECEIPT.browser_receipt = { configured: true, ran: false, reason: `adapter error: ${e && e.message ? e.message : e}` }; } catch { /* ignore */ }
+  }
 }
 
 // Run only when invoked as a script. When this file is `require`d (the enforcer's own
