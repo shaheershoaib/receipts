@@ -2,7 +2,7 @@
 
 A standard for trusting AI-written fixes.
 
-**Spec version: `receipts/gates@1.0`**
+**Spec version: `receipts/gates@1.1`**
 
 A fix is **not** done because the agent says so, because CI is green, because a unit
 test passed, or because the code "looks right." It is done when the **reported
@@ -22,8 +22,8 @@ re-check), `agent-judgment` (carried by the agent adapter, no PR-side artifact),
 
 ## Enforcement scorecard
 
-Of the 14 gates: **7 executable** (G6, G7, G8, G9, G10, G11, G13), **4 hybrid** (G0, G1, G3,
-G12), **3 agent-judgment** (G2, G4, G5). The roadmap's durability metric is moving gates
+Of the 18 gates: **8 executable** (G6, G7, G8, G9, G10, G11, G13, G14), **5 hybrid** (G0, G1,
+G3, G12, G17), **5 agent-judgment** (G2, G4, G5, G15, G16). The roadmap's durability metric is moving gates
 RIGHTWARD - from judgment to executable - because an executable gate a machine re-runs does
 not depend on which agent, or how careful an agent, produced the work; the wholly-judgment
 gates are the model-dependent surface, and shrinking that surface is how the standard stops
@@ -50,13 +50,16 @@ existing suite stays green" (no behavior change). See `references/WORK-TYPES.md`
   works?"* They produce receipts, and they are enforceable at the one chokepoint every
   team shares regardless of which agent they use: the pull request. An enforcer can
   re-run them.
-- **Target gates (G2, G4, G6, G7, G8, G10, G12)** answer *"did you fix the right thing,
+- **Target gates (G2, G4, G6, G7, G8, G10, G12, G15, G16)** answer *"did you fix the right thing,
   all of it - including what depends on it, and against the code that will actually
   ship?"* There is mostly no artifact for "you fixed the right component," so these live
   inside the agent's loop and ship as adapters. Several are bridge cases with an enforcer
   assist: the agent does the selection/judgment, and the enforcer re-checks what it can
   at the PR (G7 the dependents' tests, G8 the base is current, G10 the contract is
   back-compatible, G12 the silencing shapes).
+- **Process gate (G17)** answers *"is the escape hatch being used as an escape hatch?"* It
+  is the only gate that judges the RUN rather than a change: it reads across items, so it
+  cannot fire on any single one.
 
 G7, G8, and G10 are the **multi-dev gates** - the ones that only bite because other people
 are working in parallel and the codebase changes under you (a consumer is pulled in, the
@@ -71,6 +74,13 @@ narrow receipt (G13), or write a receipt too weak to notice a wrong fix (G14). T
 **receipt lock** (see `RECEIPT.md`) is the same posture applied to authorship: the
 acceptance test is approved and content-pinned BEFORE the agent starts, so the agent makes
 the rubric pass rather than writing its own.
+
+G15-G17 are the **durability gates**: they fire where a change is correct *right now* and
+still wrong later or elsewhere. Two copies of one fact agree today and drift tomorrow (G15);
+a fix repairs future instances and leaves the reported one broken forever (G16); and a
+per-item escape used honestly twenty times conceals a capability the process never built
+(G17). G17 is the only gate that reads across items - the standard's own feedback loop, and
+the answer to "the ladder absorbed every downgrade without complaint."
 
 ---
 
@@ -163,8 +173,19 @@ config universe differs - feature flags, environment variables, the A/B bucket. 
 right build" means the right code UNDER the reporter's configuration (which flags G2
 pins as part of the reporter's context).
 
+**A successful merge is not a successful deploy.** The sha must be OBSERVED on the running
+artifact, never inferred from an upstream step that reported success. A merge that returns
+MERGED, and a green check on every CI job, say nothing about whether the deploy that follows
+them actually rolled - and a failed deploy characteristically leaves the PREVIOUS artifact
+serving. That is the dangerous shape: nothing looks broken, the system is up and answering,
+and it is answering on the old code. A client half that merged alongside it is then calling
+endpoints the live build does not have.
+
 **Scar.** A fix "verified" against a deploy that had not yet rebuilt - the old bundle
-was still being served.
+was still being served. Separately: a merge reported success and every CI check was green
+while the platform's deploy step had failed; the previous artifact kept serving, and the
+newly-merged client called endpoints that did not exist on it - two hours were spent
+debugging the client before anyone observed the live sha.
 
 **Receipt.** sha(deployed) == sha(your fix). Trivially checkable in CI.
 
@@ -305,10 +326,21 @@ database engine, a real browser), not a substitute that passes where production 
 a count invariant and a money-serializer leak the subset never exercised (it recurred on the
 same file). A `npm test; echo; tail` wrapper exited 0 and hid a real non-zero that was
 trusted as green (it recurred). A local SQLite run passed while the CI MySQL engine caught a
-leak; a jsdom test passed only by shimming the real component away.
+leak; a jsdom test passed only by shimming the real component away. Two concurrent runs
+shared one test database; one dropped and reseeded it mid-run and the other produced
+thousands of phantom failures that were nearly reported as a real red suite.
 
 **Receipt.** The full suite, green on head, after the narrow red->green receipt - run by the
 enforcer itself, so a user-supplied masking wrapper cannot stand in for it.
+
+**Isolation corollary.** A green earned on a resource another process can mutate mid-run is
+not green either. When a suite claims a shared mutable resource - a database or schema, a
+fixture directory, a port, a queue, a seeded account - a concurrent run that reseeds or drops
+it invalidates BOTH runs. The damage is not confined to red: a run can also PASS because a
+neighbor left convenient state behind. Give each run its own resource, or take a lease a
+concurrent run cannot claim. This is the single-run twin of the multi-dev reality above: G8
+keeps another developer's COMMITS from invalidating your base; this keeps another process's
+WRITES from invalidating your green.
 
 **Determinism corollary.** A trustworthy green is also a REPEATABLE one: a flaky receipt
 can manufacture a fake red (a green test that flaked red on base) or pass a broken fix (a
@@ -330,10 +362,24 @@ tolerates the old producer), or sequence the deploys explicitly. A new endpoint 
 reachable until its proxy/route ships too. With separate people owning the halves, the order
 is not yours to assume.
 
+**Reachability is part of the contract, not only its timing.** The deploy window is one
+axis; the other is whether the call can reach the endpoint AT ALL, within a single deploy.
+Where a client reaches a server through a per-route REGISTRATION layer - a proxy handler, a
+gateway route, a URL/router config, a rewrite table - that registration is itself part of
+the contract, and an unregistered route does not fail like a bug: it returns the layer's own
+fallback, typically an HTML 404 or the app shell, to a caller expecting JSON. Neither side's
+unit tests can see this, and the blindness is STRUCTURAL rather than an oversight: the
+server's tests call the handler directly and the client's tests mock the transport, so the
+one artifact no test traverses is the registration. Exercise the new route once end to end
+through the real routing layer, or assert its registration statically; "both sides' tests
+pass" is not evidence of reachability.
+
 **Scar.** A response-shape change from an array to `{rows, resolved_count}` would have broken
 the still-live old frontend on a backend-first deploy; a backend PR had to merge and deploy
 before its frontend PR or the contract broke; a new endpoint returned 404 until its proxy
-route was added - a class that recurred three times in one session.
+route was added - a class that recurred three times in one session. The same class later
+shipped as "Fixed": a privileged action returned the router's HTML 404 because its route was
+never registered at all, and both halves' unit tests passed throughout.
 
 **Enforcement.** Hybrid, and distinct from G7: G7 verifies the consumer works at one instant;
 G10 guards the transient rollout window BETWEEN the two deploys. PR-checkable in part (a
@@ -446,6 +492,93 @@ reach (measured in the bench as a declared escape, not hidden).
 *Kind: verify (re-runnable at the PR).*
 *Enforcement: executable, default-on - `enforcer/g14.js` generates the mutants; the enforcer re-runs the CARRIED receipt (file tests and/or `receipt-cmd:`) against each and reports survivors into the receipt artifact (`gates.G14`).*
 
+## G15 - Two representations of one fact must be forced to AGREE (the divergence gate)
+
+**Mandate.** When the same fact is expressed in two places - a shape declared twice, a
+quantity computed in two modules, a literal on one side of a boundary and the enum it refers
+to on the other - the copies agree on the day they are written and drift silently forever
+after. Either DERIVE one from the other (one definition, imported or generated), or add a
+check that FAILS on divergence (a shared type both sides must satisfy, a test asserting
+equality, a schema both are validated against). That the values match today is not a check;
+it is a coincidence with a shelf life.
+
+**Scope: this gate fires on SILENT divergence across a seam.** Duplication that a compiler,
+schema, or existing test already catches is not this gate's business, and neither is ordinary
+local repetition. This is about a fact whose copies are edited independently and whose
+disagreement produces a WRONG VALUE rather than an error. The test: *change one copy - if
+nothing anywhere goes red, this gate applies.*
+
+**Scar.** A field list written out a second time inline omitted one field, and every record
+after the first silently lost it. One quantity defined in two places disagreed, and the copy
+feeding a downstream consumer reported zero. A hardcoded status string was compared against a
+producer that had since moved to an enum, so the branch never matched. In one of these the
+type-checker DID object - and the change that "fixed" it edited the local copy to satisfy the
+compiler rather than reconciling with the source, which is why this gate has a G12 edge:
+routing around the tool that caught the divergence is silencing the alarm.
+
+**Receipt.** The failing-on-divergence artifact itself - a shared type/schema, or a test that
+goes red when one copy changes. Demonstrate it by changing one copy and showing the red.
+
+*Kind: target (agent-side selection) + verify (the divergence check is re-runnable).*
+*Enforcement: agent-side. A structural detector (the same field list or literal set appearing in two independently-owned locations) is plausible but unbuilt; declaring the pair and the check stays with the agent.*
+
+## G16 - A forward-only fix leaves the reporter's own artifact broken (the existing-instances gate)
+
+**Mandate.** Most fixes correct the code that PRODUCES a value, not the values already
+produced. When the reported symptom is a stored artifact - a record, a document, a generated
+file, a cached or denormalized value - a correct fix can be fully verified on new instances
+while the exact artifact named in the report stays wrong forever. Before closing, determine
+what happens to EXISTING instances and state it: they self-heal on the next run (name the
+trigger), they need a backfill (perform it, or file it as a named follow-up), or they are
+immutable by design (say so). Naming the reporter's own instance is required, not optional.
+
+**Why the reporter's instance specifically.** The reporter re-tests the thing they filed. A
+close-out proving twelve new instances are correct, while the one in the ticket still shows
+the old value, reads to them as "not fixed" - and they are right about their own artifact.
+This gate is G0's mirror: G0 opens on the reporter's instance, this closes on it.
+
+**Scar.** A calculation fix was correct and every newly-created record came out right, while
+the record named in the report kept its wrong value permanently. The reporter reopened the
+ticket on that same artifact.
+
+**Receipt.** Either the repaired instance observed by value (the strong form), or an explicit
+disclosure in the close-out naming the instance and its disposition - self-heals (with the
+trigger), backfilled (with the count), or permanent (with the reason). Disclosure satisfies
+this gate; silence does not.
+
+*Kind: target (agent-side), with a verify half when a backfill is performed.*
+*Enforcement: agent-side - the close-out must carry the disposition. A stop-hook can require the field whenever the receipt asserts on a stored artifact.*
+
+## G17 - A repeated downgrade is a missing capability, not bad luck (the ladder's feedback loop)
+
+**Mandate.** The honesty ladder is a PER-ITEM escape: each downgrade carries a reason and is
+individually defensible. That is precisely why it fails in aggregate - no per-item check can
+see that the SAME reason fired twenty times, and twenty honest escapes for one reason are not
+twenty unlucky items. They are one missing capability that the process has stopped noticing.
+Track downgrade reasons across a run and trip when one recurs past a threshold; the correct
+response is to name the missing capability and get it built, not to keep spending the escape.
+
+**Key the threshold on (reason x surface-class), not on the raw count.** Twenty downgrades
+spread across unrelated surfaces for unrelated reasons is a hard week. Twenty carrying "cannot
+reach this surface's authenticated UI" is an entire class of work with no verification path -
+and whoever is downstream, usually human testers, is silently doing that job instead.
+
+**Trip behavior: surface, do not stall.** A trip raises a named capability gap in the run
+summary and records it where a store exists. It does NOT block the item: blocking converts an
+honest downgrade into an incentive to claim "fixed" instead, which is the exact failure the
+ladder exists to prevent.
+
+**Scar.** One run used the same downgrade reason eighteen times. Every use was defensible on
+its own terms and the ladder absorbed all eighteen without complaint. The aggregate fact -
+that an entire surface class had no verification path at all - was visible only by counting,
+and was being absorbed downstream by human testers.
+
+**Receipt.** The run's downgrade tally by (reason x surface-class), and for any reason over
+threshold, a named capability gap.
+
+*Kind: process - the first gate that spans items rather than judging a single change.*
+*Enforcement: executable where a trajectory store is present (it already records an outcome per surface, so the detector is wiring rather than new instrumentation); otherwise agent-side tallying within the run. Threshold via `gates.G17.downgrade_threshold` (default 3).*
+
 ---
 
 ## The honesty ladder (when you cannot verify)
@@ -466,6 +599,11 @@ box-ticking:
 
 "I could not verify this" is a first-class, respectable outcome. A false "fixed" is
 not.
+
+**The ladder needs a counter.** Each rung is honest per item and blind in aggregate: the
+same reason recurring across a run is evidence of a missing capability, not a run of bad
+luck. Without a counter the ladder will absorb an unbounded number of individually-defensible
+downgrades and report nothing. See **G17**.
 
 ## How this gets enforced
 

@@ -349,6 +349,19 @@
               "default": 12
             }
           }
+        },
+        "G17": {
+          "type": "object",
+          "additionalProperties": false,
+          "description": "The honesty ladder's feedback loop. A downgrade is honest per item and blind in aggregate: N individually-defensible downgrades sharing ONE reason are not N unlucky items, they are one capability the process never built. Tally downgrades by (reason x surface-class) across the run and, past the threshold, name the missing capability in the run summary. Surfacing only - it must never block an item, because blocking converts an honest downgrade into pressure to claim 'fixed' instead.",
+          "properties": {
+            "downgrade_threshold": {
+              "type": "integer",
+              "minimum": 2,
+              "description": "How many times one downgrade reason may recur within a run, keyed by (reason x surface-class), before the run summary must name the missing capability.",
+              "default": 3
+            }
+          }
         }
       }
     },

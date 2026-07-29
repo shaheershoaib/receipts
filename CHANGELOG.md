@@ -2,6 +2,47 @@
 
 ## Unreleased
 
+Spec bumped to `receipts/gates@1.1` (additive: three new gates, three clarified mandates).
+The durability gates - the change is correct *now* and wrong later or elsewhere - plus the
+standard's first feedback loop on itself.
+
+### Added
+- **G15 - force duplicated facts to AGREE.** One fact in two places (a shape declared
+  twice, a quantity computed in two modules, a literal vs the enum it refers to) agrees the
+  day it is written and drifts silently after. Derive one from the other, or add a check
+  that fails on divergence. Scoped to SILENT divergence across a seam: if changing one copy
+  turns nothing red, the gate applies. Agent-side.
+- **G16 - repair or disclose EXISTING instances.** A fix corrects the producer, not the
+  values already produced; a forward-only fix can be fully verified on new instances while
+  the artifact named in the report stays wrong forever. The close-out must state the
+  disposition (self-heals / backfilled / permanent) and name the reporter's own instance.
+  G0's mirror - G0 opens on that instance, G16 closes on it. Agent-side.
+- **G17 - a repeated downgrade is a missing capability.** The honesty ladder is a per-item
+  escape and is blind in aggregate: N individually-defensible downgrades for ONE reason are
+  not N unlucky items. Tally by (reason x surface-class) and, past
+  `gates.G17.downgrade_threshold` (default 3), name the missing capability in the run
+  summary. Surfacing only, never blocking - a block just pressures a false "fixed". The
+  first gate that judges the RUN rather than a change; executable where a trajectory store
+  is present, since it already records an outcome per surface.
+
+### Changed
+- **G3 now requires the live sha to be OBSERVED, not inferred.** A merge returning MERGED
+  and every CI job green say nothing about whether the deploy rolled, and a failed deploy
+  characteristically leaves the PREVIOUS artifact serving - so the system stays up and
+  answers on old code while a newly-merged client calls endpoints it does not have.
+- **G9 gains an isolation corollary.** A green earned on a resource a concurrent run can
+  mutate (shared DB/schema, fixture dir, port, seeded account) is not green: give each run
+  its own resource or take a lease. The single-run twin of G8 - G8 keeps another
+  developer's commits off your base, this keeps another process's writes off your green.
+  Triage rule (agent skill): an implausible failure count means suspect the resource before
+  the code.
+- **G10 gains a REACHABILITY clause.** The deploy window was only one axis; the other is
+  whether the call reaches the endpoint at all within a single deploy. Where a client
+  reaches a server through a per-route registration layer (proxy handler, gateway route,
+  URL config, rewrite table), that registration is part of the contract, and the blindness
+  is structural: the server's tests call the handler directly, the client's mock the
+  transport, so nothing traverses the registration itself.
+
 The weak-agent trust chain: the three pieces that make an untrusted (or just weak)
 agent's "it's done" mean something - a rubric it cannot edit, a rubric proven sharp, and
 no cheating around it.
