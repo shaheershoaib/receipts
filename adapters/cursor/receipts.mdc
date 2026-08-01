@@ -80,7 +80,11 @@ deployed-build gate; a `met:false` one records that the symptom is NOT gone. See
   is a receipt a silencing fix (G12) passes.
 - **G3 Right build.** Verify on the build that carries YOUR commit (sha-match), never
   a stale deploy. The artifact is code + CONFIG: the right sha under the wrong
-  feature-flag bucket is still the wrong build.
+  feature-flag bucket is still the wrong build. OBSERVE the live sha - never infer it from
+  an upstream success: a merge returning MERGED and every CI job green say nothing about
+  whether the deploy rolled, and a FAILED deploy leaves the previous artifact serving, so
+  the system stays up and answers on old code while a newly-merged client calls endpoints
+  it does not have.
 - **G5 Terminal action.** Drive a multi-step flow to its final action (submit /
   activate / save), accepting pre-filled defaults; the state seams between steps are
   where fixed-one-broke-another hides.
@@ -88,7 +92,11 @@ deployed-build gate; a `met:false` one records that the symptom is NOT gone. See
   head, not just the changed test), unmasked (no `cmd; echo; tail` that exits 0 and
   hides a failure), run on a prod-representative engine (real DB / browser, not a
   substitute that passes where prod fails), and repeatable (a flaky red/green proves
-  nothing - deflake before you trust it).
+  nothing - deflake before you trust it). It must also be ISOLATED: a green earned on a
+  resource a concurrent run can mutate (a shared DB/schema, fixture dir, port, seeded
+  account) is not green - give the run its own resource or take a lease. Triage rule: when
+  a suite fails at implausible scale (hundreds or thousands of failures from a small diff),
+  suspect the shared resource BEFORE the code.
 - **G11 Don't shoot the referee.** Never delete a failing test, add `.skip`/`.only`,
   loosen an assertion, or regenerate snapshots to get green - the suite must keep its
   assertion power. A test that genuinely must go is declared honestly
@@ -127,14 +135,37 @@ deployed-build gate; a `met:false` one records that the symptom is NOT gone. See
 - **G10 Rollout compatibility.** When a change splits across separately-deployed halves
   (BE/FE, two services), make the contract backward-compatible or sequence the deploys -
   the system must not break in the window where one half is new and the other is old. A
-  new endpoint is unreachable until its proxy ships too.
+  new endpoint is unreachable until its proxy ships too. REACHABILITY is the other axis:
+  where the client reaches the server through a per-route registration layer (proxy
+  handler, gateway route, URL config, rewrite table), that registration IS part of the
+  contract - an unregistered route returns the layer's HTML 404 / app shell to a caller
+  expecting JSON, and neither side's unit tests can see it (the server's call the handler
+  directly, the client's mock the transport). Exercise the new route once end to end
+  through the real routing layer, or assert its registration statically.
 - **G12 Fix the cause, not the alarm.** A symptom can be SILENCED: the 403 "fixed" by
   deleting the permission check, the error toast by an empty catch, the rejected input
   by loosening the validator. Before closing, answer: did I repair the invariant or
   mute its detector? If the check itself was the bug, say so explicitly in the PR.
+- **G15 Force duplicated facts to agree.** When one fact lives in two places (a shape
+  declared twice, a quantity computed in two modules, a literal vs the enum it refers to),
+  derive one from the other or add a check that FAILS on divergence. Scope: only where
+  divergence is SILENT and the copies are independently edited - if changing one copy
+  turns nothing red, this applies. Matching values today is not a check.
+- **G16 Repair or disclose existing instances.** A fix usually corrects the PRODUCER, not
+  the values already produced. If the symptom is a stored artifact (record, document,
+  cached value), state what happens to existing ones - self-heals (name the trigger),
+  backfilled (give the count), or permanent (give the reason) - and name the REPORTER'S
+  own instance explicitly. They re-test the thing they filed; disclosure satisfies this,
+  silence does not.
+- **G17 A repeated downgrade is a missing capability.** Track downgrade reasons across the
+  run, keyed by (reason x surface-class). When one reason recurs past the threshold
+  (`gates.G17.downgrade_threshold`, default 3), name the missing capability in the run
+  summary. Do NOT block the item - blocking just pressures a false "fixed."
 
 G7, G8, and G10 are the multi-dev gates: they only bite because other people push in
-parallel and the codebase changes under you. G11-G14 are the
+parallel and the codebase changes under you. G15-G17 are the durability gates: the change
+is correct now and wrong later or elsewhere (copies drift, existing records stay broken, an
+honest escape hides a missing capability). G11-G14 are the
 optimizing-agent gates: they exist because "make the check green" and "make the code
 right" are different objectives - never optimize the first at the expense of the
 second. Never special-case the test/CI environment in production code
