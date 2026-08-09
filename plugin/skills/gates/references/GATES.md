@@ -38,6 +38,17 @@ symptom). A receipt is the symptom itself, re-triggered, refusing to reproduce.
 
 **The principle: don't trust, re-verify.** The agent does not grade its own homework.
 
+**Falsify your own receipt.** Before you trust a green, ask one question: what is a way
+the reported symptom is STILL present while this test passes? If you can name one, the
+receipt asserts a PROXY, not the symptom - retarget it onto the exact thing the reporter
+perceives. The commonest proxy is reading the intended value off a STAND-IN - a container,
+a wrapper, an attribute, a class, a computed style on the wrong node, a count of changes -
+while the thing actually perceived (the child that renders it, the pixels, a downstream
+artifact) still differs. A green on the stand-in confirms your INTENT, not the OUTPUT; it
+is a false green precisely because it is honest about the wrong quantity. And a reporter
+who re-opens the "fix" against your green is telling you the instrument measures the wrong
+thing - suspect the receipt, not just "another instance."
+
 This spec is written for the most common case, a bug fix. The same mechanic applies to
 any work type - the receipt just asserts that change's **acceptance criterion**: the
 reported symptom for a fix, the new behavior for a feature (red until it exists), the
@@ -117,7 +128,12 @@ selected option, the `checked` state, the number on screen. A grey placeholder
 showing the expected text is a FAIL. "An input exists" is not a pass. When the value
 crosses layers to reach that output (form -> request payload -> serializer ->
 proxy/gateway -> handler -> store), assert it ARRIVED at the far end - the persisted or
-rendered result - never that the caller sent it or that a middle layer received it.
+rendered result - never that the caller sent it or that a middle layer received it. And
+read it off the NODE the consumer actually perceives, not a stand-in that carries your
+intent - a container whose child does the rendering, an attribute that mirrors the value,
+a computed style read on a node other than the one that paints the text. The far end is
+the right LAYER; the perceived node is the right ELEMENT within it - a value read on the
+wrong node passes while the perceived output still differs.
 
 **Scar.** Uncontrolled form defaults (e.g. React Hook Form `defaultValues`) paint
 correctly in dev and jsdom and come up empty in production. "The test passes" and
@@ -128,6 +144,13 @@ real build catches it.
 EVERY hop it crosses. A picked charge date was dropped twice - the client mutation sent
 only the record id, and the proxy route forwarded no body - so it reverted to a default
 while every layer painted correctly; only the by-value read at the far end caught it.
+
+**Scar (stand-in node).** A rendered value was asserted on a CONTAINER that carried the
+intended styling while the text was painted by a child element with its own, divergent
+styling. The container read came back correct on every pass while the perceived output
+stayed wrong, and the reporter re-opened the "fix" repeatedly against a green receipt -
+until the assertion was moved onto the child that actually renders. A green on the wrong
+node is honest about the wrong quantity.
 
 **Corollary: assert the POSITIVE invariant, not the absence of the complaint.** A receipt
 asserting "the error no longer appears" is structurally weaker than one asserting "the
@@ -235,6 +258,14 @@ pattern - and that becomes the next ticket. Before closing, enumerate the patter
 instances and apply the same change or note the divergence. Prefer fixing consistency
 by SHARING the implementation (extract the component) over copying the patch - twins
 that share code cannot drift.
+
+For a BULK / mechanical sweep (a codemod, a rename, a pattern replaced across many
+sites), the completeness receipt is a POST-CONDITION query: search the whole tree for
+the OLD pattern and require ZERO matches. A count of sites changed reports how much you
+did, not whether any instance was missed - and it silently omits every site the
+transform's own matcher was too narrow to reach (a multi-line form of the pattern, a
+variant spelling, the same idiom on a different element or construct). Only residual-zero
+proves the class is gone; a change-count is effort, not completeness.
 
 **Scar.** "Add an Edit label" reopened as "the other section lacks it," then reopened
 again as "now move it left to match the first screen" - three cycles for one
