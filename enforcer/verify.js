@@ -913,6 +913,7 @@ function main() {
       const all = g14.computeMutants({
         addedLines: g13.parseAddedLines(diffU0.out),
         read: (f) => fs.readFileSync(path.join(repo, f), "utf8"),
+        exclude: Array.isArray(g14cfg.exclude) ? g14cfg.exclude : [],
       });
       const cap = Math.max(1, Math.floor(Number(g14cfg.max_mutants) || 12));
       const picked = g14.selectMutants(all, cap);

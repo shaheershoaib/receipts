@@ -141,6 +141,11 @@ jobs:
       - uses: shaheershoaib/receipts/enforcer@main
 ```
 
+> **Fork PRs:** GitHub downgrades `GITHUB_TOKEN` to read-only on a pull request from a
+> fork, *regardless of the workflow's `permissions:` block*. The gate itself still runs and
+> still fails the check - only `comment: true` cannot post, and the report is written to the
+> job summary instead. This is expected on forks, not a misconfiguration to debug.
+
 It works across any repo because the gate *logic* ships generic and only the project
 *plumbing* (how to test, where it deploys, what marks a fix-claim) is detected per
 project. See [enforcer/GENERALIZATION.md](enforcer/GENERALIZATION.md) for how,

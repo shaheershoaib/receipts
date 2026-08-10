@@ -44,7 +44,7 @@
       "properties": {
         "sha_source": {
           "enum": ["github-deployments", "github-status", "ci-artifact", "none"],
-          "description": "How to confirm which commit the build/deploy carries (G3). 'none' = no deploy; verify against the built artifact + test run. STATUS: read today by the agent-side Stop hook ('none' / 'ci-artifact' stands the deployed-build backstop down for a repo with no URL deploy); the CI enforcer does not query the deployments API yet (design in enforcer/GENERALIZATION.md).",
+          "description": "How to confirm which commit the build/deploy carries (G3). 'none' = no deploy; verify against the built artifact + test run. STATUS: read by the agent-side Stop hook ('none' / 'ci-artifact' stands the deployed-build backstop down for a repo with no URL deploy), AND by the CI enforcer's report step, which queries the deployments API for the head sha and reports whether a deployment carrying it has succeeded (enforcer/report.js `deployLine`).",
           "default": "github-deployments"
         },
         "platform": {
@@ -347,6 +347,11 @@
               "minimum": 1,
               "description": "Budget: at most this many mutants are tried, round-robin across changed files (breadth before depth). Each costs one receipt re-run.",
               "default": 12
+            },
+            "exclude": {
+              "type": "array",
+              "items": { "type": "string" },
+              "description": "Glob list of files G14 must NOT mutate. G14 already skips any file without a known CODE extension, because a mutation in generated JSON/HTML/SVG is noise by construction: no test asserts on it, so it always 'survives' - slandering the receipt while consuming the budget that should have gone to the changed code. Use this for generated files that DO carry a code extension (a compiled bundle, a generated API client)."
             }
           }
         },

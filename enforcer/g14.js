@@ -66,6 +66,39 @@ const OPERATORS = [
 
 const COMMENT_LINE = /^\s*(\/\/|#|\*|\/\*)/;
 
+// Extensions G14 is allowed to mutate. An ALLOWLIST on purpose: the set of
+// artifact formats a repo might commit (generated JSON, bundled HTML, SVG, lock
+// files, minified output, fixtures) is open-ended, so a denylist is wrong the
+// first time someone commits a format nobody listed. A mutation in a generated
+// file is noise by construction - no test asserts on it, so it always "survives"
+// and reports a receipt as toothless when the receipt was never at fault. Budget
+// spent there is budget NOT spent on the changed code.
+const CODE_EXTS = new Set([
+  "js", "jsx", "ts", "tsx", "mjs", "cjs", "py", "rb", "go", "rs", "java", "kt",
+  "kts", "cs", "php", "swift", "scala", "c", "h", "cc", "cpp", "hpp", "m", "mm",
+  "sh", "bash", "zsh", "pl", "lua", "ex", "exs", "dart", "groovy", "vue", "svelte",
+]);
+
+function globToRe(g) {
+  const esc = (s) => s.replace(/[.+?^${}()|[\]\\]/g, "\\$&");
+  let out = "^", i = 0;
+  while (i < g.length) {
+    if (g[i] === "*" && g[i + 1] === "*") { out += ".*"; i += 2; if (g[i] === "/") i++; }
+    else if (g[i] === "*") { out += "[^/]*"; i++; }
+    else { out += esc(g[i]); i++; }
+  }
+  return new RegExp(out + "$");
+}
+
+// Is this file a legitimate mutation target? Extension must be known code, and it
+// must not match a configured `gates.G14.exclude` glob (for generated code that
+// happens to carry a code extension - a compiled .js bundle, a generated client).
+function isMutable(file, exclude) {
+  const ext = String((file.match(/\.([^./]+)$/) || [])[1] || "").toLowerCase();
+  if (!CODE_EXTS.has(ext)) return false;
+  return !(exclude || []).some((g) => globToRe(g).test(file));
+}
+
 // All mutants for one line of source: at most ONE per operator (the first match), so a
 // dense line cannot flood the budget. Returns [{ op, before, after, col }].
 function mutantsForLine(line, ext) {
@@ -90,9 +123,11 @@ function mutantsForLine(line, ext) {
  *   read(file): the file's HEAD content
  * Deterministic: files sorted, lines ascending, operators in table order.
  */
-function computeMutants({ addedLines, read }) {
+function computeMutants({ addedLines, read, exclude }) {
   const out = [];
+  const skipped = [];
   for (const file of [...(addedLines || new Map()).keys()].sort()) {
+    if (!isMutable(file, exclude)) { skipped.push(file); continue; }
     let src;
     try { src = String(read(file)); } catch { continue; }
     const ext = (file.match(/\.([^./]+)$/) || [])[1];
@@ -103,6 +138,11 @@ function computeMutants({ addedLines, read }) {
       for (const m of mutantsForLine(text, ext)) out.push({ file, line: ln, ...m });
     }
   }
+  // Carried on the array (rather than changing the return shape) so selectMutants
+  // and existing callers are untouched, but the exclusion is never SILENT: a run
+  // that mutated nothing because every changed file was generated must be able to
+  // say so, instead of reporting a confident empty result.
+  out.skipped = skipped;
   return out;
 }
 
@@ -135,4 +175,4 @@ function applyMutant(src, mutant) {
   return lines.join("\n");
 }
 
-module.exports = { maskStrings, mutantsForLine, computeMutants, selectMutants, applyMutant, OPERATORS };
+module.exports = { maskStrings, mutantsForLine, computeMutants, selectMutants, applyMutant, isMutable, CODE_EXTS, OPERATORS };

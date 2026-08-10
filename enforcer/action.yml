@@ -5,7 +5,7 @@ branding:
   color: "green"
 inputs:
   comment:
-    description: "Post/refresh ONE PR comment with the verification report (needs `permissions: pull-requests: write` on the calling job). The job step summary is always written regardless."
+    description: "Post/refresh ONE PR comment with the verification report (needs `permissions: pull-requests: write` on the calling job). The job step summary is always written regardless. On a FORK pull request this cannot work: GitHub makes GITHUB_TOKEN read-only there whatever the permissions block says, so the report goes to the job summary instead."
     required: false
     default: "false"
   github-token:
