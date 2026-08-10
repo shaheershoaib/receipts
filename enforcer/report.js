@@ -61,16 +61,55 @@ async function deployLine(repoRoot, headSha) {
   return `**G3 right build (advisory):** deployment(s) exist for head \`${headSha.slice(0, 10)}\` but none report success yet - verify on the deployed build once one does.`;
 }
 
+/*
+ * Is this run a pull request from a FORK? It matters for one reason: on a fork PR
+ * GitHub downgrades GITHUB_TOKEN to read-only NO MATTER WHAT the workflow's
+ * `permissions:` block says, so a write is refused even though the permission is
+ * correctly declared. Telling that user to declare the permission they already
+ * declared sends them to debug a config that was never wrong.
+ */
+function isForkPullRequest() {
+  try {
+    const ev = JSON.parse(fs.readFileSync(process.env.GITHUB_EVENT_PATH || "", "utf8"));
+    const pr = ev && ev.pull_request;
+    if (!pr || !pr.head || !pr.base) return false;
+    const head = pr.head.repo && pr.head.repo.full_name;
+    const base = pr.base.repo && pr.base.repo.full_name;
+    return Boolean(head && base && head !== base);
+  } catch { return false; }  // no payload (local run, other event): assume same-repo
+}
+
+function postFailureHint(status) {
+  if (status !== 403) return "";
+  return isForkPullRequest()
+    ? " - fork PR: GITHUB_TOKEN is read-only on forks regardless of the `permissions:` block, so commenting cannot work here. This is expected, not a misconfiguration; run the report on `pull_request_target` or read the result from the job summary."
+    : " - the workflow needs `permissions: pull-requests: write`";
+}
+
+// Every comment on the PR. GitHub caps a page at 100, and a busy PR has more than
+// that - stopping at the first page silently loses the existing report comment and
+// posts a duplicate on every push.
+async function allComments(prNumber) {
+  const out = [];
+  for (let page = 1; page <= 10; page++) {   // bounded: 1000 comments is not a real PR
+    const res = await gh(`/repos/${REPO}/issues/${prNumber}/comments?per_page=100&page=${page}`);
+    if (res.status !== 200 || !Array.isArray(res.body) || !res.body.length) break;
+    out.push(...res.body);
+    if (res.body.length < 100) break;
+  }
+  return out;
+}
+
 // Upsert: refresh the one report comment instead of stacking a new one per push.
 async function upsertComment(prNumber, body) {
-  const list = await gh(`/repos/${REPO}/issues/${prNumber}/comments?per_page=100`);
-  const mine = Array.isArray(list.body) ? list.body.find((c) => String(c.body || "").startsWith(COMMENT_MARKER)) : null;
+  const mine = (await allComments(prNumber))
+    .find((c) => String(c.body || "").startsWith(COMMENT_MARKER));
   if (mine) {
     const res = await gh(`/repos/${REPO}/issues/comments/${mine.id}`, { method: "PATCH", body: JSON.stringify({ body }) });
-    return res.status === 200 ? "updated" : `update failed (${res.status})`;
+    return res.status === 200 ? "updated" : `update failed (${res.status}${postFailureHint(res.status)})`;
   }
   const res = await gh(`/repos/${REPO}/issues/${prNumber}/comments`, { method: "POST", body: JSON.stringify({ body }) });
-  return res.status === 201 ? "created" : `create failed (${res.status}${res.status === 403 ? " - the workflow needs `permissions: pull-requests: write`" : ""})`;
+  return res.status === 201 ? "created" : `create failed (${res.status}${postFailureHint(res.status)})`;
 }
 
 async function main() {
@@ -104,7 +143,14 @@ async function main() {
   }
 }
 
-main().catch((e) => {
-  // Reporting is a side-channel: it must never fail the job or flip a verdict.
-  process.stderr.write(`receipts report: ${e && e.message ? e.message : e}\n`);
-});
+// Only run as a script. Required as a module (by tests) it exports its pieces, so
+// the two network-I/O paths can be exercised against a stubbed fetch rather than
+// being the untested corner of the enforcer.
+if (require.main === module) {
+  main().catch((e) => {
+    // Reporting is a side-channel: it must never fail the job or flip a verdict.
+    process.stderr.write(`receipts report: ${e && e.message ? e.message : e}\n`);
+  });
+}
+
+module.exports = { deployLine, upsertComment, allComments, isForkPullRequest, postFailureHint };
