@@ -88,19 +88,40 @@ function computeEnvSniff(opts) {
 function computeG12(opts) {
   const { changedSource, readAt, base, head } = opts;
   const findings = [];
+  // Throw counting is per FILE, but "did this fix silence a detector?" is a question
+  // about the DIFF. A refactor that moves a throw from one file to another shows a
+  // removal in the source file and reads as silencing, when nothing was silenced.
+  // So track the net across every changed file too.
+  let removedTotal = 0, addedTotal = 0;
   for (const f of changedSource || []) {
     const before = readAt(base, f);
     if (before == null) continue; // an added file removed nothing
     const after = readAt(head, f) || "";
-    const throwsRemoved = count(before, THROW_RE) - count(after, THROW_RE);
-    if (throwsRemoved > 0)
-      findings.push({ file: f, kind: "removed-throw", name: "throw/raise removed", removed: throwsRemoved });
+    const delta = count(before, THROW_RE) - count(after, THROW_RE);
+    if (delta > 0) {
+      removedTotal += delta;
+      findings.push({ file: f, kind: "removed-throw", name: "throw/raise removed", removed: delta });
+    } else if (delta < 0) {
+      addedTotal += -delta;    // this file GAINED throws - a relocation target
+    }
     for (const { re, name } of EMPTY_CATCH_RES) {
       const added = count(after, re) - count(before, re);
       if (added > 0) findings.push({ file: f, kind: "added-empty-catch", name, added });
     }
   }
-  return { findings };
+  // net > 0 means throws genuinely disappeared from the diff. net <= 0 means every
+  // removal is matched by an addition somewhere else - consistent with relocation.
+  // The per-file findings are NOT dropped: a real silencing paired with an unrelated
+  // new throw would net out too, and suppressing on that would be exactly the kind of
+  // quiet weakening this gate exists to catch. They are annotated so the report can
+  // say "moved, most likely" instead of accusing.
+  const net = removedTotal - addedTotal;
+  if (net <= 0) {
+    for (const fnd of findings) {
+      if (fnd.kind === "removed-throw") fnd.likely_relocated = true;
+    }
+  }
+  return { findings, throws: { removed: removedTotal, added: addedTotal, net } };
 }
 
 module.exports = { computeG12, computeEnvSniff };

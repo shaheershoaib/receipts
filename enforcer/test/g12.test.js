@@ -101,3 +101,32 @@ test("an added file removes nothing (no base to compare)", () => {
   });
   assert.equal(r.findings.length, 0);
 });
+
+/* Net-throw awareness: a throw MOVED between files is not a silenced detector. */
+const g12net = require("../g12.js");
+
+test("a throw relocated across files is marked likely_relocated", () => {
+  const src = { "a.js": "throw new Error('x');\n", "b.js": "" };
+  const dst = { "a.js": "", "b.js": "throw new Error('x');\n" };
+  const res = g12net.computeG12({
+    changedSource: ["a.js", "b.js"],
+    readAt: (ref, f) => (ref === "BASE" ? src : dst)[f],
+    base: "BASE", head: "HEAD",
+  });
+  const removed = res.findings.filter((f) => f.kind === "removed-throw");
+  assert.equal(removed.length, 1, "the removal is still reported, never dropped");
+  assert.equal(removed[0].likely_relocated, true);
+  assert.deepEqual(res.throws, { removed: 1, added: 1, net: 0 });
+});
+
+test("a throw genuinely deleted is NOT excused", () => {
+  const res = g12net.computeG12({
+    changedSource: ["a.js"],
+    readAt: (ref) => (ref === "BASE" ? "throw new Error('x');\n" : ""),
+    base: "BASE", head: "HEAD",
+  });
+  const removed = res.findings.filter((f) => f.kind === "removed-throw");
+  assert.equal(removed.length, 1);
+  assert.ok(!removed[0].likely_relocated, "a real removal must not be annotated away");
+  assert.equal(res.throws.net, 1);
+});
