@@ -68,6 +68,11 @@ function renderMarkdown(rec) {
   if (r.lock)
     out.push(`| receipt-lock | ${r.lock.matched ? "✅ matched" : "❌ MISMATCH"} \`${String(r.lock.hash || "").slice(0, 12)}…\` (the approved rubric${r.lock.matched ? " was carried intact" : " was NOT what the PR carries"}) |`);
   out.push(`| config | read from ${r.config_source || "?"}${r.config_source === "head" ? " ⚠️ (first-setup: the PR controlled its own gate config)" : ""} |`);
+  // Which workspace packages the change touched. In a monorepo this is the difference
+  // between "the suite ran" and "the suite ran WHERE YOU CHANGED THINGS" - without it a
+  // reader cannot tell whether a green covered the affected package at all.
+  if (Array.isArray(r.packages) && r.packages.length)
+    out.push(`| packages | ${r.packages.map((p) => `\`${cell(p)}\``).join(", ")} |`);
   out.push("");
 
   // What actually ran - the replay core.
