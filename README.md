@@ -252,4 +252,9 @@ npm requires an auth token to publish **even with no 2FA** on the account. One-t
 
 ## License
 
-MIT. (The verification discipline should be free and everywhere.)
+Apache 2.0. (The verification discipline should be free and everywhere.)
+
+Use it, ship it, sell what you build with it. Two asks, both encoded in the license:
+keep the `NOTICE` file with your redistribution (§4(d)), and don't market your fork
+as `receipts` (§6). The patent grant in §3 is there so adopting this doesn't expose
+you to a patent claim over it.
