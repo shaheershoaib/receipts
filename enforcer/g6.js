@@ -222,4 +222,26 @@ function computeG6(opts) {
   return { findings };
 }
 
-module.exports = { globToRe, camelWords, commonTrailing, endsWithWords, identifiers, isDistinctive, stripComments, computeG6 };
+// render_twins: [{ name, surfaces: [glob, ...] }] - parallel render surfaces of ONE entity (a
+// live view + a PDF/print twin + a stored template). A diff that touches SOME surface globs of a
+// set but not ALL of them changed one render surface without its siblings: the "fixed the preview,
+// the PDF still drops it" drift that per-file G6 (same-marker siblings) does not model. Pure - the
+// caller injects `changed` (the PR's changed paths). Returns a finding per partially-touched set.
+function computeRenderTwins({ changed, twins }) {
+  const findings = [];
+  for (const t of (twins || [])) {
+    if (!t || !Array.isArray(t.surfaces) || t.surfaces.length < 2) continue;
+    const marked = t.surfaces.map((g) => {
+      const re = globToRe(String(g));
+      return { glob: g, hit: (changed || []).some((f) => re.test(f)) };
+    });
+    const touched = marked.filter((r) => r.hit).map((r) => r.glob);
+    const untouched = marked.filter((r) => !r.hit).map((r) => r.glob);
+    if (touched.length && untouched.length) {
+      findings.push({ name: t.name || t.entity || "(render-twin set)", touched, untouched });
+    }
+  }
+  return { findings };
+}
+
+module.exports = { globToRe, camelWords, commonTrailing, endsWithWords, identifiers, isDistinctive, stripComments, computeG6, computeRenderTwins };

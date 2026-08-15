@@ -57,7 +57,7 @@ mediums (API, data, CLI, infra) carry a receipt at all.
 
 | Medium | Surface (G4) | Value + observe-by (G1) | Terminal action (G5) | Build / artifact (G3) | Receipt (G0) |
 |---|---|---|---|---|---|
-| Web frontend | the page/route the user opens | DOM text / `input.value` / aria state, via a browser (Playwright, headless, preview) | submit/save in the UI | the deployed bundle (deploy sha) | component/e2e test (jest+RTL, Playwright, Cypress) |
+| Web frontend | the page/route the user opens | DOM text / `input.value` / aria state / rendered row count, via a browser (Playwright, headless, preview). For a "not showing" symptom the observable is the RENDERED output, never the API/DB that feeds it; for a rendered collection also assert count parity (G1) | submit/save in the UI | the deployed bundle (deploy sha) | component/e2e test (jest+RTL, Playwright, Cypress) |
 | API / service (REST/GraphQL/gRPC) | the endpoint + its response contract | response status/body/field, via an HTTP/gRPC client | the write request that persists (POST/PUT/mutation) | the deployed service (sha via `/health` or the deployments API) | a request/integration test, or `receipt-cmd:` a curl asserting status/body (`curl -fsS …` - `-f` fails on non-2xx - plus a body match via `expect:/…/`; keep it ONE command, no pipes/substitution, so the exit is honest) |
 | Library / package / SDK | the public API (exported fns/types) | return value / thrown error / mutated state, by calling it | the call that performs the operation | the built/published package (version + artifact) | a unit test against the public API |
 | CLI tool | the command + stdout/stderr/exit/files | stdout, exit code, files written, by running it | the subcommand that performs the effect | the built binary (`--version`) | run-and-assert - a unit test, or `receipt-cmd:` the invocation itself (`mytool … expect:/<expected stdout>/`) |
@@ -101,6 +101,17 @@ mediums (API, data, CLI, infra) carry a receipt at all.
   job / cron / worker is often not the app's env and falls back to a `localhost` default.
   The receipt is a **canary**: send ONE to an address you control and open it end to end
   BEFORE any mass send - the accepted-count is not the receipt.
+
+- **Created-but-not-rendered (the display-symptom archetype).** When the symptom is "X does
+  not show" - a row/field/badge absent from a page, an export, a printed document - the value
+  almost always EXISTS in the data and is dropped by the render or mapping layer. The
+  observable is the RENDERED surface the reporter opens (the DOM, the generated PDF, the
+  printed output), NEVER the API response or DB row that feeds it - that is the middle layer,
+  and it reads correct while the surface stays wrong. For a rendered COLLECTION, assert count
+  parity (`rendered_count == source_count`, G1's collection corollary): a data-side read and a
+  "my row is present" check both pass while a valid member is silently filtered out. And an
+  entity rendered on MORE THAN ONE surface (a live view, a PDF/print twin, a stored record) is
+  a G6 twin set - verify EACH, since a mapping fix on one surface rarely reaches the others.
 
 ## Extending to a new medium
 

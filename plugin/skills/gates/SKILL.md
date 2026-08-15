@@ -63,6 +63,10 @@ project's own test framework:
    container, attribute, class, or a count of changes) that carries your INTENT while
    the perceived thing (the child that renders it, the pixels, a downstream artifact)
    differs. Move the assertion onto the perceived thing itself.
+5. For a "not showing" symptom, read the RENDERED surface (DOM / PDF / printed output),
+   never the API/DB that feeds it; and for a rendered COLLECTION assert the COUNT
+   (rendered_count == source_count), so a valid row the render silently drops goes red - a
+   presence check and a data-side read both miss it.
 
 That red -> green test is the receipt. A passing screenshot, or a green unrelated
 suite, is not.

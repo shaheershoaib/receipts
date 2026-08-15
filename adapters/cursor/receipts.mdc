@@ -60,6 +60,10 @@ project's own test framework:
    container, attribute, class, or a count of changes) that carries your INTENT while
    the perceived thing (the child that renders it, the pixels, a downstream artifact)
    differs. Move the assertion onto the perceived thing itself.
+5. For a "not showing" symptom, read the RENDERED surface (DOM / PDF / printed output),
+   never the API/DB that feeds it; and for a rendered COLLECTION assert the COUNT
+   (rendered_count == source_count), so a valid row the render silently drops goes red - a
+   presence check and a data-side read both miss it.
 
 That red -> green test is the receipt. A passing screenshot, or a green unrelated
 suite, is not.
@@ -207,6 +211,16 @@ deployed-build gate; a `met:false` one records that the symptom is NOT gone. See
   (in scope / transformed / skipped + why) and the PROVENANCE + date of any
   hand-supplied mapping file. Scope a reload to tables the transform OWNS - never
   app-managed rows created after cut-over.
+- **G19 Fix the whole CLASS, not the reported instance.** A bug arrives as one example;
+  that example is a SIGNATURE, not a scope. Write the predicate that makes the reporter's
+  case wrong (the query or condition that selects it), run it over the ENTIRE population,
+  and fix every match. The receipt asserts the CLASS is empty - the count of still-matching
+  rows or call sites is zero - not that one row is now right, because the reporter's next
+  example comes from the population you left behind. "Fixed the example, flagged the rest
+  as a TODO" is the anti-pattern: narrowing to a subset needs explicit owner sign-off
+  naming what is excluded and why, obtained BEFORE closing, never the silent default. Every
+  medium: a data defect fixes all matching rows, a code defect fixes every call site (G6's
+  twin sweep made mandatory and COUNTED), a migration reconciles the whole table.
 - **G17 A repeated downgrade is a missing capability.** Track downgrade reasons across the
   run, keyed by (reason x surface-class). When one reason recurs past the threshold
   (`gates.G17.downgrade_threshold`, default 3), name the missing capability in the run

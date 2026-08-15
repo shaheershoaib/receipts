@@ -223,6 +223,19 @@
                   "always": { "type": "boolean", "description": "Check coverage on every PR (a standing invariant), not only when a PR touches the marker. Default false.", "default": false }
                 }
               }
+            },
+            "render_twins": {
+              "type": "array",
+              "description": "Parallel RENDER surfaces of one entity (e.g. a live view, a PDF/print twin, a stored template). If a PR touches SOME surface globs of a set but not all, the enforcer flags the drift - a value can render on one surface and be silently dropped on the others. Also seeds the opt-in producer-without-render-receipt tripwire. Project-declared; ship generic.",
+              "items": {
+                "type": "object",
+                "additionalProperties": false,
+                "required": ["surfaces"],
+                "properties": {
+                  "name": { "type": "string", "description": "Human label for the entity, e.g. 'invoice' or 'report row'." },
+                  "surfaces": { "type": "array", "items": { "type": "string" }, "description": "Two or more file globs, one per render surface of the entity (supports * and **)." }
+                }
+              }
             }
           }
         },
@@ -431,6 +444,16 @@
               "type": "array",
               "items": { "type": "string" },
               "description": "Extra regex patterns (matched against the Bash command string) that count as 'ran the code / produced a receipt' for the commit tripwire, on top of the generic defaults (npm/pnpm/yarn test, node --test, vitest/jest/mocha/playwright, pytest/tox/nox, go/cargo/mvn/gradle test, rspec, mix test, phpunit, dotnet test, receipts observe/verify, ...). Add a bespoke runner here, e.g. \"run-checks\\\\.sh\"."
+            },
+            "render_unverified": {
+              "enum": ["deny", "warn", "off"],
+              "description": "The producer-without-render-receipt tripwire (Bash `git commit`): after editing a render-feeding source, a commit whose only verification was a DATA read (a query / curl / data-form `receipts observe`) - never the RENDERED surface - is denied, because a value can exist in the data and be dropped by the render layer (G1 render-count parity, G4, G6). OPT-IN: inert unless render surfaces are declared (via gates.G6.render_twins[].surfaces or render_source_globs). 'off' (default): disabled. 'deny': enforce. 'warn' is a NO-OP (see commit_unverified).",
+              "default": "off"
+            },
+            "render_source_globs": {
+              "type": "array",
+              "items": { "type": "string" },
+              "description": "Extra file globs treated as render-feeding sources by the render_unverified tripwire, on top of the surfaces declared in gates.G6.render_twins. Supports * and **."
             }
           }
         }
