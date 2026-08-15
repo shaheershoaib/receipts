@@ -9,6 +9,6 @@
   },
   "homepage": "https://github.com/shaheershoaib/receipts",
   "repository": "https://github.com/shaheershoaib/receipts",
-  "license": "MIT",
+  "license": "Apache-2.0",
   "keywords": ["verification", "ai-agents", "code-review", "ci", "gates"]
 }
