@@ -284,7 +284,7 @@ const KNOWN_KEYS = {
   "verify.browser_receipt": ["command", "url_source", "url_env", "url_cmd", "mode", "timeout_ms"],
   degrade: ["on_no_receipt", "on_unreachable_build"],
   gates: ["medium", "work_type", "enabled", "disabled", "G6", "G7", "G8", "G10", "G11", "G12", "G13", "G14"],
-  "gates.G6": ["mode", "auto", "surfaces"],
+  "gates.G6": ["mode", "auto", "surfaces", "render_twins"],
   "gates.G7": ["mode", "graph", "verify_all_dependents"],
   "gates.G8": ["integration_branch"],
   "gates.G10": ["contract_paths", "mode", "contract_pairs"],
@@ -517,6 +517,20 @@ function main() {
       if ((g6cfg.mode || "warn") === "block") emit("BLOCK", msg);
       warn(msg);
     }
+    // render-twin drift: a change touched some parallel render surfaces of an entity but not all
+    // (a live view vs a PDF/print twin vs a stored template) - a value can render on one surface
+    // and be silently dropped on the others. A checkable form of G6 for multi-render entities.
+    try {
+      const rt = g6.computeRenderTwins({ changed, twins: g6cfg.render_twins });
+      if (rt.findings.length) {
+        RECEIPT.gates.G6 = RECEIPT.gates.G6 || { findings: [] };
+        RECEIPT.gates.G6.render_twins = rt.findings;
+        const d = rt.findings.map((f) => `${f.name}: changed ${f.touched.join(", ")} but not ${f.untouched.join(", ")}`).join(" | ");
+        const msg = `G6 render-twin drift: a render surface changed without its parallel twin(s) - a value can render on one and be dropped on the others. ${d}. Update the twin surface(s), or note the divergence.`;
+        if ((g6cfg.mode || "warn") === "block") emit("BLOCK", msg);
+        warn(msg);
+      }
+    } catch { /* render_twins is optional; never break the run */ }
   }
 
   // G11 referee-integrity (the "don't shoot the referee" gate): a green earned by DELETING

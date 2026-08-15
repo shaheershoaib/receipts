@@ -2,7 +2,7 @@
 
 A standard for trusting AI-written fixes.
 
-**Spec version: `receipts/gates@1.4`**
+**Spec version: `receipts/gates@1.5`**
 
 A fix is **not** done because the agent says so, because CI is green, because a unit
 test passed, or because the code "looks right." It is done when the **reported
@@ -48,6 +48,14 @@ artifact) still differs. A green on the stand-in confirms your INTENT, not the O
 is a false green precisely because it is honest about the wrong quantity. And a reporter
 who re-opens the "fix" against your green is telling you the instrument measures the wrong
 thing - suspect the receipt, not just "another instance."
+
+**Assert the invariant, not the instance.** When a fix addresses a CLASS of inputs rather
+than the single reported case, the receipt asserts the class-level invariant ("no record
+violates the rule"), not just that the one reported record is fixed. A probe scoped to the
+single reported instance passes while other members of the same class stay broken - the fix
+reads done and ships incomplete. Scope the receipt to the RULE the fix establishes, not the
+one example that surfaced it. (This is the receipt-scope companion to G13's diff-scope: G13
+keeps the receipt covering the whole change; this keeps it covering the whole input class.)
 
 This spec is written for the most common case, a bug fix. The same mechanic applies to
 any work type - the receipt just asserts that change's **acceptance criterion**: the
@@ -167,6 +175,15 @@ anything the system EMITS to a consumer - email, SMS, push, webhook, a generated
 the value is the content the recipient receives and can act on (the embedded URL resolves
 to the right host, the token works, the attachment opens), never the send/enqueue status.
 Read ONE real emitted artifact end to end; do not count the ones you handed off.
+
+**Corollary: for a rendered COLLECTION, assert the COUNT, not just one member.** When the
+surface renders a SET - line items, table rows, a list, search results - a render or
+mapping layer can silently drop a valid member: the source holds N, the surface paints
+N-k, and a receipt that only checks "my new row is present" (or reads the feeding data)
+still passes. Assert cardinality at the far end: the count the surface RENDERS equals the
+count the source HOLDS (`rendered_count == source_count`), read off the rendered output,
+not the API/DB that feeds it. A dropped-member bug is invisible to a presence check and to
+a data-side read; only the count parity catches it.
 
 **Receipt.** A by-value read of the rendered or persisted state on the deployed build,
 taken at the far end of the path (not the layer you changed).

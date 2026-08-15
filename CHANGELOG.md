@@ -2,18 +2,28 @@
 
 ## Unreleased
 
-Spec bumped to `receipts/gates@1.2` (additive: clarified mandates, no new gate number).
+Spec bumped to `receipts/gates@1.5` (additive: the render-fidelity set, plus the
+emitted-artifact clarification - both land in the same release).
+
+the data and be silently dropped by the render layer). Closes the "created it, checked the data,
+shipped; the surface still does not show it" gap.
 
 ### Added
-- **G1 / G3 - the emitted-artifact clarification.** For anything the system emits to a
-  consumer (email, SMS, push, webhook, generated document), the value is the recipient-
-  facing content - the embedded link resolves to the right host, the token works - never
-  the provider's `accepted`/`sent=N` count (G1). And the config that shapes the artifact
-  (base URLs, from-address, signing keys) must be verified in the ENVIRONMENT THAT EMITS,
-  which for an out-of-band job/cron/worker often is not the app's env and falls back to a
-  `localhost` default (G3). New `MEDIA.md` row "Outbound message / notification" whose
-  receipt is a **canary send** to a controlled address, opened end to end before any mass
-  send. Scar: a go-live password-set batch that all "sent" with `localhost` links.
+- **G1 corollary - render-count parity.** For a rendered COLLECTION (line items, table rows, a
+  list), assert `rendered_count == source_count` read off the rendered output, not the feeding
+  API/DB. A dropped-member bug is invisible to a presence check and to a data-side read.
+- **MEDIA "created-but-not-rendered" archetype.** For a "not showing" symptom the observable is
+  the rendered surface (DOM/PDF/print), never the response that feeds it; an entity rendered on
+  more than one surface (live view + PDF/print twin + stored record) is a G6 twin set.
+- **"Assert the invariant, not the instance."** When a fix addresses a CLASS of inputs, the
+  receipt asserts the class-level invariant, not just the one reported record (the receipt-scope
+  companion to G13's diff-scope).
+- **`gates.G6.render_twins` enforcer check.** Declare parallel render surfaces of one entity; a
+  PR that touches some surface globs of a set but not all is flagged as drift (warn / block).
+- **`agent.tripwires.render_unverified` tripwire (opt-in, default off).** After a render-feeding
+  edit, a commit whose only verification was a DATA read (query / curl / data-form
+  `receipts observe`) - never the rendered surface - is denied, with the standard `RECEIPTS_ACK`
+  escape. Inert unless render surfaces are declared.
 
 ## 0.4.0 - 2026-08-15
 
