@@ -2,6 +2,12 @@
 
 ## Unreleased
 
+**Relicensed from MIT to Apache-2.0.** Adds an express patent grant with a retaliation
+clause (§3), explicit inbound-contribution terms (§5), and a trademark reservation (§6).
+The new `NOTICE` file must be preserved by redistributors (§4(d)) - that is the
+attribution requirement MIT could not express. Versions already published under MIT
+(through `0.3.0`) remain MIT for anyone who received them; this applies going forward.
+
 Spec bumped to `receipts/gates@1.1` (additive: three new gates, three clarified mandates).
 The durability gates - the change is correct *now* and wrong later or elsewhere - plus the
 standard's first feedback loop on itself.
