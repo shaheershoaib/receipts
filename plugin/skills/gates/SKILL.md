@@ -58,6 +58,12 @@ project's own test framework:
 2. It PASSES after your fix (proving the symptom is gone).
 3. It asserts the symptom the REPORTER described - not a proxy. A test that only
    checks a height cap does not prove a too-narrow modal got wider.
+4. Falsify it before you trust it: name a way the symptom could still be present
+   while this test stays green. If you can name one, you are asserting a PROXY - a
+   stand-in (a container, wrapper, attribute, class, or a count of changes) that
+   carries your INTENT while the thing the reporter perceives (the child that renders
+   it, the pixels, a downstream artifact) still differs. Move the assertion onto the
+   perceived thing itself.
 
 That red -> green test is the receipt. A passing screenshot, or a green unrelated
 suite, is not.
@@ -68,7 +74,10 @@ suite, is not.
 - **G0 Reproduce first.** Observe and record the reported symptom before choosing a
   fix; that observation is the acceptance test it must later show GONE.
 - **G1 Assert the VALUE.** Read the actual rendered value (not "an element exists,"
-  not a placeholder painting the expected text).
+  not a placeholder painting the expected text) - and read it off the element the
+  consumer actually perceives, not a stand-in that reports your intent (a container
+  whose child does the rendering, an attribute mirroring the value, a computed style
+  read on a node other than the one that paints it).
 - **G3 Right build.** Verify on the build that carries YOUR commit (sha-match), never
   a stale deploy.
 - **G5 Terminal action.** Drive a multi-step flow to its final action (submit /
@@ -84,8 +93,14 @@ suite, is not.
   one the reporter actually used.
 - **G4 Right surface.** Land on the surface the reporter SEES; if your change is not
   visible there, you fixed the wrong one - revert it.
-- **G6 Sweep the twins.** A pattern changed on one surface leaves every sibling
-  carrying the old pattern - the next ticket. Sweep them, or note the divergence.
+- **G6 Sweep the siblings.** A pattern changed in one place leaves every sibling
+  carrying the old one - the next ticket. Siblings are UI twins AND non-UI (a copied
+  handler, a config, a seed/generator); the class is the shared root cause, not the
+  medium, so grep the idiom and sweep them all - do not stop at the one the reporter
+  surfaced. Note any deliberate divergence. For a mechanical sweep (codemod / rename /
+  pattern replace), the receipt is a residual query returning ZERO old-pattern matches
+  tree-wide, not the count of sites changed - the count proves effort, only residual-zero
+  proves completeness (and catches sites the transform's own matcher was too narrow to reach).
 - **G7 Verify the dependents.** Your change has consumers; a freshly-pulled change may
   now route through what you edited (e.g. your input field is now a chart's data
   source). Enumerate the changed surface's dependents, flag the ones new since you
@@ -99,6 +114,11 @@ suite, is not.
   (BE/FE, two services), make the contract backward-compatible or sequence the deploys -
   the system must not break in the window where one half is new and the other is old. A
   new endpoint is unreachable until its proxy ships too.
+- **G11 Backfill produced state.** When the symptom lives in produced / derived / cached
+  state (generated rows, a rolled-up field, a cache, seed data), fixing the producer does
+  NOT fix what it already emitted. Correct the existing state too (backfill / recompute /
+  invalidate / re-migrate) and verify the EXISTING artifact on the deployed env, not a
+  freshly-produced one. The classic migration-without-backfill and stale-cache traps.
 
 G7, G8, and G10 are the multi-dev gates: they only bite because other people push in
 parallel and the codebase changes under you.

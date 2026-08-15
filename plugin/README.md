@@ -11,7 +11,8 @@ the Gates before a PR is ever opened. This is the agent-side half of `receipts`
   surface the reporter sees (G4), drive to the terminal action (G5), sweep the twins
   (G6), verify the dependents (G7), confirm the sha (G3), keep the green trustworthy
   (G9), and - the multi-dev gates - work off a fresh base (G8) and keep a contract
-  change compatible across the deploy window (G10), then write the red->green receipt.
+  change compatible across the deploy window (G10), backfill state a producer already
+  emitted (G11), then write the red->green receipt.
   Project-agnostic by
   design - a project supplies its own facts via `receipts.config.json`.
 - **`hooks/stop-verification-gate.py`** - the backstop: blocks a "fixed" close-out

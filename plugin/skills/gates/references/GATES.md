@@ -20,6 +20,24 @@ symptom). A receipt is the symptom itself, re-triggered, refusing to reproduce.
 
 **The principle: don't trust, re-verify.** The agent does not grade its own homework.
 
+**Assert the invariant, not the instance.** When a fix addresses a CLASS of inputs
+rather than the single reported case, the receipt asserts the class-level invariant
+("no record violates the rule"), not just that the one reported record is fixed. A
+probe scoped to the single reported instance passes while other members of the same
+class stay broken - the fix reads done and ships incomplete. Scope the receipt to the
+rule the fix establishes, not the one example that surfaced it.
+
+**Falsify your own receipt.** Before you trust a green, ask one question: what is a way
+the reported symptom is STILL present while this test passes? If you can name one, the
+receipt asserts a PROXY, not the symptom - retarget it onto the exact thing the reporter
+perceives. The commonest proxy is reading the intended value off a STAND-IN - a container,
+a wrapper, an attribute, a class, a computed style on the wrong node, a count of changes -
+while the thing actually perceived (the child element that renders it, the pixels, the
+downstream artifact) still differs. A green on the stand-in confirms your INTENT, not the
+OUTPUT; it is a false green precisely because it is honest about the wrong quantity. A
+reporter who re-opens the "fix" against your green is telling you the receipt is measuring
+the wrong thing - suspect the instrument, not just "another instance."
+
 This spec is written for the most common case, a bug fix. The same mechanic applies to
 any work type - the receipt just asserts that change's **acceptance criterion**: the
 reported symptom for a fix, the new behavior for a feature (red until it exists), the
@@ -31,12 +49,13 @@ existing suite stays green" (no behavior change). See `references/WORK-TYPES.md`
 - **Verify gates (G0, G1, G3, G5, G9)** answer *"did you actually prove it works?"* They
   produce receipts, and they are enforceable at the one chokepoint every team shares
   regardless of which agent they use: the pull request. An enforcer can re-run them.
-- **Target gates (G2, G4, G6, G7, G8, G10)** answer *"did you fix the right thing, all of
-  it - including what depends on it, and against the code that will actually ship?"* There
-  is mostly no artifact for "you fixed the right component," so these live inside the
-  agent's loop and ship as adapters. Several are bridge cases with an enforcer assist: the
-  agent does the selection/judgment, and the enforcer re-checks what it can at the PR (G7
-  the dependents' tests, G8 the base is current, G10 the contract is back-compatible).
+- **Target gates (G2, G4, G6, G7, G8, G10, G11)** answer *"did you fix the right thing, all
+  of it - including what depends on it, the state it already produced, and against the code
+  that will actually ship?"* There is mostly no artifact for "you fixed the right component,"
+  so these live inside the agent's loop and ship as adapters. Several are bridge cases with an
+  enforcer assist: the agent does the selection/judgment, and the enforcer re-checks what it
+  can at the PR (G7 the dependents' tests, G8 the base is current, G10 the contract is
+  back-compatible, G11 a legacy-row fixture stays green after backfill).
 
 G7, G8, and G10 are the **multi-dev gates** - the ones that only bite because other people
 are working in parallel and the codebase changes under you (a consumer is pulled in, the
@@ -74,12 +93,20 @@ ladder* below.
 
 **Mandate.** Read the actual rendered value on the deployed build: `input.value`, the
 selected option, the `checked` state, the number on screen. A grey placeholder
-showing the expected text is a FAIL. "An input exists" is not a pass.
+showing the expected text is a FAIL. "An input exists" is not a pass. Read it off the
+element the consumer actually PERCEIVES, not a stand-in that carries your intent - a
+container whose child does the rendering, an attribute that mirrors the value, a computed
+style read on a node other than the one that paints it. The stand-in reports what you
+MEANT; only the perceived element reports what SHIPPED.
 
 **Scar.** Uncontrolled form defaults (e.g. React Hook Form `defaultValues`) paint
 correctly in dev and jsdom and come up empty in production. "The test passes" and
 "the screenshot looks right" are both insufficient - only the by-value read on the
-real build catches it.
+real build catches it. Separately: a rendered value was asserted on a CONTAINER that
+carried the intended styling while the text was actually painted by a child element with
+its own, divergent styling - the container read came back correct on every pass while the
+perceived output stayed wrong, and the reporter re-opened the "fix" repeatedly against a
+green receipt until the assertion was moved onto the child that actually renders.
 
 **Receipt.** A by-value read of the rendered state on the deployed build.
 
@@ -146,17 +173,34 @@ value (constructing the state via the app's own API is a legitimate, faster repr
 
 ## G6 - Sweep the changed pattern's PARALLEL surfaces before closing
 
-**Mandate.** Apps implement the same affordance separately in sibling flows (two
-wizards' preview cards, nav badges, input masks). A fix that changes a pattern on one
-surface creates a reporter-visible inconsistency on every twin still carrying the old
-pattern - and that becomes the next ticket. Before closing, enumerate the pattern's
-instances and apply the same change or note the divergence. Prefer fixing consistency
-by SHARING the implementation (extract the component) over copying the patch - twins
-that share code cannot drift.
+**Mandate.** Apps implement the same pattern separately in sibling places (two
+wizards' preview cards, nav badges, input masks - but also a copied request handler, a
+per-module config, a data producer like a seed or fixture). A fix that changes the
+pattern in one place creates an inconsistency in every sibling still carrying the old
+one - and that becomes the next ticket. The class is defined by the shared ROOT CAUSE,
+not the medium: a root cause in a copied idiom is almost always replicated across its
+siblings, so it is not enough to fix the one instance the reporter surfaced. Before
+closing, enumerate the pattern's instances - UI twins AND non-UI siblings (grep the
+identifier, the idiom, or the generator, not just the screen) - and apply the same
+change or note the divergence. Prefer fixing consistency by SHARING the implementation
+(extract the component / helper) over copying the patch - siblings that share code
+cannot drift.
+
+For a BULK / mechanical sweep (a codemod, a rename, a pattern replaced across many
+sites), the completeness receipt is a POST-CONDITION query: search the whole tree for
+the OLD pattern and require ZERO matches. The count of sites changed reports how much you
+did, not whether any instance was missed - and it silently omits every site your
+transform's own matcher was too narrow to reach (a multi-line form of the pattern, a
+variant spelling, the same idiom on a different element or construct). Only residual-zero
+proves the class is actually gone; a change-count is effort, not completeness.
 
 **Scar.** "Add an Edit label" reopened as "the other section lacks it," then reopened
 again as "now move it left to match the first screen" - three cycles for one
-affordance, because the twins were never swept.
+affordance, because the twins were never swept. Separately: a status/step
+inconsistency fixed in one data seed passed the reporter's exact record but left
+thirteen sibling records broken, because the same seed idiom lived in a parallel
+generator; a class-level probe (see *Assert the invariant, not the instance*) caught
+what the reporter-instance fix missed. The sibling was code, not a screen.
 
 **Enforcement.** Agent-side for the judgment, with an enforcer assist at the PR: it flags a
 pattern applied to SOME sibling surfaces but not all - the "claimed app-wide, actually
@@ -271,6 +315,33 @@ expectations; a deploy-order assertion when the units are coupled); agent-side f
 the contract pair and the safe order.
 
 *Kind: target + verify (agent-side sequencing; enforcer back-compat contract test).*
+
+## G11 - A producer fix must correct already-produced state (the backfill gate)
+
+**Mandate.** When the symptom lives in state that was PRODUCED, DERIVED, or CACHED -
+rows written by a generator, a denormalized or rolled-up field, a cache, seeded or
+fixture data - fixing the code that produces it does NOT fix the state already
+produced. The reporter is looking at the existing artifact, not the next one. So the
+fix has two halves: correct the producer, AND correct the state it already emitted
+(backfill / recompute / invalidate / re-migrate) on the deployed environment. Verify
+the EXISTING artifact, not a freshly-produced one. A correct producer sitting on stale
+output is a "fixed" the reporter still sees broken.
+
+**Scar.** A cached rollup (invoice count and premium) read zero while the underlying
+rows were all present; the generator was corrected so future rows would be right, but
+hundreds of existing records still showed zero until a recompute ran over them. It
+only escaped shipping broken because the generator happened to re-run idempotently on
+deploy and swept the existing rows - had it not, the code fix would have been correct
+and the symptom still live. The same split is the classic migration trap (a schema fix
+that never backfills legacy rows) and the stale-cache trap.
+
+**Receipt.** A by-value read of the EXISTING artifact on the deployed environment after
+the fix (not a newly-produced one), or a legacy-row fixture that fails until backfilled
+- the migration receipt in `references/WORK-TYPES.md`, generalized to any
+producer/produced split.
+
+*Kind: target + verify (agent-side confirm the existing state is corrected; a
+legacy-fixture / recompute test is PR-checkable).*
 
 ---
 

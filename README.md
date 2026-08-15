@@ -57,10 +57,11 @@ They split into two kinds:
 | **G9** trustworthy green: full-scope, unmasked, representative | verify | PR / CI (re-run) |
 | **G2** pin the EXACT flow / component | target | agent-side |
 | **G4** land on the surface the reporter SEES | target | agent-side |
-| **G6** sweep the changed pattern's parallel TWINS | target | agent-side |
+| **G6** sweep the changed pattern's parallel SIBLINGS (UI twins + non-UI) | target | agent-side (+ enforcer) |
 | **G7** verify the DEPENDENTS, esp. newly-pulled ones | target | agent-side (+ enforcer) |
 | **G8** verify on a base even with origin (fresh base) | target | agent-side (+ enforcer) |
 | **G10** a contract change survives the deploy window | target | agent-side (+ enforcer) |
+| **G11** backfill state a producer already emitted | target | agent-side (+ enforcer) |
 
 The **verify** gates (did you actually prove it works) are enforceable at the one
 chokepoint every team shares regardless of which agent they use: the PR. The
