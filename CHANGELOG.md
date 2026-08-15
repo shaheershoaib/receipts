@@ -1,6 +1,6 @@
 # Changelog
 
-## Unreleased
+## 0.4.0 - 2026-08-15
 
 **Relicensed from MIT to Apache-2.0.** Adds an express patent grant with a retaliation
 clause (§3), explicit inbound-contribution terms (§5), and a trademark reservation (§6).
