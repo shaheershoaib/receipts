@@ -2,7 +2,7 @@
 
 A standard for trusting AI-written fixes.
 
-**Spec version: `receipts/gates@1.1`**
+**Spec version: `receipts/gates@1.2`**
 
 A fix is **not** done because the agent says so, because CI is green, because a unit
 test passed, or because the code "looks right." It is done when the **reported
@@ -158,6 +158,16 @@ value arrived / the action succeeded for the right principal" - a fix that SILEN
 symptom (G12) passes the first and fails the second. Make the receipt assert what should
 be true, not what should be gone.
 
+**Scar (emitted artifact).** A go-live batch of "set your password" emails all reported
+sent - the provider returned accepted for every one, `sent=59, failed=0` - while every
+link pointed at `http://localhost:3000`, because the SENDING job's `FRONTEND_BASE_URL` was
+unset and fell back to the framework default. The accepted-count is the provider's
+receipt, not the recipient's: **provider-accepted is not recipient-actionable.** For
+anything the system EMITS to a consumer - email, SMS, push, webhook, a generated document -
+the value is the content the recipient receives and can act on (the embedded URL resolves
+to the right host, the token works, the attachment opens), never the send/enqueue status.
+Read ONE real emitted artifact end to end; do not count the ones you handed off.
+
 **Receipt.** A by-value read of the rendered or persisted state on the deployed build,
 taken at the far end of the path (not the layer you changed).
 
@@ -195,6 +205,13 @@ The artifact users experience is **code + config**: a sha can match while the ru
 config universe differs - feature flags, environment variables, the A/B bucket. "The
 right build" means the right code UNDER the reporter's configuration (which flags G2
 pins as part of the reporter's context).
+
+**The emitting environment is part of the config.** Work that runs OUT OF BAND - a job,
+cron, worker, or one-off task - often executes in a different environment than the app and
+does NOT inherit its configuration. Config that shapes the artifact (base URLs,
+from-addresses, signing keys, feature flags) must be verified in the environment that
+actually PRODUCES it, because an unset value there resolves to a framework default (e.g.
+`localhost`) that is silently wrong. The app having the right value is not the job having it.
 
 **A successful merge is not a successful deploy.** The sha must be OBSERVED on the running
 artifact, never inferred from an upstream step that reported success. A merge that returns
