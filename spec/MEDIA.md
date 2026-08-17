@@ -71,6 +71,7 @@ mediums (API, data, CLI, infra) carry a receipt at all.
 | Browser extension | the injected UI / the modified page | the injected DOM/behavior, via a browser with the extension loaded | the action it triggers | the packaged extension version | an e2e with the extension loaded |
 | Embedded / firmware | device behavior (a pin/signal/serial line) | the signal / register / output, via hardware-in-the-loop or an emulator | the command that actuates | the flashed image version | an on-target / emulator test |
 | Game | the game state / rendered frame | entity state / score / physics, via a state-reading harness or a deterministic sim | the action that commits | the built version | a sim / state test |
+| Outbound message / notification (email/SMS/push/webhook/generated doc) | the recipient's inbox/device + the rendered message | the recipient-facing content: the embedded URL's host + that it resolves (2xx, right page), the token/attachment works - NOT the provider's `accepted`/`sent=N` count | the recipient acting on it (the link opens and works) | the SENDING environment's config (base URL, from-address, signing keys) at your sha - jobs/workers do not inherit the app's env | a **canary** send to a controlled address, opened end to end, or `receipt-cmd:` capturing the emitted URL and asserting `expect:/^https:\/\/<prod-host>\//` plus a `curl -fsS` that it resolves |
 
 ## Per-gate notes that bite
 
@@ -92,6 +93,14 @@ mediums (API, data, CLI, infra) carry a receipt at all.
 - **The "representative environment" (G1, G9) varies**: a real DB engine (not SQLite) for a
   service, a real browser (not jsdom) for a web app, the target architecture for embedded,
   the pinned eval set for ML.
+- **An emitted artifact's value is its CONTENT, not its send-status (G1); its config lives
+  in the SENDER (G3).** For email / SMS / push / webhook / generated docs, `accepted` or
+  `sent=N` from the provider is a proxy - the value is what the recipient can act on (the
+  link resolves to the prod host, the token works). And the config that shapes it (base
+  URLs, from-address, signing keys) must be right in the ENVIRONMENT THAT SENDS, which for a
+  job / cron / worker is often not the app's env and falls back to a `localhost` default.
+  The receipt is a **canary**: send ONE to an address you control and open it end to end
+  BEFORE any mass send - the accepted-count is not the receipt.
 
 ## Extending to a new medium
 

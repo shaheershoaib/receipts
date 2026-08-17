@@ -1,5 +1,20 @@
 # Changelog
 
+## Unreleased
+
+Spec bumped to `receipts/gates@1.2` (additive: clarified mandates, no new gate number).
+
+### Added
+- **G1 / G3 - the emitted-artifact clarification.** For anything the system emits to a
+  consumer (email, SMS, push, webhook, generated document), the value is the recipient-
+  facing content - the embedded link resolves to the right host, the token works - never
+  the provider's `accepted`/`sent=N` count (G1). And the config that shapes the artifact
+  (base URLs, from-address, signing keys) must be verified in the ENVIRONMENT THAT EMITS,
+  which for an out-of-band job/cron/worker often is not the app's env and falls back to a
+  `localhost` default (G3). New `MEDIA.md` row "Outbound message / notification" whose
+  receipt is a **canary send** to a controlled address, opened end to end before any mass
+  send. Scar: a go-live password-set batch that all "sent" with `localhost` links.
+
 ## 0.4.0 - 2026-08-15
 
 **Relicensed from MIT to Apache-2.0.** Adds an express patent grant with a retaliation
