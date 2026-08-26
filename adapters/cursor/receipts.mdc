@@ -193,7 +193,11 @@ deployed-build gate; a `met:false` one records that the symptom is NOT gone. See
   row-count parity is not value parity, and a sample is not a reconciliation - a wrong key yields a
   complete-looking result where every row is attached to the wrong thing. **Take a
   field's meaning from the producing system's BEHAVIOUR, not its name.** State
-  COVERAGE (in scope / transformed / skipped + why) and the PROVENANCE + date of any
+  COVERAGE for COLUMNS as well as rows (a column never carried moves every row with one
+  field silently absent - account for each source column as mapped / dropped /
+  defaulted), assert the GRAIN survived (a one-to-many collapsed to one-to-one loses
+  information while every count still reconciles), state coverage
+  (in scope / transformed / skipped + why) and the PROVENANCE + date of any
   hand-supplied mapping file. Scope a reload to tables the transform OWNS - never
   app-managed rows created after cut-over.
 - **G17 A repeated downgrade is a missing capability.** Track downgrade reasons across the
