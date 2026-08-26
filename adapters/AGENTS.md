@@ -50,6 +50,11 @@ project's own test framework:
 2. It PASSES after your fix (proving the symptom is gone).
 3. It asserts the symptom the REPORTER described - not a proxy. A test that only
    checks a height cap does not prove a too-narrow modal got wider.
+4. Falsify it before you trust it: name a way the symptom could still be present while
+   this test stays green. If you can, you are asserting a PROXY - a stand-in (a
+   container, attribute, class, or a count of changes) that carries your INTENT while
+   the perceived thing (the child that renders it, the pixels, a downstream artifact)
+   differs. Move the assertion onto the perceived thing itself.
 
 That red -> green test is the receipt. A passing screenshot, or a green unrelated
 suite, is not.
@@ -70,7 +75,10 @@ deployed-build gate; a `met:false` one records that the symptom is NOT gone. See
 - **G0 Reproduce first.** Observe and record the reported symptom before choosing a
   fix; that observation is the acceptance test it must later show GONE.
 - **G1 Assert the VALUE.** Read the actual rendered value (not "an element exists,"
-  not a placeholder painting the expected text). Corollary: assert the POSITIVE
+  not a placeholder painting the expected text) - and off the element the consumer
+  actually perceives, not a stand-in that reports your intent (a container whose child
+  renders it, an attribute mirroring the value, a computed style on a node other than the
+  one that paints it). Corollary: assert the POSITIVE
   behavior (the value arrives, the action succeeds) - "the error no longer appears"
   is a receipt a silencing fix (G12) passes.
 - **G3 Right build.** Verify on the build that carries YOUR commit (sha-match), never
@@ -92,6 +100,10 @@ deployed-build gate; a `met:false` one records that the symptom is NOT gone. See
   account) is not green - give the run its own resource or take a lease. Triage rule: when
   a suite fails at implausible scale (hundreds or thousands of failures from a small diff),
   suspect the shared resource BEFORE the code.
+  ROUND-TRIP: a test that MOCKS the boundary the fix depends on says nothing about that
+  boundary. For any symptom involving data being SAVED, do one create -> persist ->
+  read-back against the real store and trace the payload to the column it lands in;
+  if there is no column for it, the fix itself is incomplete.
 - **G11 Don't shoot the referee.** Never delete a failing test, add `.skip`/`.only`,
   loosen an assertion, or regenerate snapshots to get green - the suite must keep its
   assertion power. A test that genuinely must go is declared honestly
@@ -117,7 +129,10 @@ deployed-build gate; a `met:false` one records that the symptom is NOT gone. See
 - **G4 Right surface.** Land on the surface the reporter SEES; if your change is not
   visible there, you fixed the wrong one - revert it.
 - **G6 Sweep the twins.** A pattern changed on one surface leaves every sibling
-  carrying the old pattern - the next ticket. Sweep them, or note the divergence.
+  carrying the old pattern - the next ticket. Sweep them, or note the divergence. For a
+  mechanical sweep (codemod / rename / pattern replace), the receipt is a residual query
+  returning ZERO old-pattern matches tree-wide, not the count of sites changed - only
+  residual-zero proves completeness (and catches sites the matcher was too narrow to reach).
 - **G7 Verify the dependents.** Your change has consumers; a freshly-pulled change may
   now route through what you edited (e.g. your input field is now a chart's data
   source). Enumerate the changed surface's dependents, flag the ones new since you
@@ -152,6 +167,22 @@ deployed-build gate; a `met:false` one records that the symptom is NOT gone. See
   backfilled (give the count), or permanent (give the reason) - and name the REPORTER'S
   own instance explicitly. They re-test the thing they filed; disclosure satisfies this,
   silence does not.
+- **G18 Prove a transform on the DESTINATION, not the source.** Moving or reshaping
+  data (migration, backfill, import, ETL): row counts reconciled against the SOURCE
+  prove only that you moved the right NUMBER of rows. Derive the contract from the
+  DESTINATION - types, enums, ranges, required-ness, referential integrity - and
+  validate against it. **A clean load is not evidence when the destination cannot
+  reject**: free-text enums, unenforced FKs and permissive parsing accept wrong data
+  silently. **Prove the join key identifies the same entity** against an independent
+  attribute and state the match rate - and first assert the key is UNIQUE in the
+  source (`GROUP BY key HAVING COUNT(*)>1` empty), else join on the surrogate id.
+  Reconcile BY VALUE over the FULL population (count mismatches, require zero) -
+  row-count parity is not value parity, and a sample is not a reconciliation - a wrong key yields a
+  complete-looking result where every row is attached to the wrong thing. **Take a
+  field's meaning from the producing system's BEHAVIOUR, not its name.** State
+  COVERAGE (in scope / transformed / skipped + why) and the PROVENANCE + date of any
+  hand-supplied mapping file. Scope a reload to tables the transform OWNS - never
+  app-managed rows created after cut-over.
 - **G17 A repeated downgrade is a missing capability.** Track downgrade reasons across the
   run, keyed by (reason x surface-class). When one reason recurs past the threshold
   (`gates.G17.downgrade_threshold`, default 3), name the missing capability in the run
