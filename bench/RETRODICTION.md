@@ -12,11 +12,12 @@ Mechanism = MECHANICAL (a query/count decides) or JUDGMENT (an agent decides).
 | 1 | Reconciled on row counts only; 23 defects, 9 silent-corruption | G18 destination contract | WOULD FIRE | MECHANICAL |
 | 2 | Keyed on re-sequenced id -> 41% attached to wrong entity | G18 key identity + match rate | WOULD FIRE | MECHANICAL |
 | 3 | Natural key mapped N:1, silently picked wrong row | G18 key uniqueness | WOULD FIRE | MECHANICAL |
-| 4 | Submit-flag read as funds-collected (18k) | G18 behaviour-not-names | PARTIAL | JUDGMENT |
+| 4 | Submit-flag read as funds-collected (18k) | G18 counterexample query | WOULD FIRE | MECHANICAL |
 | 5 | delivered_at 100% NULL -> date-scoped report empty | G18 census (NULL conventions) | WOULD FIRE | MECHANICAL |
-| 6 | Delivery flag dropped; contact grain flattened to customer | -- | **MISS** | -- |
+| 6a | Delivery flag dropped (column never carried) | G18 column census | WOULD FIRE | MECHANICAL |
+| 6b | Contact grain flattened to customer | G18 grain/cardinality | WOULD FIRE | MECHANICAL |
 | 7 | Reload truncated app-managed users/roles | G18 reload scoping | WOULD FIRE | JUDGMENT |
-| 8 | Grouping applied from a stale supplied CSV | G18 provenance | PARTIAL | JUDGMENT |
+| 8 | Grouping applied from a stale supplied CSV | G18 provenance + date-vs-data | WOULD FIRE | MECHANICAL |
 | 9 | Class codes only 49% covered | G18 coverage census | WOULD FIRE | MECHANICAL |
 | 10 | Money column varchar -> $0 premiums | G18 census (type reality) | WOULD FIRE | MECHANICAL |
 | 11 | Denormalized FK drifted from authoritative history | G18 full-population reconcile | WOULD FIRE | MECHANICAL |
@@ -36,12 +37,26 @@ Mechanism = MECHANICAL (a query/count decides) or JUDGMENT (an agent decides).
 
 ## Score
 
-19 cases: 15 WOULD FIRE, 3 PARTIAL, 1 MISS.
-8 of the 15 are MECHANICAL (a query or count decides, not an opinion).
+**Second pass, after amending the gate and skill:** 20 cases (case 6 split into 6a/6b):
+**19 WOULD FIRE, 1 PARTIAL, 0 MISS** - and **13 of the 19 are MECHANICAL**.
 
-## The MISS - and what it exposes
+First pass was 19 cases: 15 WOULD FIRE, 3 PARTIAL, 1 MISS, 8 mechanical. What moved:
+- #4 semantic drift PARTIAL -> MECHANICAL: an inferred meaning is a hypothesis, so write the
+  COUNTEREXAMPLE QUERY. The submit-flag case returns its blast radius as an exact number in
+  one query, before any row is migrated.
+- #6 MISS -> two mechanical checks: census COLUMNS (not just rows) and assert the GRAIN
+  survived. Both were invisible to a row census, which is why the original pass missed them.
+- #8 provenance PARTIAL -> MECHANICAL: compare the artifact's date against the data it maps.
+  An artifact older than its extract is stale by construction.
 
-Case 6 is not covered, and it is two distinct gaps:
+The one remaining PARTIAL is #16 (a display parse bug diagnosed as a data bug). It is a
+diagnostic heuristic - compare a sibling surface before choosing data-vs-code - and it stays
+judgment honestly, rather than being dressed up as a check.
+
+## The miss the first pass found (now closed)
+
+Case 6 was not covered. It was two distinct gaps, both since fixed in G18 and the
+`data-migration` skill - recorded here because the SHAPE is the reusable lesson:
 
 **6a. Column-level coverage.** G18's coverage census counts ROWS (in scope /
 transformed / skipped). A column present in the source and simply never carried
@@ -53,7 +68,9 @@ a one-to-one (per-contact rows flattened to per-customer) loses information whil
 every row count still reconciles. Nothing in G18 asks whether the relationship's
 grain survived.
 
-Both are mechanical to check, which is what makes the omission worth fixing.
+Both are mechanical to check, which is what made the omission worth fixing - and both
+were invisible to a ROW census, which is the general trap: a completeness check that
+counts the wrong unit reports success while information is being lost.
 
 ## Honest limits of this exercise
 

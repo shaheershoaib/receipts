@@ -703,7 +703,12 @@ VALUE DISTRIBUTION and the producing system's intent, never by matching headers.
 **A field's meaning comes from the producing system's BEHAVIOUR, not its name.** A boolean
 called `is_paid` may be set when a payment is SUBMITTED and never cleared when it fails; a
 timestamp called `delivered_at` may never be populated at all. Derive semantics from what
-the legacy system DOES, and prefer whichever field that system treats as authoritative.
+the legacy system DOES, and prefer whichever field that system treats as authoritative. An
+inferred meaning is a HYPOTHESIS, and a hypothesis is testable: write the COUNTEREXAMPLE
+QUERY - the rows where the name predicts one thing and the authoritative field says another
+(`WHERE looks_successful = 1 AND authoritative_status IN (<failure states>)`). Zero rows
+supports the inference; any rows refute it and the count is the blast radius. This turns the
+softest check in the gate into an exact number, before a single row is written.
 
 **Census COLUMNS as well as rows, and check the GRAIN survived.** Two failures pass a row
 census perfectly. A column present in the source and never carried moves every row while one
