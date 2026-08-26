@@ -133,6 +133,14 @@ deployed-build gate; a `met:false` one records that the symptom is NOT gone. See
   mechanical sweep (codemod / rename / pattern replace), the receipt is a residual query
   returning ZERO old-pattern matches tree-wide, not the count of sites changed - only
   residual-zero proves completeness (and catches sites the matcher was too narrow to reach).
+  KEY ON THE OBSERVABLE, not the module: "I checked the invoices area" over-collects into
+  a blob that gets skimmed. Enumerate every PRODUCER of the exact field / route / label /
+  status the reporter named. READ-side twins = two serializers or endpoints serving the
+  value; WRITE-side twins = two STORES of the same state (a row + a denormalized flag) -
+  update every writer, or make the read path suppress the stale one (a read-time exclusion
+  self-heals rows already written wrong, no backfill). Carry the enumeration QUERY and its
+  result as the receipt; if there is one producer, say "single producer confirmed" WITH the
+  proving query.
 - **G7 Verify the dependents.** Your change has consumers; a freshly-pulled change may
   now route through what you edited (e.g. your input field is now a chart's data
   source). Enumerate the changed surface's dependents, flag the ones new since you

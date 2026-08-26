@@ -290,6 +290,23 @@ transform's own matcher was too narrow to reach (a multi-line form of the patter
 variant spelling, the same idiom on a different element or construct). Only residual-zero
 proves the class is gone; a change-count is effort, not completeness.
 
+**Key the enumeration on the OBSERVABLE, never on the module.** "I checked the invoices
+area" is not an enumeration - it over-collects into a blob too big to act on, so it gets
+skimmed and the twin survives. Key on the exact thing the reporter named: the field, route,
+rendered label, or status value, and enumerate every PRODUCER of that symbol.
+
+Twins come in two kinds, and the second is the one this gate historically missed:
+- **Read-side twins** - two serializers, endpoints or components serving the same value.
+  The fix must land on all of them, or the reporter's surface keeps serving the old one.
+- **Write-side twins** - two STORES of the same state (a row plus a denormalized flag, a
+  status column plus a cached label). Fixing one leaves the other stale. Update every
+  writer, or make the read path suppress the stale one - a read-time suppression that
+  reuses the query's own exclusion self-heals rows already written wrong, with no backfill.
+
+**The receipt is the enumeration QUERY and its result**, bound to the observable and
+re-runnable by a referee - not a prose claim that you looked. Where there genuinely is one
+producer, record "single producer confirmed" WITH the query that proves it.
+
 **Scar.** "Add an Edit label" reopened as "the other section lacks it," then reopened
 again as "now move it left to match the first screen" - three cycles for one
 affordance, because the twins were never swept.
@@ -678,6 +695,10 @@ difference.
 is NULL, so the real identity lives in these other columns", a transform that copies only
 the key silently drops those rows' identity. Round-trip a NULL-key row through the transform
 before trusting it.
+
+**Column-name equality is not semantic equality.** A destination column and a source
+column sharing a name is not evidence they mean the same thing - map by validating the
+VALUE DISTRIBUTION and the producing system's intent, never by matching headers.
 
 **A field's meaning comes from the producing system's BEHAVIOUR, not its name.** A boolean
 called `is_paid` may be set when a payment is SUBMITTED and never cleared when it fails; a
