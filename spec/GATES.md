@@ -696,6 +696,17 @@ is NULL, so the real identity lives in these other columns", a transform that co
 the key silently drops those rows' identity. Round-trip a NULL-key row through the transform
 before trusting it.
 
+**Mutually exclusive states, and which one WINS.** Legacy rows routinely assert two things
+that cannot both be true: a success flag written when an operation is SUBMITTED and never
+cleared when it later fails, beside the status recording the real outcome. Detecting the
+contradiction is the easy half - the expensive half is precedence. A transform reading the
+flag rather than the authoritative status migrates failures as successes, and the result
+looks complete: full counts, no errors, the state wrong. Declare the precedence explicitly
+and in BUSINESS terms (a bounced payment is not money received), then verify the destination
+honoured it for EVERY affected row, not a sample. Source contradictions are the legacy
+system's; resolving them the wrong way round is yours. And fix every downstream reader of
+the losing flag too, or a later filter re-introduces the same error (G6's write-side twins).
+
 **Column-name equality is not semantic equality.** A destination column and a source
 column sharing a name is not evidence they mean the same thing - map by validating the
 VALUE DISTRIBUTION and the producing system's intent, never by matching headers.
