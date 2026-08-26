@@ -2,7 +2,7 @@
 
 A standard for trusting AI-written fixes.
 
-**Spec version: `receipts/gates@1.2`**
+**Spec version: `receipts/gates@1.3`**
 
 A fix is **not** done because the agent says so, because CI is green, because a unit
 test passed, or because the code "looks right." It is done when the **reported
@@ -22,8 +22,8 @@ re-check), `agent-judgment` (carried by the agent adapter, no PR-side artifact),
 
 ## Enforcement scorecard
 
-Of the 18 gates: **8 executable** (G6, G7, G8, G9, G10, G11, G13, G14), **5 hybrid** (G0, G1,
-G3, G12, G17), **5 agent-judgment** (G2, G4, G5, G15, G16). The roadmap's durability metric is moving gates
+Of the 19 gates: **8 executable** (G6, G7, G8, G9, G10, G11, G13, G14), **5 hybrid** (G0, G1,
+G3, G12, G17), **6 agent-judgment** (G2, G4, G5, G15, G16, G18). The roadmap's durability metric is moving gates
 RIGHTWARD - from judgment to executable - because an executable gate a machine re-runs does
 not depend on which agent, or how careful an agent, produced the work; the wholly-judgment
 gates are the model-dependent surface, and shrinking that surface is how the standard stops
@@ -213,6 +213,12 @@ from-addresses, signing keys, feature flags) must be verified in the environment
 actually PRODUCES it, because an unset value there resolves to a framework default (e.g.
 `localhost`) that is silently wrong. The app having the right value is not the job having it.
 
+**Verify on the environment the reporter will RE-TEST on.** Fixing and confirming on one
+environment while the reporter re-tests on another produces a fix that is real and reads as
+broken - they re-open it, and the re-open costs more than the fix did. When the reporting
+and verifying environments differ, either verify on THEIRS or reconcile theirs before saying
+fixed. This is a property of the workflow, not of the code, so no test will surface it.
+
 **A successful merge is not a successful deploy.** The sha must be OBSERVED on the running
 artifact, never inferred from an upstream step that reported success. A merge that returns
 MERGED, and a green check on every CI job, say nothing about whether the deploy that follows
@@ -380,6 +386,14 @@ thousands of phantom failures that were nearly reported as a real red suite.
 
 **Receipt.** The full suite, green on head, after the narrow red->green receipt - run by the
 enforcer itself, so a user-supplied masking wrapper cannot stand in for it.
+
+**Round-trip corollary.** A test that MOCKS the boundary the fix depends on is not
+evidence about that boundary. The common shape: a UI fix whose test stubs the API or the
+store goes green while the real round-trip silently drops the value - the field is entered,
+never persisted, and blank on reload, which was the original complaint. For any change whose
+symptom involves data being SAVED, require one create -> persist -> read-back against the
+real store, and trace the payload to the column it lands in. If no column exists for it, the
+fix is not incomplete evidence - it is an incomplete fix.
 
 **Isolation corollary.** A green earned on a resource another process can mutate mid-run is
 not green either. When a suite claims a shared mutable resource - a database or schema, a
@@ -626,6 +640,76 @@ threshold, a named capability gap.
 
 *Kind: process - the first gate that spans items rather than judging a single change.*
 *Enforcement: executable where a trajectory store is present (it already records an outcome per surface, so the detector is wiring rather than new instrumentation); otherwise agent-side tallying within the run. Threshold via `gates.G17.downgrade_threshold` (default 3).*
+
+
+## G18 - A transform is proven on the DESTINATION, never by the source (the migration gate)
+
+**Mandate.** Moving or reshaping data - a legacy migration, a backfill, an import, an ETL -
+is the work type where the easiest thing to measure proves the least. Row counts reconciled
+against the SOURCE prove you extracted the right NUMBER of rows and say nothing about
+whether the values are legal, meaningful, or attached to the right entity once they land.
+Derive the contract from the DESTINATION and validate the output against it: types, enum
+membership, ranges, required-ness, referential integrity.
+
+**Absence of errors is not evidence when the destination cannot reject.** Before trusting a
+clean load, enumerate what the destination actually ENFORCES. Enums stored as free text,
+foreign keys declared without constraints, permissive numeric/date parsing and implicit
+truncation all mean the store accepts wrong data silently and reports success. Weak
+enforcement moves the entire burden of proof onto your own validation.
+
+**Prove the join key is UNIQUE, then prove it identifies the same entity.** Two separate
+checks, both cheap. First, assert uniqueness in the source (`GROUP BY key HAVING COUNT(*) >
+1` must come back empty): a natural key that maps N:1 - the same code against several master
+rows - resolves to whichever row it hits first, silently picking a wrong or blank one. If it
+is not unique, join on the surrogate id instead. Second, an id present in both systems is
+not evidence it MEANS the same thing: ids get re-sequenced, reused, or scoped differently.
+Validate the key against an INDEPENDENT attribute (a name, a natural key, a document number)
+and state the match rate. A wrong key does not fail loudly - it yields a complete-looking
+result set in which every row is attached to the wrong entity.
+
+**Reconcile BY VALUE over the FULL population, not a sample.** Row-count parity is not value
+parity, and a sample is not a reconciliation: report the COUNT OF MISMATCHES against the
+source of truth and require zero. This is also how a denormalized field is caught drifting
+from the history it is supposed to summarise - compare the stored value against the
+value derived from the authoritative records, across every row, and emit a backfill for the
+difference.
+
+**Carry the whole identity, not just the key.** Where a source's convention is "this column
+is NULL, so the real identity lives in these other columns", a transform that copies only
+the key silently drops those rows' identity. Round-trip a NULL-key row through the transform
+before trusting it.
+
+**A field's meaning comes from the producing system's BEHAVIOUR, not its name.** A boolean
+called `is_paid` may be set when a payment is SUBMITTED and never cleared when it fails; a
+timestamp called `delivered_at` may never be populated at all. Derive semantics from what
+the legacy system DOES, and prefer whichever field that system treats as authoritative.
+
+**State the COVERAGE, and the PROVENANCE of anything hand-supplied.** "It ran clean" over a
+subset is not completeness: report rows in scope, transformed, and skipped with reasons - a
+transform silently covering half its domain looks identical to one covering all of it. Where
+the transform is driven by a supplied artifact (a spreadsheet, an extract, a mapping file),
+name it and its date; a stale input produces a confidently wrong result.
+
+**Never let a bulk reload touch APP-MANAGED tables.** A destination accumulates rows the
+source never had - users, roles, settings, anything created after cut-over. A reload scoped
+by "all tables" destroys them. Scope a reload to the tables the transform OWNS.
+
+**Scar.** A migration reconciled perfectly on row counts and was declared validated; the
+check was entirely source-side, and validating against the destination contract instead
+found 23 defects, 9 of them silent-corruption class - free-text enums and unenforced foreign
+keys meant the store would have accepted every one without error. A status backfill keyed on
+an id that had been re-sequenced during migration attached ~41% of rows to the wrong entity,
+and the result looked complete. A legacy flag named for success was set at submit time and
+never cleared on failure, so ~18k failed items migrated as successful. A reload scoped to all
+tables truncated the app's own user and permission rows.
+
+**Receipt.** The destination-side validation run: the contract asserted (types, enums,
+ranges, referential integrity), the key match-rate against an independent attribute, and the
+coverage census (in scope / transformed / skipped, with reasons) - plus G1 by value on a
+fixture containing representative legacy and edge rows, not only fresh ones.
+
+*Kind: verify (re-runnable at the PR).*
+*Enforcement: agent-side today. The destination contract, the key match-rate and the coverage census are all machine-checkable, so this is the strongest candidate for the next executable assist (a validator run against the destination schema).*
 
 ---
 

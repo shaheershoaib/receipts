@@ -108,6 +108,10 @@ deployed-build gate; a `met:false` one records that the symptom is NOT gone. See
   account) is not green - give the run its own resource or take a lease. Triage rule: when
   a suite fails at implausible scale (hundreds or thousands of failures from a small diff),
   suspect the shared resource BEFORE the code.
+  ROUND-TRIP: a test that MOCKS the boundary the fix depends on says nothing about that
+  boundary. For any symptom involving data being SAVED, do one create -> persist ->
+  read-back against the real store and trace the payload to the column it lands in;
+  if there is no column for it, the fix itself is incomplete.
 - **G11 Don't shoot the referee.** Never delete a failing test, add `.skip`/`.only`,
   loosen an assertion, or regenerate snapshots to get green - the suite must keep its
   assertion power. A test that genuinely must go is declared honestly
@@ -171,6 +175,22 @@ deployed-build gate; a `met:false` one records that the symptom is NOT gone. See
   backfilled (give the count), or permanent (give the reason) - and name the REPORTER'S
   own instance explicitly. They re-test the thing they filed; disclosure satisfies this,
   silence does not.
+- **G18 Prove a transform on the DESTINATION, not the source.** Moving or reshaping
+  data (migration, backfill, import, ETL): row counts reconciled against the SOURCE
+  prove only that you moved the right NUMBER of rows. Derive the contract from the
+  DESTINATION - types, enums, ranges, required-ness, referential integrity - and
+  validate against it. **A clean load is not evidence when the destination cannot
+  reject**: free-text enums, unenforced FKs and permissive parsing accept wrong data
+  silently. **Prove the join key identifies the same entity** against an independent
+  attribute and state the match rate - and first assert the key is UNIQUE in the
+  source (`GROUP BY key HAVING COUNT(*)>1` empty), else join on the surrogate id.
+  Reconcile BY VALUE over the FULL population (count mismatches, require zero) -
+  row-count parity is not value parity, and a sample is not a reconciliation - a wrong key yields a
+  complete-looking result where every row is attached to the wrong thing. **Take a
+  field's meaning from the producing system's BEHAVIOUR, not its name.** State
+  COVERAGE (in scope / transformed / skipped + why) and the PROVENANCE + date of any
+  hand-supplied mapping file. Scope a reload to tables the transform OWNS - never
+  app-managed rows created after cut-over.
 - **G17 A repeated downgrade is a missing capability.** Track downgrade reasons across the
   run, keyed by (reason x surface-class). When one reason recurs past the threshold
   (`gates.G17.downgrade_threshold`, default 3), name the missing capability in the run

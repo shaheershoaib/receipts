@@ -41,7 +41,9 @@ G7: what will consume the new thing.
 ## The migration
 
 The acceptance criterion is "the data/schema is correctly transformed, and EXISTING data
-survives." The classic trap is a migration that works on fresh data and corrupts or skips
+survives." **G18 is the migration gate and is canonical here**: the transform is proven
+on the DESTINATION (contract, join-key identity, coverage), never by source-side row
+counts - and when the destination cannot reject bad values, a clean load is not evidence. The classic trap is a migration that works on fresh data and corrupts or skips
 legacy rows - so the receipt MUST run on a fixture that includes representative legacy / edge
 rows (not just newly-created ones) and assert their values after migrating (G1 by value).
 G10 is central in its database form: expand / contract and ordering - add the new column (and
