@@ -705,6 +705,14 @@ called `is_paid` may be set when a payment is SUBMITTED and never cleared when i
 timestamp called `delivered_at` may never be populated at all. Derive semantics from what
 the legacy system DOES, and prefer whichever field that system treats as authoritative.
 
+**Census COLUMNS as well as rows, and check the GRAIN survived.** Two failures pass a row
+census perfectly. A column present in the source and never carried moves every row while one
+field is silently absent - so enumerate the source's columns against the destination's and
+account for each one as mapped, deliberately dropped, or defaulted. And a transform that
+collapses a one-to-many into a one-to-one - per-contact rows flattened to per-customer, per-
+line detail summed to a header - loses information while every count still reconciles: state
+the grain on both sides and assert the relationship's cardinality survived.
+
 **State the COVERAGE, and the PROVENANCE of anything hand-supplied.** "It ran clean" over a
 subset is not completeness: report rows in scope, transformed, and skipped with reasons - a
 transform silently covering half its domain looks identical to one covering all of it. Where
