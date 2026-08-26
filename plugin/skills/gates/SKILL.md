@@ -194,7 +194,11 @@ deployed-build gate; a `met:false` one records that the symptom is NOT gone. See
   source (`GROUP BY key HAVING COUNT(*)>1` empty), else join on the surrogate id.
   Reconcile BY VALUE over the FULL population (count mismatches, require zero) -
   row-count parity is not value parity, and a sample is not a reconciliation - a wrong key yields a
-  complete-looking result where every row is attached to the wrong thing. **Take a
+  complete-looking result where every row is attached to the wrong thing. ****MUTUALLY EXCLUSIVE states**: when two flags that cannot both be true
+  are both set (a success flag set at submit and never cleared on failure, beside the
+  authoritative status), declare the PRECEDENCE in business terms and verify the
+  destination honoured it for every affected row - detecting the contradiction is the
+  easy half. Then fix every downstream reader of the losing flag. Take a
   field's meaning from the producing system's BEHAVIOUR, not its name.** An inferred meaning is
   a hypothesis - write the COUNTEREXAMPLE QUERY (rows where the name predicts one thing
   and the authoritative field says another); zero rows supports it, any rows refute it
