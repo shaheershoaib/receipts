@@ -195,7 +195,10 @@ deployed-build gate; a `met:false` one records that the symptom is NOT gone. See
   Reconcile BY VALUE over the FULL population (count mismatches, require zero) -
   row-count parity is not value parity, and a sample is not a reconciliation - a wrong key yields a
   complete-looking result where every row is attached to the wrong thing. **Take a
-  field's meaning from the producing system's BEHAVIOUR, not its name.** State
+  field's meaning from the producing system's BEHAVIOUR, not its name.** An inferred meaning is
+  a hypothesis - write the COUNTEREXAMPLE QUERY (rows where the name predicts one thing
+  and the authoritative field says another); zero rows supports it, any rows refute it
+  and the count is the blast radius. State
   COVERAGE for COLUMNS as well as rows (a column never carried moves every row with one
   field silently absent - account for each source column as mapped / dropped /
   defaulted), assert the GRAIN survived (a one-to-many collapsed to one-to-one loses
