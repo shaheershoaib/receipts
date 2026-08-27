@@ -16,7 +16,16 @@ project.
    repo (CI config, deploy config, manifests, README, the GitHub Deployments API)
    and proposes the config, asking a human only for the ambiguous or sensitive bits.
    The tool that verifies agents, set up by an agent.
-3. **Configures plumbing, not symptoms.** `init` answers "how do I run this project's
+3. **Configures plumbing AND reachability, not symptoms.** Two different things are
+   finite and worth asking once. *Plumbing*: how do I run this project's tests and reach
+   its build. *Reachability*: how does an agent get the app into a state where a value can
+   be OBSERVED at all - the auth wall, a dev-mode shortcut, whether the environment carries
+   real data, which surfaces only exist rendered in a browser. Detection cannot find any of
+   the second kind, and without it a gate demanding an observed value gets waved through as
+   "auth-walled, could not verify", which is an unverified fix wearing an honest-looking
+   downgrade. Neither is per-bug: `init` still does NOT try to enumerate how to verify every
+   bug - each fix carries its own acceptance test (the receipt). That is why it stays
+   tractable. `init` answers "how do I run this project's
    tests and reach its build," which is finite and detectable. It does NOT try to
    enumerate how to verify every bug - each fix carries its own acceptance test (the
    receipt). This is why `init` stays tractable.
@@ -37,6 +46,7 @@ project.
 | `claim.downgrade_tags` | - | default `unverified-reasoned`, `speculative`, `reverted` |
 | `agent.loop_skills` | `.claude/skills/*/SKILL.md` whose name/body reads like a fix/build loop (loop / fix / retest / feedback / build / parity / ...) | the shipped `gates`; if no project loop exists, scaffold one from the template |
 | `agent.staging_query_patterns` / `agent.closeout_fixed_statuses` | - | generic defaults (DB-proxy / query tools; `Pending Retest` / `Verified`) |
+| `agent.drive.*` | **nothing - always asked.** Auth route to a signed-in state, any dev-mode shortcut (fixed OTP, seeded login, flag), whether the environment carries realistic data, and surfaces that only exist rendered in a browser | empty, which is honest: it records that nobody has said, so a gate can cite the gap rather than treat "auth-walled" as a fact of nature |
 | `agent.repo_name` | `package.json` name, else the directory name | directory name |
 
 **Placeholder semantics** (`verify.test_command`): `{test}` substitutes the changed test

@@ -125,6 +125,8 @@ async function appendTrajectory(args) {
     regressed: asList(args.regressed),
     tier: args.tier || null,
     tags: asList(args.tags),
+    reopened: !!args.reopened,
+    cause_class: args.reopened ? String(args.cause_class || "unclassified") : null,
     supersedes: String(args.supersedes || "").trim() || null,
   };
   await ensureStore();
@@ -182,6 +184,81 @@ async function recentOutcomes(args = {}) {
   return { count: Math.min(rows.length, n), results: rows.slice(0, n) };
 }
 
+const CAUSE_CLASSES = [
+  "wrong-surface",      // fixed a surface the reporter never sees
+  "parallel-twin",      // an identical flow elsewhere was left broken
+  "partial-class",      // the reported instance was fixed, its siblings were not
+  "env-parity",         // the fix was right; the environment it was checked on was not
+  "regression",         // a later change broke it again
+  "misread-report",     // the symptom was understood wrongly
+  "unverified-claim",   // closed without observing the symptom gone
+];
+
+async function reopenRate(args = {}) {
+  // The unit is the OBSERVABLE (surface_key), never the ticket or the file. One flaky
+  // surface reopened under five ticket numbers is ONE recurring miss; counting tickets
+  // reports five unrelated ones and hides the pattern that would fix it.
+  const all = (await readAll()).filter((e) => !args.repo || e.repo === args.repo);
+  const superseded = supersededIds(all);
+  const live = all.filter((e) => !superseded.has(e.id));
+
+  const bySurface = new Map();
+  for (const e of live) {
+    const k = e.surface_key || deriveSurfaceKey(e) || "(unkeyed)";
+    if (!bySurface.has(k)) bySurface.set(k, []);
+    bySurface.get(k).push(e);
+  }
+
+  const causes = {}, envParity = {};
+  let observables = 0, reopened = 0, reopenEvents = 0;
+  const worst = [];
+  for (const [key, entries] of bySurface) {
+    observables += 1;
+    const reopens = entries.filter((e) => e.reopened);
+    if (!reopens.length) continue;
+    // A surface whose ONLY reopens are env-parity has not actually come back: the fix was
+    // right and the environment was wrong. Counting it here would inflate the headline with
+    // exactly the class this metric promises to exclude, and point the next fix at the
+    // wrong surface.
+    const realReopens = reopens.filter((r) => r.cause_class !== "env-parity");
+    if (realReopens.length) {
+      reopened += 1;
+      reopenEvents += realReopens.length;
+    }
+    for (const r of reopens) {
+      const c = r.cause_class || "unclassified";
+      // Environment-parity reopens are bucketed SEPARATELY and never folded into the
+      // headline. The fix was correct; the environment it was checked on was not. Mixing
+      // them in blames the surface for a staging problem and sends the next fix to the
+      // wrong place.
+      if (c === "env-parity") envParity[key] = (envParity[key] || 0) + 1;
+      else causes[c] = (causes[c] || 0) + 1;
+    }
+    if (realReopens.length) {
+      worst.push({ surface_key: key, reopens: realReopens.length, causes: dedupeStrings(realReopens.map((r) => r.cause_class || "unclassified")) });
+    }
+  }
+  worst.sort((a, b) => b.reopens - a.reopens);
+
+  const envTotal = Object.values(envParity).reduce((a, b) => a + b, 0);
+  return {
+    observables,
+    observables_reopened: reopened,
+    reopen_events: reopenEvents,
+    // the headline rate EXCLUDES env-parity, for the reason above
+    reopen_rate: observables ? Number((reopened / observables).toFixed(3)) : 0,
+    by_cause: causes,
+    env_parity_excluded: { events: envTotal, surfaces: Object.keys(envParity).length, detail: envParity },
+    worst_offenders: worst.slice(0, args.n || 10),
+    note:
+      "Unit is the observable (surface_key), not the ticket. env-parity reopens are reported " +
+      "separately and excluded from reopen_rate: the fix was right, the environment was not. " +
+      "A cause_class that dominates is a missing capability, not bad luck.",
+  };
+}
+
+function dedupeStrings(xs) { return [...new Set(xs)]; }
+
 async function listRepos() {
   const all = await readAll();
   const counts = {};
@@ -223,7 +300,20 @@ server.setRequestHandler(ListToolsRequestSchema, async () => ({
           regressed: { type: ["string", "array"], items: { type: "string" }, description: "Other surfaces/files this fix BROKE - the 'fixing A broke B' coupling signal (string or list)." },
           tier: { type: "string", enum: VALID_TIERS, description: "Model tier used (optional)." },
           tags: { type: ["string", "array"], items: { type: "string" }, description: "Optional tags." },
-          supersedes: { type: "string", description: "Id of an earlier entry this corrects (optional)." },
+          reopened: {
+          type: "boolean",
+          description:
+            "TRUE when this surface was previously closed as fixed and has come back. This is the " +
+            "signal that the BAR is not working, as distinct from one fix being wrong.",
+        },
+        cause_class: {
+          type: "string",
+          enum: CAUSE_CLASSES,
+          description:
+            "Why it came back. Required when reopened is true. 'env-parity' is bucketed separately " +
+            "in reopen_rate: the fix was right, the environment it was checked on was not.",
+        },
+        supersedes: { type: "string", description: "Id of an earlier entry this corrects (optional)." },
         },
         required: ["repo", "outcome"],
       },
@@ -255,6 +345,17 @@ server.setRequestHandler(ListToolsRequestSchema, async () => ({
       },
     },
     {
+      name: "reopen_rate",
+      description:
+        "How often work on the same OBSERVABLE comes back after being closed as fixed, and why. The " +
+        "per-fix gates tell you whether one fix met the bar; this tells you whether the bar is working. " +
+        "A dominant cause_class is a missing capability, not bad luck.",
+      inputSchema: {
+        type: "object",
+        properties: { repo: { type: "string" }, n: { type: "integer", description: "Worst offenders to list (default 10)." } },
+      },
+    },
+    {
       name: "list_repos",
       description: "List repos with recorded trajectories and their entry counts.",
       inputSchema: { type: "object", properties: {} },
@@ -272,6 +373,9 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
         break;
       case "query_trajectory":
         result = await queryTrajectory(args);
+        break;
+      case "reopen_rate":
+        result = await reopenRate(args);
         break;
       case "recent_outcomes":
         result = await recentOutcomes(args);

@@ -91,3 +91,31 @@ Read the same store from the terminal (zero deps; same resolution rules):
     family / a `receipt-cmd` probe / a config note);
   - a repo with **>= 2 `reverted`** -> suggest `gates.G12.mode: "block"`;
   - **>= 2** entries whose `what_failed` mentions **`flaky`** -> suggest `verify.receipt_runs: 2`.
+
+## reopen_rate - is the BAR working?
+
+Every other tool here answers "what happened on this surface before". This one answers a
+different question: **do fixes on the same observable keep coming back?**
+
+The per-fix gates tell you whether one fix met the bar. Nothing tells you that a surface has
+been "fixed" four times, which is the difference between one wrong fix and a bar that does
+not hold. Three constraints make the number mean something:
+
+- **The unit is the OBSERVABLE** (`surface_key`), never the ticket or the file. One flaky
+  surface reopened under five ticket numbers is ONE recurring miss; counting tickets reports
+  five unrelated ones and hides the pattern that would fix it.
+- **Every reopen carries a `cause_class`** - `wrong-surface`, `parallel-twin`,
+  `partial-class`, `env-parity`, `regression`, `misread-report`, `unverified-claim`. A class
+  that dominates is a missing capability, not bad luck.
+- **`env-parity` is bucketed separately and excluded from the headline rate.** Those are
+  reopens where the fix was right and the environment it was checked on was not. Folding them
+  in blames the surface for a staging problem and sends the next fix to the wrong place.
+
+Record it on the way through: `append_trajectory` takes `reopened: true` and `cause_class`.
+
+```
+reopen_rate            0.333
+by_cause               { "parallel-twin": 1, "wrong-surface": 1 }
+env_parity_excluded    { "events": 1, "surfaces": 1 }
+worst_offenders        [ { "surface_key": "src/pdf/invoice.tsx", "reopens": 2 } ]
+```
