@@ -217,6 +217,14 @@ function buildConfig(d, a) {
       // "gates" (the shipped loop) is always watched; project loops merge in.
       loop_skills: dedupe(["gates", ...(a.loop_skills || d.loop_skills || [])]),
       staging_query_patterns: a.staging_query_patterns || [],
+      // How to reach an observable state. Empty is honest: it means nobody has said,
+      // and a gate can cite that rather than treating "auth-walled" as a fact of nature.
+      drive: {
+        auth: a.drive_auth || "",
+        bypass: a.drive_bypass || "",
+        data: a.drive_data || "",
+        browser_surfaces: a.drive_browser_surfaces || [],
+      },
       closeout_fixed_statuses: a.closeout_fixed_statuses || ["Pending Retest", "Verified"],
       repo_name: a.repo_name || d.repo_name,
     },
@@ -318,6 +326,20 @@ async function init(opts) {
       if (xh.length) a.extra_hosts = xh;
       const sq = list(await ask(rl, "By-value query hosts/tools (e.g. a DB proxy host)? (blank to skip)", ""));
       if (sq.length) a.staging_query_patterns = sq;
+      // How to DRIVE the app, not merely run it. Detection cannot find any of this, and
+      // without it a gate that demands an observed value gets waved through as
+      // "auth-walled, could not verify" - which is how an unverified fix ships wearing an
+      // honest-looking downgrade. Asked once; stable per project, never per bug.
+      if (d.platform !== "none" && !agentHome) {
+        const auth = await ask(rl, "How does an agent REACH a signed-in state there? (test account / dev bypass / none needed)", "");
+        if (auth) a.drive_auth = auth;
+        const bypass = await ask(rl, "Any dev-mode shortcut that makes it reachable? (fixed OTP, seeded login, magic link, flag - blank if none)", "");
+        if (bypass) a.drive_bypass = bypass;
+        const seeded = await ask(rl, "Does that environment carry realistic data, or must a surface be seeded before it shows anything?", "realistic");
+        if (seeded) a.drive_data = seeded;
+        const browser = list(await ask(rl, "Surfaces that must be driven in a BROWSER rather than by API (rendered PDFs, print views)? (comma-sep, blank to skip)", ""));
+        if (browser.length) a.drive_browser_surfaces = browser;
+      }
       // Gate applicability (G0-G17): default all-on; disable what does not fit this project.
       if (!agentHome) {
         a.medium = await ask(rl, "Project type / medium? (web/api/library/cli/data/infra/mobile/desktop/...)", d.medium);
