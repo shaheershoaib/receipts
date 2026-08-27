@@ -2,7 +2,7 @@
 
 A standard for trusting AI-written fixes.
 
-**Spec version: `receipts/gates@1.3`**
+**Spec version: `receipts/gates@1.4`**
 
 A fix is **not** done because the agent says so, because CI is green, because a unit
 test passed, or because the code "looks right." It is done when the **reported
@@ -696,6 +696,26 @@ is NULL, so the real identity lives in these other columns", a transform that co
 the key silently drops those rows' identity. Round-trip a NULL-key row through the transform
 before trusting it.
 
+**A sentinel in the KEY column force-maps everything to one value.** The worst version of a
+bad join is not a missing key, it is a placeholder that LOOKS like one. A batch extract that
+renders NULLs as the literal text `"NULL"`, or a legacy default of `"0"` / `"000"`, becomes a
+real map key: every record with no true key collides on it and is force-mapped to one
+arbitrary value, at full row count, with no error. Filter the extract at the SOURCE
+(`WHERE key IS NOT NULL AND key NOT IN (<junk set>)`) rather than downstream, and when you
+build a key-to-value map, dedup to the single REAL value so a placeholder cannot shadow it -
+otherwise last-seen-wins silently decides.
+
+**Sentinel values are MISSING data, not data.** A placeholder token where a name belongs, a
+synthesized address, a zero that means "not calculated yet" rather than zero: each will
+migrate cleanly and be wrong. Enumerate the sentinels the source actually uses during the
+census, and decide per column whether each becomes NULL, a fallback, or a skip.
+
+**Check what is IN-FLIGHT before a bulk mutation on a shared path.** A record another process
+depends on in its CURRENT state - a batch awaiting a response, a job mid-retry, anything a
+downstream system has already been told about - must not be advanced underneath it. The
+transform is correct in isolation and still breaks the system, which is why a row-level
+review never catches it. Identify in-flight states before the write, and exclude them.
+
 **Mutually exclusive states, and which one WINS.** Legacy rows routinely assert two things
 that cannot both be true: a success flag written when an operation is SUBMITTED and never
 cleared when it later fails, beside the status recording the real outcome. Detecting the
@@ -757,6 +777,33 @@ fixture containing representative legacy and edge rows, not only fresh ones.
 *Enforcement: agent-side today. The destination contract, the key match-rate and the coverage census are all machine-checkable, so this is the strongest candidate for the next executable assist (a validator run against the destination schema).*
 
 ---
+
+## G19 - A reported example is a SIGNATURE, not a scope (the whole-class gate)
+
+**Mandate.** A bug arrives as one example. That example is evidence of a class, and fixing
+only the example leaves the rest of the class live for the reporter to find again. Before
+closing: write the PREDICATE that makes the reporter's case wrong - the query or condition
+that selects it - run it over the ENTIRE population, and fix every match. The reporter's
+instance passing is necessary, never sufficient.
+
+**The receipt asserts the CLASS is empty**, not that one row is now right: the count of
+still-matching rows or call sites is zero. A receipt that proves a single instance is a
+receipt for the wrong claim, because the reporter's next example is drawn from exactly the
+population you left behind.
+
+**"Fixed the example, flagged the rest as a business decision / TODO" is the anti-pattern
+this gate names.** Narrowing scope to a subset is legitimate, but it requires explicit owner
+sign-off that names what is excluded and why, obtained BEFORE closing. It is never the silent
+default, and time pressure does not license it.
+
+**It applies in every medium.** A data defect fixes all matching rows. A code defect fixes
+every call site of the pattern - this is G6's twin sweep made mandatory and COUNTED, rather
+than a best-effort look around. A migration reconciles the whole table.
+
+**Scar.** A defect reported on one record was fixed on that record and closed. The same
+defect was re-reported four times from the same population, each time read as a new bug,
+because nothing had ever asked how many rows matched the predicate.
+
 
 ## The honesty ladder (when you cannot verify)
 

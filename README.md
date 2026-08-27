@@ -89,9 +89,9 @@ trusted base commit, rejects exit-masking test commands, refuses shell-metachara
 but does not replace human review of the diff or branch protection. It raises the floor on
 honesty.
 
-**Conformance.** The spec is versioned `receipts/gates@1.1` (see `spec/GATES.md`). An adapter
+**Conformance.** The spec is versioned `receipts/gates@1.4` (see `spec/GATES.md`). An adapter
 for ANY agent framework - not just the Claude Code plugin shipped here - conforms to
-`receipts/gates@1.1` iff it passes the three reference suites: the enforcer self-verification
+`receipts/gates@1.4` iff it passes the three reference suites: the enforcer self-verification
 suite (`npm test`), the Stop-hook suite (`node --test plugin/hooks/test/*.test.mjs`), and the
 gates-bench (`node bench/run.js`) at **0 undeclared escapes / 0 false-blocks**. There is no
 separate conformance checklist to interpret: the suites ARE the conformance test, so "does
