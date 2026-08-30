@@ -8,7 +8,7 @@
   "scripts": {
     "test": "node --test enforcer/test/*.test.js",
     "init": "node bin/receipts.js init",
-    "build:refs": "node -e \"const fs=require('fs'),d='plugin/skills/gates/references/';fs.mkdirSync(d,{recursive:true});for(const f of fs.readdirSync('spec'))if(f.endsWith('.md'))fs.copyFileSync('spec/'+f,d+f)\"",
+    "build:refs": "node -e \"const fs=require('fs'),d='plugin/skills/gates/references/';fs.mkdirSync(d,{recursive:true});for(const f of fs.readdirSync('spec'))if(f.endsWith('.md'))fs.copyFileSync('spec/'+f,d+f);fs.copyFileSync('enforcer/INIT.md',d+'INIT.md')\"",
     "build:adapters": "node scripts/build-adapters.js",
     "demo": "node examples/caught-wrong-fix/run-demo.js"
   },
