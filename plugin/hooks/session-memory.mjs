@@ -299,6 +299,31 @@ async function readStdin() {
   return data;
 }
 
+// The reachability answers `receipts init` collected from a human (agent.drive). Injected at
+// EVERY session start so the agent uses the recorded way in rather than rediscovering the auth
+// wall mid-verification and downgrading to "could not verify". Independent of trajectory
+// memories: on a fresh project there are none, which is exactly when these matter most.
+const DRIVE_CAP = 500;
+function driveContext(cfg) {
+  const d = ((cfg.agent || {}).drive) || {};
+  const lines = [
+    d.auth && `- auth route: ${d.auth}`,
+    d.bypass && `- dev shortcut: ${d.bypass}`,
+    d.data && `- data: ${d.data}`,
+    (d.browser_surfaces || []).length && `- browser-only surfaces: ${d.browser_surfaces.join(", ")}`,
+  ].filter(Boolean);
+  if (lines.length)
+    return ("RECEIPTS - how to reach an observable state in this project (from " +
+      "receipts.config.json). Use these before reporting a surface unreachable:\n" +
+      lines.join("\n")).slice(0, DRIVE_CAP);
+  if (d.confirmed === false)
+    return "RECEIPTS - nobody has recorded how to reach a signed-in state here: `receipts init` " +
+      "ran with --yes and skipped the reachability interview. Ask the human for the auth route " +
+      "and any dev bypass before reporting a surface unverifiable, and offer to re-run " +
+      "`receipts init --force` to record the answers.";
+  return "";
+}
+
 async function main() {
   let payload;
   try {
@@ -316,15 +341,12 @@ async function main() {
 
   const storePath = resolveStore(cwd);
   const entries = readEntries(storePath);
-  if (!entries.length) return;
-
   const candidates = repoCandidates(cwd);
-  if (!candidates.length) return;
-
-  const picked = selectEntries(entries, candidates);
-  if (!picked.length) return; // no entry for THIS repo -> nothing to say
-
-  const additionalContext = render(picked);
+  // Either source can carry the session: recorded trajectories for THIS repo, and/or the
+  // project's reachability facts. Previously no trajectories meant no output at all.
+  const picked = entries.length && candidates.length ? selectEntries(entries, candidates) : [];
+  const memories = picked.length ? render(picked) : "";
+  const additionalContext = [driveContext(cfg), memories].filter(Boolean).join("\n\n");
   if (!additionalContext) return;
 
   process.stdout.write(

@@ -74,3 +74,42 @@ test("no drive block at all (pre-existing configs) changes nothing", () => {
   assert.ok(d && d.decision === "block");
   assert.doesNotMatch(d.reason, /recorded way in|nobody has recorded/);
 });
+
+// ---- SessionStart: the answers must reach the agent's context every session ----------------
+
+const SESSION_HOOK = path.join(HERE, "..", "session-memory.mjs");
+
+function runSession(projectConfig) {
+  const td = fs.mkdtempSync(path.join(os.tmpdir(), "receipts-sess-"));
+  const home = path.join(td, "home");
+  fs.mkdirSync(home, { recursive: true });
+  if (projectConfig) fs.writeFileSync(path.join(td, "receipts.config.json"), JSON.stringify(projectConfig));
+  const out = execFileSync("node", [SESSION_HOOK], {
+    input: JSON.stringify({ session_id: "s1", cwd: td, source: "startup" }),
+    encoding: "utf8", env: { ...process.env, HOME: home, USERPROFILE: home },
+  }).trim();
+  return out ? JSON.parse(out).hookSpecificOutput.additionalContext : null;
+}
+
+test("SessionStart injects the recorded way in, with NO trajectory memories present", () => {
+  const ctx = runSession({
+    version: 1,
+    agent: { drive: { confirmed: true, auth: "test acct qa@acme.test", bypass: "OTP 000000", data: "realistic", browser_surfaces: ["invoice PDF"] } },
+  });
+  assert.ok(ctx, "expected context; a fresh project has no trajectories and must still get this");
+  assert.match(ctx, /qa@acme\.test/);
+  assert.match(ctx, /OTP 000000/);
+  assert.match(ctx, /invoice PDF/);
+  assert.match(ctx, /before reporting a surface unreachable/);
+});
+
+test("SessionStart flags an unconfirmed drive block so the agent asks", () => {
+  const ctx = runSession({ version: 1, agent: { drive: { confirmed: false, auth: "", bypass: "" } } });
+  assert.match(ctx, /skipped the reachability interview/);
+  assert.match(ctx, /Ask the human/);
+});
+
+test("SessionStart stays silent for a confirmed-empty block and for no config", () => {
+  assert.equal(runSession({ version: 1, agent: { drive: { confirmed: true, auth: "", bypass: "" } } }), null);
+  assert.equal(runSession(null), null);
+});

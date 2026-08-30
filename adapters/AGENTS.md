@@ -13,6 +13,48 @@ This skill is the project-agnostic discipline. Project specifics (the test comma
 the deploy target, what marks a fix-claim) live in `receipts.config.json` - run
 `receipts init` once to create it.
 
+## Setup: `receipts init` is an INTERVIEW you must relay
+
+`init` detects what it can (test runner, deploy platform, branch) and **asks a human for
+what detection cannot find**. Four of its questions have no other source - nothing in the
+repo reveals them:
+
+1. How does an agent REACH a signed-in state on the verify environment? (test account /
+   dev bypass / none needed)
+2. Any dev-mode shortcut that makes it reachable? (fixed OTP, seeded login, magic link, flag)
+3. Does that environment carry realistic data, or must a surface be seeded first?
+4. Any surfaces that must be driven in a BROWSER rather than by API? (rendered PDFs, print views)
+
+**Put these to the human in your own conversation and enter their answers.** You are the
+one holding the conversation; `init` cannot reach them. Do NOT run `init --yes` to get past
+the prompts - that is you answering "unknown" on their behalf, and it is denied by a
+tripwire outside CI. `--yes` is for CI, where nobody can be asked.
+
+The answers land in `agent.drive` and are what let a gate refuse an "auth-walled, could not
+verify" downgrade later. The full setup contract - every field, what detection reads, and
+what it falls back to - is in `references/INIT.md`. `drive.confirmed: false` means the interview was skipped - treat
+an empty block as an OPEN QUESTION, not as evidence the surface is unreachable.
+
+## Then USE the config - every gate, every check
+
+`receipts.config.json` is not setup residue; it is the standing answer sheet. Before
+verifying anything, read it and use it:
+
+- `agent.drive.auth` / `.bypass` - **the way in.** If a route is on record, "I could not
+  reach it / it is auth-walled" is not available to you as a reason. Use that route and
+  observe the value.
+- `agent.drive.data` - whether you must seed a surface before it will show anything.
+- `agent.drive.browser_surfaces` - surfaces you must drive in a real browser; an API read
+  does not verify these.
+- `verify.test_command` / `suite_command` - how this project runs one test and the suite.
+  Your receipt runs through these, not through a command you invent.
+- `build.verify_against` + `environments` - which deployed build G3 is checked against.
+- `gates.enabled` / `disabled`, `gates.medium` - which gates apply and in whose terms.
+- `claim.downgrade_tags` - the exact tags an honest non-fix must carry.
+
+If a field you need is empty and its `confirmed` flag is false, ask the human rather than
+assuming the answer is "none" - and offer to re-run `receipts init --force` to record it.
+
 **Which gates apply here:** honor `receipts.config.json` `gates.enabled` / `gates.disabled`
 (default: all). A project disables the gates that do not fit it - e.g. G10 in a single
 repo with no split deploy, or the deploy-surface gates in a library with no deploy.
