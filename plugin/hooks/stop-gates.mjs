@@ -285,6 +285,32 @@ const OBSERVE_HOWTO =
   "--expect '/<the value that proves the symptom is gone>/' " +
   "--sha-cmd '<command printing the live build's sha>'";
 
+// The reachability facts `receipts init` asks a human for (agent.drive). Until now these
+// were WRITE-ONLY: init collected them, nothing read them back, so escape hatch (d)
+// ("I could not observe it") could be taken on auth grounds even when the config recorded
+// exactly how to get in. This renders them into the gate message so the hatch has to argue
+// against what the project already wrote down.
+function driveClause(cfg) {
+  const drv = (cfg.agent || {}).drive || {};
+  const known = [
+    drv.auth && `auth route: ${drv.auth}`,
+    drv.bypass && `dev shortcut: ${drv.bypass}`,
+    drv.data && `data: ${drv.data}`,
+    (drv.browser_surfaces || []).length && `browser-only surfaces: ${drv.browser_surfaces.join(", ")}`,
+  ].filter(Boolean);
+  if (known.length)
+    return " NOTE - this project HAS a recorded way in (" + known.join("; ") + "), so " +
+      "'auth-walled / could not reach it' is NOT available as reason (d): use that route " +
+      "and observe the value.";
+  if (drv.confirmed === false)
+    return " NOTE - nobody has recorded how to reach a signed-in state here " +
+      "(receipts init ran with --yes and skipped the reachability interview), so an EMPTY " +
+      "drive block is an open question, not evidence the surface is unreachable. Do not " +
+      "claim (d) on reachability grounds off a config nobody confirmed - ask the human for " +
+      "the auth route, or re-run `receipts init --force`.";
+  return "";
+}
+
 function verificationGate(seq, cfg, m, liveIdxs) {
   // Stand down when THIS repo has no URL-deployed build to observe: an explicit
   // library/CLI/artifact build block, or G1/G3 disabled. A config with NO build block
@@ -345,7 +371,8 @@ function verificationGate(seq, cfg, m, liveIdxs) {
       "It runs the probe against the LIVE build, captures the output, checks it MEETS the " +
       "expectation (met:true), and binds it to the build sha - and prints a LIVE-RECEIPT line " +
       "this gate reads. If you genuinely cannot observe it, re-open the close-out with an " +
-      "'unverified-reasoned: <why unobservable>' tag instead of claiming fixed."
+      "'unverified-reasoned: <why unobservable>' tag instead of claiming fixed." +
+      driveClause(cfg)
     );
   }
 
@@ -387,7 +414,8 @@ function verificationGate(seq, cfg, m, liveIdxs) {
     "cannot observe it (NOT 'my first try failed', and NEVER for a surface reachable by " +
     "clicking a visible button), re-open the close-out note with an explicit " +
     "'unverified-reasoned: <why unobservable + the unit test covering it>' tag and route it " +
-    "to the reporter. Cite the observed value in the close-out note. Then stop."
+    "to the reporter. Cite the observed value in the close-out note. Then stop." +
+    driveClause(cfg)
   );
 }
 

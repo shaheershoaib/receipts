@@ -292,7 +292,8 @@ const KNOWN_KEYS = {
   "gates.G12": ["mode"],
   "gates.G14": ["mode", "max_mutants"],
   "gates.G13": ["coverage_command", "lcov_path", "mode"],
-  agent: ["loop_skills", "staging_query_patterns", "closeout_fixed_statuses", "repo_name", "trajectory_store", "evidence", "tripwires", "memory_inject"],
+  agent: ["loop_skills", "staging_query_patterns", "closeout_fixed_statuses", "repo_name", "trajectory_store", "evidence", "tripwires", "memory_inject", "drive"],
+  "agent.drive": ["confirmed", "auth", "bypass", "data", "browser_surfaces"],
 };
 function unknownConfigKeys(cfg) {
   const out = [];
