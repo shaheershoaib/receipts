@@ -219,7 +219,12 @@ function buildConfig(d, a) {
       staging_query_patterns: a.staging_query_patterns || [],
       // How to reach an observable state. Empty is honest: it means nobody has said,
       // and a gate can cite that rather than treating "auth-walled" as a fact of nature.
+      // `confirmed` is what makes that citable: false = the questions were SKIPPED
+      // (--yes / scripted), so an empty block is an OPEN QUESTION, not a human saying
+      // "nothing needed". Without this the two are byte-identical and the gate cannot
+      // tell a confirmed "no auth" from a never-asked one.
       drive: {
+        confirmed: a._interviewed === true,
         auth: a.drive_auth || "",
         bypass: a.drive_bypass || "",
         data: a.drive_data || "",
@@ -301,6 +306,10 @@ async function init(opts) {
 
   const a = {};
   if (!opts.yes) {
+    // A human is here answering. The drive questions below are asked only where they
+    // APPLY (a deployed platform); either way the block is confirmed, so an empty one
+    // reads as "asked, nothing needed" rather than "never asked".
+    a._interviewed = true;
     const rl = readline.createInterface({ input: process.stdin, output: process.stderr });
     try {
       if (!d.test_command && !agentHome) a.test_command = await ask(rl, "How do you run ONE test? (use {test} for the path)", "");
@@ -352,6 +361,12 @@ async function init(opts) {
     } finally { rl.close(); }
   } else {
     // --yes: register the shipped loop + any detected project loops; scaffold if none.
+    // NOTE: a TTY check is deliberately NOT the guard here - an agent's stdin is not a
+    // TTY either, so isTTY cannot tell a scripted CI run from an agent skipping the
+    // interview with a human right there. Provenance (drive.confirmed) is the guard;
+    // this warning is so the skip is at least visible in the transcript.
+    if (d.platform !== "none" && !agentHome)
+      console.error("  warning: --yes SKIPPED the reachability interview (auth route, dev bypass,\n           data realism, browser-only surfaces). Writing drive.confirmed=false;\n           re-run `receipts init --force` interactively to record them.\n");
     a.loop_skills = dedupe(["gates", ...d.loop_skills]);
     if (!d.loop_skills.length && !opts["no-scaffold"]) a._scaffold = true;
   }

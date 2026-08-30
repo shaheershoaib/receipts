@@ -399,6 +399,25 @@
           "items": { "type": "string" },
           "description": "Extra substrings / MCP-tool names that count as a by-value query against the deployed build (e.g. a DB proxy host, a query tool), on top of the generic defaults."
         },
+        "drive": {
+          "type": "object",
+          "description": "How an agent REACHES an observable state in the verify environment - the auth wall, any dev-mode shortcut, whether data is realistic, and which surfaces only exist rendered. Detection cannot find any of this, so `receipts init` always asks a human. Read by the Stop gate to refuse an 'auth-walled, could not verify' downgrade when a route IS on record.",
+          "properties": {
+            "confirmed": {
+              "type": "boolean",
+              "description": "Did a human actually answer the reachability questions? false = init ran with --yes and SKIPPED them, so an EMPTY block is an open question, not a confirmed 'nothing needed'. The gate treats the two differently."
+            },
+            "auth": { "type": "string", "description": "How an agent reaches a signed-in state (test account / dev bypass / none needed)." },
+            "bypass": { "type": "string", "description": "Dev-mode shortcut that makes the app reachable (fixed OTP, seeded login, magic link, flag)." },
+            "data": { "type": "string", "description": "Does the environment carry realistic data, or must a surface be seeded before it shows anything?" },
+            "browser_surfaces": {
+              "type": "array",
+              "items": { "type": "string" },
+              "description": "Surfaces that must be driven in a BROWSER rather than by API (rendered PDFs, print views)."
+            }
+          },
+          "additionalProperties": false
+        },
         "closeout_fixed_statuses": {
           "type": "array",
           "items": { "type": "string" },
