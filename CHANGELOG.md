@@ -1,12 +1,53 @@
 # Changelog
 
-## Unreleased
+## 0.5.0 - 2026-08-30
 
 Spec bumped to `receipts/gates@1.5` (additive: the render-fidelity set, plus the
 emitted-artifact clarification - both land in the same release).
 
 the data and be silently dropped by the render layer). Closes the "created it, checked the data,
 shipped; the surface still does not show it" gap.
+
+### Added
+- **`init_unattended` tripwire (default `deny`).** `receipts init --yes` is blocked outside CI.
+  The reachability interview is the only source of `agent.drive`, and an agent reaching for
+  `--yes` answers those questions "unknown" on the human's behalf. The deny reason IS the four
+  questions, so the agent is handed exactly what to ask. Escapes: `CI=1`, or an explicit
+  `RECEIPTS_ACK=<why nobody can be asked>`.
+- **`agent.drive.confirmed`.** Records whether a human actually answered the reachability
+  questions. A never-asked empty block and a confirmed "nothing needed" were previously
+  byte-identical, so a gate could not tell them apart. A TTY check is deliberately NOT the
+  guard - an agent's stdin is not a TTY either, so `isTTY` cannot distinguish scripted CI from
+  an agent skipping the interview with a human present.
+- **The interview reaches the agent at all.** `INIT.md` - the whole "agent-driven, ask the
+  human" design - was not shipped in the plugin, and nothing in `plugin/skills` or `adapters`
+  mentioned the interview. SKILL.md now states the four questions verbatim, tells the agent to
+  relay them, and binds each gate to the config fields it must read; `references/INIT.md` ships
+  via `build:refs`. Adapters regenerated, so Codex and Cursor get the same contract.
+- **Reachability facts injected at SessionStart**, so the recorded auth route is used every
+  session instead of sitting unread in a file.
+- **`receipts doctor` upgrade audit.** Groups findings as STALE / MISSING / NEEDS YOUR ANSWER,
+  and for the last prints the four questions verbatim so an upgrading user is asked them rather
+  than told a field is absent. Also reports gates this version ships that a pinned
+  `gates.enabled` list is not running (`"all"` stays self-updating and is never reported).
+
+### Fixed
+- **`agent.drive` was write-only.** Every occurrence in the tree was in `bin/receipts.js`, the
+  writer; the enforcer, the Stop hook and the skill never read it back. `INIT.md`'s promise that
+  "a gate can cite the gap rather than treat auth-walled as a fact of nature" had no
+  implementation. The Stop gate now cites a recorded route to refuse an "auth-walled" downgrade.
+- **`agent.drive` was in neither the schema nor the enforcer's `KNOWN_KEYS`.** With
+  `agent.additionalProperties: false`, `init` emitted a config its own schema rejected, and the
+  enforcer warned `unknown key(s) not read by the enforcer: agent.drive` on every run.
+- **`doctor` failed fresh agent-home configs.** It demanded `verify.test_command` from every
+  config, but `init` deliberately deletes `build`/`verify`/`gates` for an agent-home. `init`
+  then `doctor` reported the file init had just written as stale.
+- **`doctor` never caught a vanished runner or deploy platform**, both promised in INIT.md. Each
+  check was guarded on the value still being detectable, so the staleness it existed to find
+  passed silently.
+- **`gates.enabled` schema was wrong twice over**: the pattern allowed only `G0-G14` while
+  GATES.md ships `G0-G19` (a config pinning G15+ failed its own schema), and the description
+  said "G0-G13", contradicting the pattern.
 
 ### Added
 - **G1 corollary - render-count parity.** For a rendered COLLECTION (line items, table rows, a
