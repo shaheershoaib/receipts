@@ -1,5 +1,29 @@
 # Changelog
 
+## 0.5.2 - 2026-08-31
+
+### Added
+- **Configs record the version that wrote them** (`agent.receipts_version`). Nothing previously
+  did, so `doctor` had to infer staleness from which fields happened to be missing - a rule
+  needing a rewrite for every new field - and after an update nobody was told their per-repo
+  configs might be behind. The update step existed only as a sentence in a skill someone had to
+  remember to trigger.
+- **The upgrade announces itself.** The SessionStart hook compares the stamp against the running
+  plugin version and, on a mismatch only, injects one line telling the agent to run
+  `receipts doctor` and report what it says to the user. Silent when they match, so a current
+  project pays nothing. `doctor` also reports the mismatch outright now.
+- **`init` writes `AGENTS.md`** so a non-Claude agent (Codex, Cursor, any AGENTS.md reader) gets
+  the same discipline. Previously the adapter was generated into the repo and had to be copied by
+  hand - installing the plugin did nothing for Codex at all. Never clobbers: an existing file
+  keeps its content and only the delimited receipts block is replaced, so re-running does not
+  stack duplicates. Opt out with `--no-agents`. `adapters/AGENTS.md` now ships to npm, without
+  which `init` could not read it.
+
+### Fixed
+- **`TOTAL_CAP` capped only the memories block, not the whole injection** - despite its comment
+  reading "absolute ceiling on additionalContext". The drive facts added in 0.5.0 already escaped
+  it. It now caps the combined context, with the bounded, actionable parts first.
+
 ## 0.5.1 - 2026-08-31
 
 ### Fixed

@@ -94,7 +94,7 @@ function runSession(projectConfig) {
 test("SessionStart injects the recorded way in, with NO trajectory memories present", () => {
   const ctx = runSession({
     version: 1,
-    agent: { drive: { confirmed: true, auth: "test acct qa@acme.test", bypass: "OTP 000000", data: "realistic", browser_surfaces: ["invoice PDF"] } },
+    agent: { receipts_version: "0.5.1", drive: { confirmed: true, auth: "test acct qa@acme.test", bypass: "OTP 000000", data: "realistic", browser_surfaces: ["invoice PDF"] } },
   });
   assert.ok(ctx, "expected context; a fresh project has no trajectories and must still get this");
   assert.match(ctx, /qa@acme\.test/);
@@ -104,12 +104,12 @@ test("SessionStart injects the recorded way in, with NO trajectory memories pres
 });
 
 test("SessionStart flags an unconfirmed drive block so the agent asks", () => {
-  const ctx = runSession({ version: 1, agent: { drive: { confirmed: false, auth: "", bypass: "" } } });
+  const ctx = runSession({ version: 1, agent: { receipts_version: "0.5.1", drive: { confirmed: false, auth: "", bypass: "" } } });
   assert.match(ctx, /skipped the reachability interview/);
   assert.match(ctx, /Ask the human/);
 });
 
 test("SessionStart stays silent for a confirmed-empty block and for no config", () => {
-  assert.equal(runSession({ version: 1, agent: { drive: { confirmed: true, auth: "", bypass: "" } } }), null);
+  assert.equal(runSession({ version: 1, agent: { receipts_version: "0.5.1", drive: { confirmed: true, auth: "", bypass: "" } } }), null);
   assert.equal(runSession(null), null);
 });

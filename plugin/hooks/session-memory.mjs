@@ -304,6 +304,36 @@ async function readStdin() {
 // wall mid-verification and downgrading to "could not verify". Independent of trajectory
 // memories: on a fresh project there are none, which is exactly when these matter most.
 const DRIVE_CAP = 500;
+
+// The version of the PLUGIN this hook ships inside. Compared against the version stamped into
+// the config by `receipts init`, so an upgrade announces itself instead of relying on the user
+// remembering to re-check every repo after every update.
+function pluginVersion() {
+  try {
+    const root = process.env.CLAUDE_PLUGIN_ROOT ||
+      path.join(path.dirname(new URL(import.meta.url).pathname), "..");
+    return JSON.parse(fs.readFileSync(path.join(root, ".claude-plugin", "plugin.json"), "utf8")).version || null;
+  } catch { return null; }
+}
+
+// One line, once per session, only when the versions actually disagree. Silent when they match,
+// so a current project never pays for this.
+function upgradeNotice(cfg) {
+  const running = pluginVersion();
+  if (!running) return "";
+  const wrote = (cfg.agent || {}).receipts_version;
+  if (wrote === running) return "";
+  if (!wrote)
+    return `RECEIPTS - this project's receipts.config.json does not record which version wrote ` +
+      `it, and you are running ${running}. Run \`receipts doctor\` (npx -y receipts-cli@latest ` +
+      `doctor) to see what this version expects that the config predates, and tell the user what ` +
+      `it reports - do not silently skip it.`;
+  return `RECEIPTS - this project's receipts.config.json was written by version ${wrote}; you are ` +
+    `running ${running}. An upgrade can add fields an older config predates. Run \`receipts doctor\` ` +
+    `(npx -y receipts-cli@latest doctor), tell the user what it reports, and put any questions it ` +
+    `raises to them - a config nobody re-confirmed is how an unverified fix ships wearing an ` +
+    `honest downgrade.`;
+}
 function driveContext(cfg) {
   const d = ((cfg.agent || {}).drive) || {};
   const lines = [
@@ -346,7 +376,13 @@ async function main() {
   // project's reachability facts. Previously no trajectories meant no output at all.
   const picked = entries.length && candidates.length ? selectEntries(entries, candidates) : [];
   const memories = picked.length ? render(picked) : "";
-  const additionalContext = [driveContext(cfg), memories].filter(Boolean).join("\n\n");
+  // TOTAL_CAP is the ceiling on the WHOLE injection, not just the memories block - this loads
+  // into every session. The upgrade notice and drive facts are bounded and go first (they are
+  // the actionable part); memories absorb the truncation.
+  const parts = [upgradeNotice(cfg), driveContext(cfg), memories].filter(Boolean);
+  let additionalContext = parts.join("\n\n");
+  if (additionalContext.length > TOTAL_CAP)
+    additionalContext = additionalContext.slice(0, TOTAL_CAP - 1).trimEnd() + "…";
   if (!additionalContext) return;
 
   process.stdout.write(
