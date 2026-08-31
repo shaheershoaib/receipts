@@ -54,3 +54,22 @@ test("the setup skill documents the relayed-answer flags, not a readline it cann
   for (const flag of ["--drive-auth", "--drive-bypass", "--drive-data", "--drive-browser-surfaces", "--env", "--env-url"])
     assert.ok(cli.includes(`"${flag}"`), `bin/receipts.js must parse ${flag} - the skill tells agents to use it`);
 });
+
+test("the setup skill tells you how to GET the CLI it invokes", () => {
+  // The plugin ships skills/hooks/mcp - NOT bin/receipts.js. On a machine that installed
+  // only the plugin, `receipts` is not on PATH, so a skill that says "run receipts init"
+  // without saying where the command comes from fails at the first step of the flow it owns.
+  const body = fs.readFileSync(path.join(SKILLS_DIR, "setup", "SKILL.md"), "utf8");
+  assert.match(body, /receipts-cli/,
+    "setup must name the npm package that provides the CLI");
+  assert.match(body, /npx\s+-y\s+receipts-cli/,
+    "setup must give a no-install invocation (npx), since the plugin does not ship the CLI");
+  assert.match(body, /command -v receipts/,
+    "setup should check whether the CLI is already on PATH before assuming either form");
+});
+
+test("the plugin genuinely does not ship the CLI (the reason the above matters)", () => {
+  const pluginRoot = path.join(__dirname, "..", "..", "plugin");
+  assert.ok(!fs.existsSync(path.join(pluginRoot, "bin")),
+    "if the plugin ever DOES ship bin/, revisit the setup skill's CLI-availability section");
+});
