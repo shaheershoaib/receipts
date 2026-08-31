@@ -9,6 +9,23 @@ the data and be silently dropped by the render layer). Closes the "created it, c
 shipped; the surface still does not show it" gap.
 
 ### Added
+- **`setup` skill.** "install receipts" / "update receipts" / "set up receipts here" now has an
+  entry point that owns the whole flow: install or update the plugin, print the detected config,
+  put the four reachability questions to the human, write their answers, and confirm with
+  `doctor`. Previously nothing triggered on those phrases, so setup depended on an agent reading
+  SKILL.md carefully - and the plugin's skills and hooks only load at session start, so the
+  thread was usually lost across the required restart.
+- **Relayed interview answers: `--drive-auth`, `--drive-bypass`, `--drive-data`,
+  `--drive-browser-surfaces`, `--env`, `--env-url`.** An agent CANNOT drive `init`'s readline (a
+  pipe drops the buffered lines; a pty echoes them before readline attaches), so there was no
+  path for answers collected in conversation to reach the config - the write half of the
+  interview was unreachable and untestable. Supplying any `--drive-*` flag records
+  `drive.confirmed: true` and is exempt from the `init_unattended` tripwire: the questions were
+  asked, just not through readline.
+- **Skill frontmatter validation.** A skill whose frontmatter does not parse is not loaded and
+  raises no error - it silently is not there. Now a test failure.
+
+### Added
 - **`init_unattended` tripwire (default `deny`).** `receipts init --yes` is blocked outside CI.
   The reachability interview is the only source of `agent.drive`, and an agent reaching for
   `--yes` answers those questions "unknown" on the human's behalf. The deny reason IS the four
@@ -32,6 +49,9 @@ shipped; the surface still does not show it" gap.
   `gates.enabled` list is not running (`"all"` stays self-updating and is never reported).
 
 ### Fixed
+- **README install command.** It said `claude plugin install receipts`; the unambiguous form
+  that resolves against the marketplace is `receipts@receipts`. Also documents the required
+  session restart, which nothing mentioned.
 - **`agent.drive` was write-only.** Every occurrence in the tree was in `bin/receipts.js`, the
   writer; the enforcer, the Stop hook and the skill never read it back. `INIT.md`'s promise that
   "a gate can cite the gap rather than treat auth-walled as a fact of nature" had no

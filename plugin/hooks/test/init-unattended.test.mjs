@@ -86,3 +86,12 @@ test("unrelated Bash is untouched (the commit early-return still governs)", () =
   allows("ls -la");
   allows("npm test");
 });
+
+test("relayed answers are the SUPPORTED path, not a skip", () => {
+  // An agent cannot drive init's readline, so it asks in conversation and passes the
+  // answers as flags. That is the interview happening - it must not be denied.
+  allows("receipts init --yes --drive-auth 'test acct qa@x.test' --drive-bypass 'OTP 000000'");
+  allows("receipts init --yes --drive-auth 'none needed' --drive-data realistic");
+  // but a bare --yes alongside unrelated flags is still a skip
+  denies("receipts init --yes --no-scaffold");
+});
