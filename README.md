@@ -265,13 +265,20 @@ already on the registry, runs the full gate (enforcer suite, hook tests, gates-b
 then publishes with **npm provenance** - a verifiable link from the tarball back to the run that
 built it. A publish is a claim like any other; this makes it carry its own receipt.
 
-One-time setup: add an npm **Granular Access Token** (Packages and scopes = Read and write) as
-the repo secret `NPM_TOKEN` (Settings -> Secrets and variables -> Actions). Nothing then needs
-local npm auth, and no token ever sits on a developer machine.
+One-time setup - **trusted publishing**, no token anywhere: on npmjs.com open the
+`receipts-cli` package -> **Settings** -> **Trusted Publisher** -> **GitHub Actions**, and enter
+organization/user `shaheershoaib`, repository `receipts`, workflow `release.yml` (leave
+Environment blank). CI then mints a short-lived credential from its own OIDC identity - there is
+no secret to leak, rotate, or lose.
+
+This is also the path that keeps working: npm restricted 2FA-bypass tokens in July 2026 and
+[retires their direct-publish capability in January 2027](https://github.blog/changelog/2026-07-31-restricting-npm-bypass-2fa-granular-access-tokens/).
 
 <details><summary>Publishing by hand instead</summary>
 
-`npm publish` from a clean checkout, after `npm login`.
+`npm publish --otp=<code>` from a clean checkout, after `npm login`. The OTP is required
+interactively - a stored token cannot stand in for it, and as of January 2027 a 2FA-bypass token
+cannot publish at all.
 
 npm requires an auth token to publish **even with no 2FA** on the account. One-time: create a **Granular Access Token** (npmjs.com -> Access Tokens) with **Packages and scopes = Read and write, "All packages"** (Organizations = No access; no org needed), then `npm config set //registry.npmjs.org/:_authToken=<TOKEN>`. (Classic "Automation" tokens also work where the account still offers them.)
 

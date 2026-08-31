@@ -23,6 +23,11 @@ jobs:
           node-version: '20'
           registry-url: 'https://registry.npmjs.org'
 
+      # Trusted publishing (OIDC) needs npm >= 11.5.1; node 20 ships npm 10.x. Without this
+      # the publish silently falls back to looking for a token that no longer exists.
+      - name: npm new enough for trusted publishing
+        run: npm install -g npm@latest && npm --version
+
       # The three manifests are already kept in lockstep by a unit test; this checks the
       # fourth leg the test cannot see - the tag actually being cut.
       - name: tag must match package.json
@@ -54,7 +59,10 @@ jobs:
       - name: gates-bench (weak-agent matrix)
         run: node bench/run.js
 
+      # Trusted publishing: npm mints a short-lived credential from this run's OIDC identity,
+      # so there is no token to leak, rotate, or lose. Configure the trusted publisher once on
+      # npmjs.com (package -> Settings -> Trusted Publisher -> GitHub Actions, workflow
+      # release.yml). npm is retiring 2FA-bypass tokens for direct publishing in January 2027,
+      # so this is the path that keeps working.
       - name: publish
         run: npm publish --provenance --access public
-        env:
-          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
