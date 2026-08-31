@@ -1,0 +1,60 @@
+name: release
+
+# Publishing is a claim like any other: it asserts "this tag is what is on npm".
+# So the tag must agree with the manifests, and the full gate must be green, BEFORE
+# anything is pushed to the registry - no publishing a version nobody verified.
+on:
+  push:
+    tags: ['v*']
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  id-token: write   # npm provenance - a verifiable link from the tarball back to this run
+
+jobs:
+  publish:
+    name: verify, then publish to npm
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+          registry-url: 'https://registry.npmjs.org'
+
+      # The three manifests are already kept in lockstep by a unit test; this checks the
+      # fourth leg the test cannot see - the tag actually being cut.
+      - name: tag must match package.json
+        if: startsWith(github.ref, 'refs/tags/')
+        run: |
+          tag="${GITHUB_REF_NAME#v}"
+          pkg="$(node -p "require('./package.json').version")"
+          if [ "$tag" != "$pkg" ]; then
+            echo "::error::tag v$tag disagrees with package.json $pkg - bump all three manifests and re-tag"
+            exit 1
+          fi
+          echo "tag v$tag matches package.json"
+
+      - name: refuse to republish an existing version
+        run: |
+          pkg="$(node -p "require('./package.json').version")"
+          if npm view "receipts-cli@$pkg" version >/dev/null 2>&1; then
+            echo "::error::receipts-cli@$pkg is already on the registry - bump the version"
+            exit 1
+          fi
+          echo "receipts-cli@$pkg is not yet published"
+
+      - name: enforcer self-verification suite
+        run: npm test
+
+      - name: stop-hook + plugin tests
+        run: node --test plugin/hooks/test/*.test.mjs plugin/mcp/trajectory-kb/test/*.test.mjs
+
+      - name: gates-bench (weak-agent matrix)
+        run: node bench/run.js
+
+      - name: publish
+        run: npm publish --provenance --access public
+        env:
+          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
