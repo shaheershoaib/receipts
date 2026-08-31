@@ -18,17 +18,16 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
-      # NOTE: deliberately NO `registry-url`. setup-node writes an .npmrc containing
-      # `//registry.npmjs.org/:_authToken=${NODE_AUTH_TOKEN}`; with no token in the
-      # environment that becomes an EMPTY credential, and npm sends it instead of falling
-      # through to OIDC - which the registry answers with a 404 that reads like the package
-      # does not exist. Trusted publishing needs only `id-token: write`, and the default
-      # registry is npmjs.org anyway.
       - uses: actions/setup-node@v4
         with:
           # 24, not 20: trusted publishing needs npm >= 11.5.1 (node 20 ships 10.x) and
           # node >= 22.14.
           node-version: '24'
+          # REQUIRED, and not obvious: without registry-url npm does not attempt the OIDC
+          # exchange at all - it fails ENEEDAUTH before reaching the registry. Removing it
+          # to avoid an empty NODE_AUTH_TOKEN was tried and is wrong; setup-node must write
+          # the registry line for trusted publishing to engage.
+          registry-url: 'https://registry.npmjs.org'
 
       # Pinned to ^11, NOT @latest: npm 12 requires node ^22.22 || ^24.15 || >=26, so
       # `npm@latest` resolves to something the runner's node may not satisfy - which is
