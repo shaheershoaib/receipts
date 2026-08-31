@@ -1,5 +1,23 @@
 # Changelog
 
+## 0.5.1 - 2026-08-31
+
+### Fixed
+- **The `setup` skill invoked a CLI the plugin does not ship.** The plugin provides skills,
+  hooks and the MCP server - not `bin/receipts.js`, which comes from the separate `receipts-cli`
+  npm package. The skill said `receipts init ...` with no mention of `npx` or `npm install`, so
+  on a machine that had installed only the plugin the flow it owns died at its first command
+  (`command -v receipts` -> not on PATH). The README was right; the skill was not. It now checks
+  PATH and falls back to `npx -y receipts-cli@latest`, with a global install offered as the
+  user's choice rather than assumed. Adapters regenerated so Codex and Cursor get the same fix.
+- **Release-workflow guards.** Publishing broke three ways cutting 0.5.0, each from an edit to
+  `release.yml` and each visible only at release time (the workflow runs on tags, so PR CI never
+  exercises it): `npm@latest` resolving to npm 12 against a node-20 runner (EBADENGINE), dropping
+  `registry-url` so npm never attempts the OIDC exchange (ENEEDAUTH), and no trusted publisher
+  configured (E404 - npm masks auth failures as 404). Ten tests now assert the load-bearing
+  properties, including the workflow FILENAME: the npm trusted publisher binds to `release.yml`,
+  so renaming that file breaks publishing with a 404 nothing else explains.
+
 ## 0.5.0 - 2026-08-30
 
 Spec bumped to `receipts/gates@1.5` (additive: the render-fidelity set, plus the
