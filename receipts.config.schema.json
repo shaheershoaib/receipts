@@ -181,16 +181,16 @@
           "description": "OPTIONAL default work type (fix / feature / migration / refactor / chore). Usually LEFT UNSET - work type is per-PR, not per-project (most repos mix), so the agent determines it per task and a PR signals it with a `work-type:` line in its body. It sets what the receipt asserts (the acceptance criterion), and for refactor/chore it inverts the receipt to 'the full suite stays green' (no behavior change). See references/WORK-TYPES.md."
         },
         "enabled": {
-          "description": "Which gates run here: \"all\", or an explicit array of gate IDs (G0-G13).",
+          "description": "Which gates run here: \"all\" (default, self-updating as new gates ship), or an explicit array of gate IDs (G0-G19). A pinned list does NOT pick up gates added later - `receipts doctor` reports the ones you are missing.",
           "default": "all",
           "oneOf": [
             { "const": "all" },
-            { "type": "array", "items": { "type": "string", "pattern": "^G(1[0-4]|[0-9])$" } }
+            { "type": "array", "items": { "type": "string", "pattern": "^G(1[0-9]|[0-9])$" } }
           ]
         },
         "disabled": {
           "type": "array",
-          "items": { "type": "string", "pattern": "^G(1[0-4]|[0-9])$" },
+          "items": { "type": "string", "pattern": "^G(1[0-9]|[0-9])$" },
           "description": "Gate IDs to turn off even if `enabled` includes them; takes precedence over `enabled`.",
           "default": []
         },

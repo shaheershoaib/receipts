@@ -405,25 +405,94 @@ async function init(opts) {
   }
 }
 
+// Gate IDs this version ships. Hardcoded because the CLI is published WITHOUT plugin/skills
+// (see package.json "files"), so GATES.md is not readable at runtime; a unit test asserts this
+// list still matches the headings in GATES.md so it cannot drift.
+const SHIPPED_GATES = ["G0","G1","G2","G3","G4","G5","G6","G7","G8","G9",
+                       "G10","G11","G12","G13","G14","G15","G16","G17","G18","G19"];
+
+// The four questions only a human can answer. Printed verbatim by doctor so an upgrading
+// user is asked them rather than told "something is missing".
+const DRIVE_QUESTIONS = [
+  "How does an agent REACH a signed-in state on the verify environment? (test account / dev bypass / none needed)",
+  "Any dev-mode shortcut that makes it reachable? (fixed OTP, seeded login, magic link, flag)",
+  "Does that environment carry realistic data, or must a surface be seeded first?",
+  "Any surfaces that must be driven in a BROWSER rather than by API? (rendered PDFs, print views)",
+];
+
 function doctor(opts) {
   const dir = path.resolve(opts.dir || process.cwd());
   const cfg = readJson(path.join(dir, "receipts.config.json"));
   if (!cfg) { console.error("No receipts.config.json here - run `receipts init`."); process.exit(1); }
   const d = detect(dir);
-  const drift = [];
-  if (d.test_command && cfg.verify && cfg.verify.test_command && d.test_command !== cfg.verify.test_command)
-    drift.push(`test_command: config "${cfg.verify.test_command}" vs detected "${d.test_command}"`);
-  if (!cfg.verify || !cfg.verify.test_command || /REPLACE_ME/.test(cfg.verify.test_command || ""))
-    drift.push("verify.test_command is unset/placeholder");
-  if (d.platform !== "none" && cfg.build && d.platform !== cfg.build.platform)
-    drift.push(`platform: config "${cfg.build.platform}" vs detected "${d.platform}"`);
-  const cfgLoops = (cfg.agent && cfg.agent.loop_skills) || [];
-  const missing = (d.loop_skills || []).filter((s) => !cfgLoops.includes(s));
-  if (missing.length) drift.push(`loop skills on disk but not in config.agent.loop_skills: ${missing.join(", ")}`);
-  if (!cfg.agent) drift.push("config has no `agent` block - the Stop hooks will use generic defaults (re-init to bind project loops/hosts)");
 
-  if (!drift.length) { console.error("receipts doctor: config looks current."); return; }
-  console.error("receipts doctor: drift detected:\n  - " + drift.join("\n  - ") + "\n\nRe-run `receipts init --force` to refresh.");
+  // An AGENT-HOME config (skills + session cwd, no code) is written WITHOUT build/verify/gates
+  // on purpose - init deletes them. Auditing it for a test command reported the shape init had
+  // just produced as drift, so `init && doctor` failed on a fresh, correct config.
+  const agentHome = !cfg.verify && !cfg.build;
+
+  const stale = [];    // detection contradicts the config - the project moved
+  const ask = [];      // needs a HUMAN answer; doctor prints the questions
+  const missing = [];  // structurally absent / never bound
+
+  if (!agentHome) {
+    if (d.test_command && cfg.verify && cfg.verify.test_command && d.test_command !== cfg.verify.test_command)
+      stale.push(`verify.test_command: config "${cfg.verify.test_command}" vs detected "${d.test_command}"`);
+    // The runner VANISHED (renamed script, switched frameworks). INIT.md promises this is
+    // caught rather than passing silently; nothing checked it.
+    if (!d.test_command && cfg.verify && cfg.verify.test_command && !/REPLACE_ME/.test(cfg.verify.test_command))
+      stale.push(`verify.test_command is set ("${cfg.verify.test_command}") but no test runner is detectable here any more - did the runner or script get renamed?`);
+    if (d.platform !== "none" && cfg.build && d.platform !== cfg.build.platform)
+      stale.push(`build.platform: config "${cfg.build.platform}" vs detected "${d.platform}"`);
+    // The deploy config VANISHED - the other half of the same promise.
+    if (d.platform === "none" && cfg.build && cfg.build.platform && cfg.build.platform !== "none")
+      stale.push(`build.platform is "${cfg.build.platform}" but no deploy config for it is detectable here any more - G3 will re-verify against a build that may no longer exist.`);
+    if (!cfg.verify || !cfg.verify.test_command || /REPLACE_ME/.test(cfg.verify.test_command || ""))
+      missing.push("verify.test_command is unset/placeholder - the enforcer errors without it");
+    if (!cfg.build) missing.push("no `build` block - G3 has no deployed build to re-verify against");
+  }
+
+  // --- upgrade audit: fields THIS version expects that an older config predates -------------
+  const agent = cfg.agent || {};
+  const drive = agent.drive;
+  if (!drive)
+    ask.push("`agent.drive` is absent - this config predates the reachability interview. Nothing records how an agent reaches an observable state, so a gate cannot tell 'genuinely unreachable' from 'nobody asked'.");
+  else if (drive.confirmed !== true) {
+    const blank = !drive.auth && !drive.bypass && !drive.data && !(drive.browser_surfaces || []).length;
+    ask.push(drive.confirmed === false
+      ? "`agent.drive.confirmed` is false - `receipts init` ran with --yes and SKIPPED the reachability interview." + (blank ? " The block is empty, which is an OPEN QUESTION, not a confirmed 'nothing needed'." : "")
+      : "`agent.drive.confirmed` is absent - written by a version that did not record whether a human answered. Re-confirm so an empty field is not read as a confirmed 'none'.");
+  }
+
+  if (!cfg.agent) missing.push("no `agent` block - the Stop hooks fall back to generic defaults (re-init to bind project loops / hosts / statuses)");
+  const cfgLoops = agent.loop_skills || [];
+  const orphanLoops = (d.loop_skills || []).filter((s) => !cfgLoops.includes(s));
+  if (orphanLoops.length) missing.push(`loop skills on disk but not in agent.loop_skills: ${orphanLoops.join(", ")} - the trajectory hooks will not watch them`);
+
+  // Gates pinned as an explicit list predate any gate shipped since. "all" (the default) is
+  // self-updating and never reported.
+  const enabled = (cfg.gates || {}).enabled;
+  if (Array.isArray(enabled)) {
+    const unpinned = SHIPPED_GATES.filter((g) => !enabled.includes(g) && !((cfg.gates.disabled) || []).includes(g));
+    if (unpinned.length)
+      missing.push(`gates.enabled pins an explicit list; this version also ships ${unpinned.join(", ")} - they are NOT running here. Add them, or set "enabled": "all" (self-updating), or list them under gates.disabled to record the decision.`);
+  }
+
+  if (!stale.length && !ask.length && !missing.length) {
+    console.error("receipts doctor: config looks current" + (agentHome ? " (agent-home: no build/verify by design)." : "."));
+    return;
+  }
+  const section = (title, items) => items.length ? `\n${title}\n  - ` + items.join("\n  - ") + "\n" : "";
+  console.error("receipts doctor:" +
+    section("STALE - the project moved; the config did not:", stale) +
+    section("MISSING - never bound:", missing) +
+    section("NEEDS YOUR ANSWER - only a human knows these:", ask));
+  if (ask.length) {
+    console.error("Answer these four, then run `receipts init --force` and enter them:");
+    DRIVE_QUESTIONS.forEach((q, i) => console.error(`  ${i + 1}. ${q}`));
+    console.error("");
+  }
+  console.error("`receipts init --force` re-detects and re-asks; it OVERWRITES the file, so copy any hand-tuned values first.");
   process.exit(2);
 }
 
