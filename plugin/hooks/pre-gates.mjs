@@ -409,7 +409,10 @@ async function main() {
     const command = String(sget(toolInput, "command") || "");
     // Unattended init: checked BEFORE the commit early-return, which lets every non-commit
     // Bash command through. CI is the one legitimate caller of --yes; there, nobody can be asked.
-    if (INIT_UNATTENDED.test(command) && !ACK_TAG.test(command) && !process.env.CI &&
+    // --drive-* means the questions WERE put to a human and the answers are being relayed
+    // (an agent cannot drive init's readline, so this is the supported path) - not a skip.
+    const relayedAnswers = /--drive-(?:auth|bypass|data|browser-surfaces)\b/.test(command);
+    if (INIT_UNATTENDED.test(command) && !relayedAnswers && !ACK_TAG.test(command) && !process.env.CI &&
         tripwireMode(cfg, "init_unattended", "deny") === "deny") {
       deny(initUnattendedReason()); return;
     }

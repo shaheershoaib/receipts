@@ -118,10 +118,16 @@ Two halves - the **agent adapter** (your agent produces receipts) and the **PR e
 **1. Add the plugin** - teaches your Claude Code agent the Gates:
 ```bash
 claude plugin marketplace add shaheershoaib/receipts
-claude plugin install receipts
+claude plugin install receipts@receipts
 ```
+Restart the session afterwards - skills, hooks and the MCP server load at session start.
+Then just ask your agent to **"set up receipts here"**: the bundled `setup` skill runs the
+interview, writes the config, and checks it with `doctor`.
 
-**2. Configure the repo** - detects your stack + deploy target, confirms, writes `receipts.config.json`:
+**2. Configure the repo** - detects your stack + deploy target, then ASKS you the four things
+detection cannot find (auth route, dev bypass, data realism, browser-only surfaces) and writes
+`receipts.config.json`. Answer them: a config nobody was asked lets an unverified fix ship
+wearing an honest-looking downgrade.
 ```bash
 npx receipts-cli init
 # or run the latest unreleased from source: npx github:shaheershoaib/receipts init

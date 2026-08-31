@@ -365,7 +365,19 @@ async function init(opts) {
     // TTY either, so isTTY cannot tell a scripted CI run from an agent skipping the
     // interview with a human right there. Provenance (drive.confirmed) is the guard;
     // this warning is so the skip is at least visible in the transcript.
-    if (d.platform !== "none" && !agentHome)
+    // Answers relayed from a real conversation: the interview HAPPENED, just not through
+    // readline. Record them and mark the block confirmed.
+    const relayed = ["drive_auth", "drive_bypass", "drive_data", "drive_browser_surfaces"]
+      .filter((k) => opts[k] !== undefined);
+    if (relayed.length) {
+      a._interviewed = true;
+      if (opts.drive_auth !== undefined) a.drive_auth = opts.drive_auth;
+      if (opts.drive_bypass !== undefined) a.drive_bypass = opts.drive_bypass;
+      if (opts.drive_data !== undefined) a.drive_data = opts.drive_data;
+      if (opts.drive_browser_surfaces !== undefined) a.drive_browser_surfaces = list(opts.drive_browser_surfaces);
+    }
+    if (opts.env) { a.verify_against = opts.env; if (opts.env_url) a.environments = { [opts.env]: opts.env_url }; }
+    if (!relayed.length && d.platform !== "none" && !agentHome)
       console.error("  warning: --yes SKIPPED the reachability interview (auth route, dev bypass,\n           data realism, browser-only surfaces). Writing drive.confirmed=false;\n           re-run `receipts init --force` interactively to record them.\n");
     a.loop_skills = dedupe(["gates", ...d.loop_skills]);
     if (!d.loop_skills.length && !opts["no-scaffold"]) a._scaffold = true;
@@ -955,6 +967,16 @@ function parseArgs(argv) {
   for (let i = 0; i < argv.length; i++) {
     const x = argv[i];
     if (x === "--dir") o.dir = argv[++i];
+    // Relayed interview answers. An agent CANNOT drive init's readline (a pipe drops the
+    // buffered lines, a pty echoes them before readline attaches), so without these there is
+    // no path for answers it collected in conversation to reach the config. Supplying any of
+    // them means a human WAS asked -> drive.confirmed=true.
+    else if (x === "--drive-auth") o.drive_auth = argv[++i];
+    else if (x === "--drive-bypass") o.drive_bypass = argv[++i];
+    else if (x === "--drive-data") o.drive_data = argv[++i];
+    else if (x === "--drive-browser-surfaces") o.drive_browser_surfaces = argv[++i];
+    else if (x === "--env") o.env = argv[++i];
+    else if (x === "--env-url") o.env_url = argv[++i];
     else if (x === "--yes" || x === "-y") o.yes = true;
     else if (x === "--print") o.print = true;
     else if (x === "--force") o.force = true;
