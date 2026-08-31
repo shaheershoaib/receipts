@@ -20,6 +20,24 @@ and relay the answers.
 dropped) or a pty (input echoes before readline attaches). Ask in conversation, then pass the
 answers as flags. That is the supported path, not a workaround.
 
+## 0. The CLI is a SEPARATE package - make sure it is reachable
+
+This plugin ships the skills, hooks and MCP server. It does **not** ship the `receipts`
+command; that is the `receipts-cli` npm package. On a machine that has only installed the
+plugin, `receipts` is not on PATH and every command below fails with "command not found".
+
+Check once, and use whichever form works for the rest of the session:
+
+```
+command -v receipts || echo "use: npx -y receipts-cli@latest"
+```
+
+- On PATH -> use `receipts <cmd>` directly.
+- Not on PATH -> use `npx -y receipts-cli@latest <cmd>` everywhere below. No install needed.
+- The user wants it permanently -> `npm i -g receipts-cli` (their call, not yours to assume).
+
+Every `receipts ...` in this document means "whichever of those two forms works here".
+
 ## 1. Which situation is this?
 
 | Signal | Go to |
@@ -37,6 +55,9 @@ Check with `claude plugin list` and `ls receipts.config.json`.
 claude plugin marketplace add shaheershoaib/receipts
 claude plugin install receipts@receipts
 ```
+
+The plugin gives you skills, hooks and the MCP server. The `receipts` CLI is separate
+(`receipts-cli` on npm) - see §0; `npx -y receipts-cli@latest` needs no install.
 
 Then **tell the user to restart the session** - skills, hooks and the MCP server load at session
 start, so nothing is active until they do. Say so explicitly; do not let it be discovered later.
