@@ -81,7 +81,7 @@ const entry = (over = {}) => ({
 
 test("injects prior attempts for the current repo (config present + matching entries)", () => {
   const sb = sandbox({
-    config: { version: 1, agent: { repo_name: "web-app" } },
+    config: { version: 1, agent: { receipts_version: "0.5.1",  repo_name: "web-app" } },
     entries: [
       entry({ id: "1", surface_key: "paymentform", outcome: "reverted", what_failed: ["patched the disabled prop directly - wrong layer"] }),
       entry({ id: "2", repo: "other-app", surface_key: "login", outcome: "fixed" }),
@@ -96,7 +96,7 @@ test("injects prior attempts for the current repo (config present + matching ent
 
 test("failures are surfaced first and deduped one-per-surface_key", () => {
   const sb = sandbox({
-    config: { version: 1, agent: { repo_name: "web-app" } },
+    config: { version: 1, agent: { receipts_version: "0.5.1",  repo_name: "web-app" } },
     entries: [
       // A clean fix (should sort AFTER failures)
       entry({ id: "ok", ts: "2026-01-09T00:00:00.000Z", surface_key: "cleanspot", outcome: "fixed" }),
@@ -117,7 +117,7 @@ test("failures are surfaced first and deduped one-per-surface_key", () => {
 
 test("a clean-fix-only entry shows its root_cause (still teaches something)", () => {
   const sb = sandbox({
-    config: { version: 1, agent: { repo_name: "web-app" } },
+    config: { version: 1, agent: { receipts_version: "0.5.1",  repo_name: "web-app" } },
     entries: [entry({ id: "1", surface_key: "usagechart", outcome: "fixed", what_failed: [], root_cause: "prod auth header missing" })],
   });
   const text = injectedText(runHook(sb));
@@ -136,7 +136,7 @@ test("total injected context is capped small (loads into every session)", () => 
       what_failed: ["a very long dead-end description ".repeat(20)],
     }));
   }
-  const sb = sandbox({ config: { version: 1, agent: { repo_name: "web-app" } }, entries: many });
+  const sb = sandbox({ config: { version: 1, agent: { receipts_version: "0.5.1",  repo_name: "web-app" } }, entries: many });
   const text = injectedText(runHook(sb));
   assert.ok(text.length <= 1500, `cap respected (was ${text.length})`);
   // and it never emits a truncated mid-line: the last char is not a bare partial token dangling
@@ -147,17 +147,17 @@ test("total injected context is capped small (loads into every session)", () => 
 // ------------------------------------------------------ silent: empty / missing / corrupt
 
 test("empty store -> silent", () => {
-  const sb = sandbox({ config: { version: 1, agent: { repo_name: "web-app" } }, entries: "" });
+  const sb = sandbox({ config: { version: 1, agent: { receipts_version: "0.5.1",  repo_name: "web-app" } }, entries: "" });
   assert.equal(runHook(sb), null);
 });
 
 test("missing store file -> silent", () => {
-  const sb = sandbox({ config: { version: 1, agent: { repo_name: "web-app" } } }); // entries omitted -> no file
+  const sb = sandbox({ config: { version: 1, agent: { receipts_version: "0.5.1",  repo_name: "web-app" } } }); // entries omitted -> no file
   assert.equal(runHook(sb), null);
 });
 
 test("corrupt lines are tolerated; a valid matching line still injects", () => {
-  const sb = sandbox({ config: { version: 1, agent: { repo_name: "web-app" } } });
+  const sb = sandbox({ config: { version: 1, agent: { receipts_version: "0.5.1",  repo_name: "web-app" } } });
   fs.writeFileSync(sb.store, '{not json\n\n{"id":"z","ts":"2026-01-01T00:00:00.000Z","repo":"web-app","surface_key":"k","outcome":"reverted","what_failed":["boom"]}\n');
   const text = injectedText(runHook(sb));
   assert.match(text, /- k\b/);
@@ -165,7 +165,7 @@ test("corrupt lines are tolerated; a valid matching line still injects", () => {
 });
 
 test("a fully corrupt store -> silent (no valid entries)", () => {
-  const sb = sandbox({ config: { version: 1, agent: { repo_name: "web-app" } } });
+  const sb = sandbox({ config: { version: 1, agent: { receipts_version: "0.5.1",  repo_name: "web-app" } } });
   fs.writeFileSync(sb.store, "{bad\n{also bad\n");
   assert.equal(runHook(sb), null);
 });
@@ -182,7 +182,7 @@ test("NO receipts config anywhere -> silent (zero behavior change for a receipts
 
 test("config present but NO entry matches this repo -> silent", () => {
   const sb = sandbox({
-    config: { version: 1, agent: { repo_name: "nonesuch-repo" } },
+    config: { version: 1, agent: { receipts_version: "0.5.1",  repo_name: "nonesuch-repo" } },
     entries: [entry({ id: "1", repo: "web-app", outcome: "reverted", what_failed: ["x"] })],
   });
   assert.equal(runHook(sb), null);
@@ -190,7 +190,7 @@ test("config present but NO entry matches this repo -> silent", () => {
 
 test("agent.memory_inject: 'off' -> silent even with matching entries", () => {
   const sb = sandbox({
-    config: { version: 1, agent: { repo_name: "web-app", memory_inject: "off" } },
+    config: { version: 1, agent: { receipts_version: "0.5.1",  repo_name: "web-app", memory_inject: "off" } },
     entries: [entry({ id: "1", outcome: "reverted", what_failed: ["x"] })],
   });
   assert.equal(runHook(sb), null);
@@ -198,7 +198,7 @@ test("agent.memory_inject: 'off' -> silent even with matching entries", () => {
 
 test("agent.memory_inject: 'on' (explicit) with a config present -> injects", () => {
   const sb = sandbox({
-    config: { version: 1, agent: { repo_name: "web-app", memory_inject: "on" } },
+    config: { version: 1, agent: { receipts_version: "0.5.1",  repo_name: "web-app", memory_inject: "on" } },
     entries: [entry({ id: "1", outcome: "reverted", what_failed: ["explicit on works"] })],
   });
   assert.match(injectedText(runHook(sb)), /explicit on works/);
@@ -233,7 +233,7 @@ test("garbage stdin -> silent (fail open, never crashes the session)", () => {
 
 test("superseded entries are not surfaced", () => {
   const sb = sandbox({
-    config: { version: 1, agent: { repo_name: "web-app" } },
+    config: { version: 1, agent: { receipts_version: "0.5.1",  repo_name: "web-app" } },
     entries: [
       entry({ id: "old", surface_key: "sk", outcome: "reverted", what_failed: ["the OLD wrong theory"] }),
       entry({ id: "new", surface_key: "sk", outcome: "reverted", what_failed: ["the corrected note"], supersedes: "old" }),

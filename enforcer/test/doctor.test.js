@@ -31,9 +31,12 @@ function runDoctor(files, config) {
 
 const PKG_WITH_TEST = JSON.stringify({ name: "x", scripts: { test: "jest" } });
 const CONFIRMED = { confirmed: true, auth: "", bypass: "", data: "", browser_surfaces: [] };
+// doctor now reports a version mismatch outright; these cases are about config HEALTH,
+// so they carry the current stamp and let the dedicated tests cover staleness.
+const OWN = require(path.join(__dirname, "..", "..", "package.json")).version;
 
 test("an agent-home config is NOT reported as drift (it has no build/verify by design)", () => {
-  const r = runDoctor({}, { version: 1, claim: {}, agent: { loop_skills: ["gates"], drive: CONFIRMED } });
+  const r = runDoctor({}, { version: 1, claim: {}, agent: { loop_skills: ["gates"], drive: CONFIRMED, receipts_version: OWN } });
   assert.equal(r.code, 0, `agent-home must pass clean, got:\n${r.out}`);
   assert.match(r.out, /looks current/);
   assert.match(r.out, /agent-home/);
@@ -45,7 +48,7 @@ test("a healthy code-repo config passes clean", () => {
     version: 1,
     build: { sha_source: "none", platform: "none" },
     verify: { test_command: "npm test -- {test}" },
-    agent: { loop_skills: ["gates"], drive: CONFIRMED },
+    agent: { loop_skills: ["gates"], drive: CONFIRMED, receipts_version: OWN },
     gates: { enabled: "all", disabled: [] },
   });
   assert.equal(r.code, 0, r.out);
@@ -56,7 +59,7 @@ test("a VANISHED test runner is caught (INIT.md promises this)", () => {
     version: 1,
     build: { sha_source: "none", platform: "none" },
     verify: { test_command: "npm test -- {test}" },
-    agent: { drive: CONFIRMED },
+    agent: { drive: CONFIRMED, receipts_version: OWN },
   });
   assert.equal(r.code, 2);
   assert.match(r.out, /STALE/);
@@ -68,7 +71,7 @@ test("a VANISHED deploy platform is caught", () => {
     version: 1,
     build: { sha_source: "git", platform: "vercel" },   // no vercel.json on disk
     verify: { test_command: "npm test -- {test}" },
-    agent: { drive: CONFIRMED },
+    agent: { drive: CONFIRMED, receipts_version: OWN },
   });
   assert.equal(r.code, 2);
   assert.match(r.out, /no deploy config for it is detectable/);
@@ -118,7 +121,7 @@ test("a PINNED gate list is told which shipped gates are not running", () => {
     version: 1,
     build: { sha_source: "none", platform: "none" },
     verify: { test_command: "npm test -- {test}" },
-    agent: { drive: CONFIRMED },
+    agent: { drive: CONFIRMED, receipts_version: OWN },
     gates: { enabled: ["G0", "G1", "G3"], disabled: [] },
   });
   assert.equal(r.code, 2);
@@ -132,7 +135,7 @@ test('gates.enabled "all" is self-updating and never reported', () => {
     version: 1,
     build: { sha_source: "none", platform: "none" },
     verify: { test_command: "npm test -- {test}" },
-    agent: { drive: CONFIRMED },
+    agent: { drive: CONFIRMED, receipts_version: OWN },
     gates: { enabled: "all", disabled: ["G10"] },
   });
   assert.equal(r.code, 0, r.out);
