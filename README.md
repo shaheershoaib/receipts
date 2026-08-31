@@ -251,9 +251,25 @@ everything that ever actually broke, still standing guard.
 1. Bump `version` in `package.json` (and, if the plugin itself changed, `plugin/.claude-plugin/plugin.json` **plus** `.claude-plugin/marketplace.json` - a test keeps that pair in lockstep).
 2. If you edited `spec/GATES.md`, run `npm run build:refs` to sync the bundled skill reference (`plugin/skills/gates/references/GATES.md`, the deep how-to the agent reads on a stranger's install), then commit it.
 3. If you edited `plugin/mcp/trajectory-kb/index.js`, rebuild the bundled MCP server: `cd plugin/mcp/trajectory-kb && npm run build`, then commit the regenerated `server.bundle.mjs`.
-4. `npm publish`.
+4. Update `CHANGELOG.md` (the `Unreleased` section becomes the version heading + date).
+5. Tag and push - **CI publishes**: `git tag v<version> && git push origin v<version>`.
+
+The `release` workflow re-checks the tag against `package.json`, refuses to republish a version
+already on the registry, runs the full gate (enforcer suite, hook tests, gates-bench), and only
+then publishes with **npm provenance** - a verifiable link from the tarball back to the run that
+built it. A publish is a claim like any other; this makes it carry its own receipt.
+
+One-time setup: add an npm **Granular Access Token** (Packages and scopes = Read and write) as
+the repo secret `NPM_TOKEN` (Settings -> Secrets and variables -> Actions). Nothing then needs
+local npm auth, and no token ever sits on a developer machine.
+
+<details><summary>Publishing by hand instead</summary>
+
+`npm publish` from a clean checkout, after `npm login`.
 
 npm requires an auth token to publish **even with no 2FA** on the account. One-time: create a **Granular Access Token** (npmjs.com -> Access Tokens) with **Packages and scopes = Read and write, "All packages"** (Organizations = No access; no org needed), then `npm config set //registry.npmjs.org/:_authToken=<TOKEN>`. (Classic "Automation" tokens also work where the account still offers them.)
+
+</details>
 
 ## License
 
