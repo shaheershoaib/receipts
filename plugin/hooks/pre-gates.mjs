@@ -42,6 +42,14 @@ import path from "node:path";
 // reads as a commit.
 const GIT_COMMIT = /(?:^|[;&|]|\n)\s*(?:[A-Za-z_][A-Za-z0-9_]*=(?:"[^"]*"|'[^']*'|\S+)\s+)*git\s+commit\b/;
 
+// The boundary regexes above treat "\n" as a command boundary, which is right for a
+// multi-line shell script and wrong for a HEREDOC: every line inside `cat > f <<'EOF' ... EOF`
+// starts after a newline, so a `git commit` written INTO a file (release notes, a runbook, a
+// test fixture) read as a commit being RUN and denied it. Strip heredoc bodies first - keep
+// the opener and terminator so the command still parses, drop only the data between them.
+const HEREDOC_BODY = /(<<-?\s*(['"]?)([A-Za-z_]\w*)\2[^\n]*\n)[\s\S]*?(\n[ \t]*\3[ \t]*)(?=\n|$)/g;
+const withoutHeredocBodies = (cmd) => String(cmd || "").replace(HEREDOC_BODY, "$1$4");
+
 // `receipts init` skipping the reachability interview. The interview is the ONLY source of
 // agent.drive (auth route, dev bypass, data realism, browser-only surfaces) - detection cannot
 // find any of it - and the answers are what let a gate refuse an "auth-walled, could not
@@ -412,11 +420,11 @@ async function main() {
     // --drive-* means the questions WERE put to a human and the answers are being relayed
     // (an agent cannot drive init's readline, so this is the supported path) - not a skip.
     const relayedAnswers = /--drive-(?:auth|bypass|data|browser-surfaces)\b/.test(command);
-    if (INIT_UNATTENDED.test(command) && !relayedAnswers && !ACK_TAG.test(command) && !process.env.CI &&
+    if (INIT_UNATTENDED.test(withoutHeredocBodies(command)) && !relayedAnswers && !ACK_TAG.test(command) && !process.env.CI &&
         tripwireMode(cfg, "init_unattended", "deny") === "deny") {
       deny(initUnattendedReason()); return;
     }
-    if (!GIT_COMMIT.test(command)) return;             // not a commit -> allow
+    if (!GIT_COMMIT.test(withoutHeredocBodies(command))) return;             // not a commit -> allow
     const commitMode = tripwireMode(cfg, "commit_unverified", "deny");
     const renderMode = tripwireMode(cfg, "render_unverified", "off");
     if (commitMode !== "deny" && renderMode !== "deny") return;   // nothing to enforce
