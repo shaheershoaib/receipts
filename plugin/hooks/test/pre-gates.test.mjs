@@ -109,6 +109,26 @@ test("a git commit embedded in a printf/echo string is DATA, not a commit (allow
   allows("Bash", { command: "printf 'next: git commit -m done\\n'" }, [PROD_EDIT]);
 });
 
+test("a git commit on its own line INSIDE a heredoc body is DATA, not a commit (allow)", () => {
+  // Every heredoc line starts after "\n", which the boundary regex treats as a command start.
+  // Writing a runbook that MENTIONS the command must not be denied as if it RAN it.
+  const cmd = "cat > notes.md <<'EOF'\nRemember to run:\ngit commit -m 'fix: x'\nEOF";
+  allows("Bash", { command: cmd }, [PROD_EDIT]);
+});
+
+test("a heredoc-fed script whose body contains a commit as a string is DATA (allow)", () => {
+  const cmd = "python3 - <<'PY'\ncmd = \"cd /x && git commit -m 'fix: y'\"\nprint(cmd)\nPY";
+  allows("Bash", { command: cmd }, [PROD_EDIT]);
+});
+
+test("a REAL commit that merely reads its message from a heredoc is still a commit (deny)", () => {
+  // `git commit -F -` is the command; the heredoc is only its message. Stripping the body
+  // must leave the opener in place so the command itself is still seen.
+  const cmd = "git commit -F - <<'EOF'\nfix: z\n\nbody\nEOF";
+  const reason = denies("Bash", { command: cmd }, [PROD_EDIT]);
+  assert.ok(reason, "commit -F - with a heredoc message must still be a commit");
+});
+
 test("a non-commit Bash command is allowed", () => {
   allows("Bash", { command: "git status" }, [PROD_EDIT]);
 });
