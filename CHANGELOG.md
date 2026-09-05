@@ -24,6 +24,10 @@
   was silent. Closes the KNOWN_KEYS item of #32. (#75)
 
 ### Changed
+- **The three hooks share one config resolver** (`plugin/hooks/lib/receipts-config.mjs`), and the
+  SessionStart hook reads the store path from the MCP server's own `store.mjs`, replacing four
+  copies of the same functions that G15 says drift; a test fails if a copy comes back. No behavior
+  change.
 - **G17's enforcement line no longer claims an executable detector.** Nothing reads
   `gates.G17.downgrade_threshold`; the spec says agent-judgment and names the store-backed tally as the
   next executable assist. The scorecard reads 8 executable / 4 hybrid / 8 agent-judgment; the spec stays

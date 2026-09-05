@@ -36,6 +36,7 @@ import os from "node:os";
 import path from "node:path";
 import crypto from "node:crypto";
 import readline from "node:readline";
+import { loadReceiptsConfig } from "./lib/receipts-config.mjs";
 
 // ---------------------------------------------------------------- shared matchers
 
@@ -81,42 +82,12 @@ const DOM_READ_TOOL = /read_page|get_page_text|javascript_tool|preview_snapshot|
 const escapeRe = (s) => String(s).replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
 
 // ------------------------------------------------------------------- config load
-
-function readConfigFile(p) {
-  // null if absent; {} if present-but-unreadable (signals "found" so the walk-up
-  // stops; fail-safe to generics, never crash).
-  try { return JSON.parse(fs.readFileSync(p, "utf8")); }
-  catch (e) { return e && e.code === "ENOENT" ? null : {}; }
-}
-
-function deepMerge(base, over) {
-  const out = { ...(base || {}) };
-  for (const [k, v] of Object.entries(over || {})) {
-    out[k] = v && typeof v === "object" && !Array.isArray(v) && out[k] && typeof out[k] === "object" && !Array.isArray(out[k])
-      ? deepMerge(out[k], v) : v;
-  }
-  return out;
-}
-
-function loadReceiptsConfig(start) {
-  // Agent-home as the base, nearest project config merged over - the split-repo
-  // topology (skills + session cwd separate from the code repos) works via the home layer.
-  // `found` = either layer exists, and it is the OPT-IN: a repo with no config anywhere gets
-  // no enforcement (the rule session-memory.mjs already follows). A plugin that blocks
-  // close-outs in every repo on the machine the moment it is installed gets uninstalled
-  // before anyone writes its config; the gate has to be asked for.
-  const homeRaw = readConfigFile(path.join(os.homedir(), ".claude", "receipts.config.json"));
-  let proj = null;
-  let d = path.resolve(start || ".");
-  for (let i = 0; i < 40; i++) {
-    const c = readConfigFile(path.join(d, "receipts.config.json"));
-    if (c !== null) { proj = c; break; }
-    const parent = path.dirname(d);
-    if (parent === d) break;
-    d = parent;
-  }
-  return { cfg: deepMerge(homeRaw || {}, proj || {}), found: homeRaw !== null || proj !== null };
-}
+//
+// loadReceiptsConfig (lib/receipts-config.mjs): agent-home as the base, nearest project config
+// merged over. `found` = either layer exists, and it is the OPT-IN: a repo with no config
+// anywhere gets no enforcement. A plugin that blocks close-outs in every repo on the machine
+// the moment it is installed gets uninstalled before anyone writes its config; the gate has to
+// be asked for.
 
 // "*.vercel.app" -> "\.vercel\.app" (glob prefix dropped, rest escaped as substring).
 function globToSubstr(g) {

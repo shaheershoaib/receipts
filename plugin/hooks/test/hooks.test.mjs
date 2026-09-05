@@ -360,3 +360,19 @@ test("#74: a query that names a STAGING host binds and observes: STAGING_DB_URL,
 test("#74: a DB observation plus a get_deployment binding satisfies the gate (the message's option b)", () => {
   silent([MERGE, tu("mcp__vercel__get_deployment", { id: "dpl_1" }), tu("mcp__mysql__mysql_query", { sql: "select 1" }), CLOSE_LINEAR]);
 });
+
+// ------------------------------------------- one config resolver, imported by every hook
+
+test("the hooks import config resolution from lib/receipts-config.mjs and carry no copy of it", () => {
+  // Three copies of loadReceiptsConfig agreed the day they were written; G15 says that is a
+  // coincidence with a shelf life. The lib is the one definition; a hook that grows its own
+  // again fails here.
+  for (const f of ["pre-gates.mjs", "stop-gates.mjs", "session-memory.mjs"]) {
+    const src = fs.readFileSync(path.join(HERE, "..", f), "utf8");
+    assert.match(src, /from "\.\/lib\/receipts-config\.mjs"/, `${f} imports the shared resolver`);
+    assert.doesNotMatch(src, /function (loadReceiptsConfig|loadConfig|deepMerge|readConfigFile)\b/, `${f} carries no local copy`);
+  }
+  const mem = fs.readFileSync(path.join(HERE, "..", "session-memory.mjs"), "utf8");
+  assert.match(mem, /from "\.\.\/mcp\/trajectory-kb\/store\.mjs"/, "session-memory reads the store path from the server's own module");
+  assert.doesNotMatch(mem, /function resolveStore\b/, "no local copy of resolveStore");
+});
