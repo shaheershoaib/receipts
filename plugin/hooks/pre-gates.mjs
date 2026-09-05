@@ -41,11 +41,20 @@ import readline from "node:readline";
 // keeping stop-gates byte-for-byte unchanged protects its test suite. Any drift here is
 // contained to the PreToolUse path.
 
-// `git commit` only at a command boundary (line/`;`/`&&`/`||`/`|` start, optional env
-// assignments before it), so a printf/echo/grep that CONTAINS "git commit" as data does not
-// match. Env-var prefixes (FOO=bar git commit) are skipped so an inline RECEIPTS_ACK=... still
-// reads as a commit.
-const GIT_COMMIT = /(?:^|[;&|]|\n)\s*(?:[A-Za-z_][A-Za-z0-9_]*=(?:"[^"]*"|'[^']*'|\S+)\s+)*git\s+commit\b/;
+// `git commit` only at a command boundary, so a printf/echo/grep that CONTAINS "git commit" as
+// data does not match. Env-var prefixes (FOO=bar git commit) are skipped so an inline
+// RECEIPTS_ACK=... still reads as a commit. A shell value is a run of quoted strings or bare
+// characters, so `-c user.name="A B"` reads as ONE value.
+const SH_VAL = `(?:"[^"]*"|'[^']*'|\\S)+`;
+const ENV_PREFIX = `(?:[A-Za-z_][A-Za-z0-9_]*=${SH_VAL}\\s+)*`;
+// A command boundary: line start, `;` `&` `|`, a newline - or the string handed to `sh -c`, which
+// is EXECUTED (a printf/heredoc body, by contrast, is data; see withoutHeredocBodies).
+const CMD_START = `(?:^|[;&|]|\\n|\\b(?:sh|bash|zsh|dash)\\s+-c\\s+["'])\\s*`;
+// git's global options sit BETWEEN `git` and its subcommand: -C <dir>, -c k=v, --no-pager,
+// --git-dir=<x>, --work-tree=<x>. `git -c user.name=... commit` is how a git-commit skill on one
+// machine wrote 520 of 933 real commits, and `git\s+commit` saw none of them (#73).
+const GIT_OPTS = `(?:\\s+(?:-[Cc]\\s+${SH_VAL}|--[A-Za-z][\\w-]*(?:=${SH_VAL})?|-p))*`;
+const GIT_COMMIT = new RegExp(`${CMD_START}${ENV_PREFIX}git${GIT_OPTS}\\s+commit\\b`);
 
 // The boundary regexes above treat "\n" as a command boundary, which is right for a
 // multi-line shell script and wrong for a HEREDOC: every line inside `cat > f <<'EOF' ... EOF`
@@ -133,6 +142,20 @@ const TEST_RUNNER_CMD_SRC = DEFAULT_TEST_CMD_SRC.filter((s) => !/receipts/.test(
 const ACK_TAG = /RECEIPTS_ACK\s*[:=]|RECEIPTS_TRIPWIRE\s*=\s*off|--no-verify-receipts\b/i;
 
 const escapeRe = (s) => String(s).replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+
+// A run FAILED. The runner's non-zero exit reaches the transcript as `is_error` on its
+// tool_result; when the shell masked the exit (`npm test | tail`) the runner's own failure line
+// is left. Strong tokens only: a line-start FAIL/FAILED (jest, pytest, go's `--- FAIL`), TAP's
+// `not ok`, a non-zero failure count in either order ("2 failed", node's "fail 2"), the cross
+// glyphs. A bare `Error:` or a test NAME that mentions FAIL mid-line is not a verdict.
+const RUN_FAILED = /(?:^|\n)\s*(?:--- )?FAIL(?:ED|URE)?\b|\bnot ok\b|(?:^|[\s(,:])[1-9]\d*\s+fail(?:ed|ing|ures?)\b|\bfail(?:ed|ures?)?\s*[:=]?\s+[1-9]\d*\b|[✕✗✘✖×]/i;
+
+// The target of a shell redirect (`> f`, `>> f`, the `cat > f <<` opener) - never `2>&1`,
+// `>&2`, `&>` or a process substitution, and only a path-looking token (a `.` or a `/`), so an
+// arrow in prose (`"a -> b"`) is not a write.
+const REDIRECT_TARGET = /(?<![<>&\d-])>{1,2}\s*(?![&>|(])(["']?)([^\s"'|;&<>()]*[./][^\s"'|;&<>()]*)\1/g;
+// Not source, whatever the extension: devices, temp dirs, the agent's own config, logs.
+const NOT_SOURCE_PATH = /^(?:\/dev\/|\/tmp\/|\/private\/tmp\/|\/var\/folders\/|\$\{?(?:TMPDIR|TMP|TEMP|RUNNER_TEMP)\b)|(?:^|\/)\.claude\/|\.(?:log|out)$/;
 
 // ------------------------------------------------------------------- config load (as stop-gates)
 
@@ -227,24 +250,31 @@ function walkEvents(obj, out, opts) {
     if (obj.type === "tool_use" && "name" in obj) {
       const name = String(obj.name || ""), input = obj.input ?? {};
       const cmd = name === "Bash" ? String(sget(input, "command") || "") : "";
-      out.push({ kind: "use", name, path: isEditTool(name) ? editedPath(input) : "", cmd });
-      if (opts.runners) {
-        // Remember which uses were test RUNS so their results can be told from everything else
-        // (a `cat`, an agent's report). Keyed by id when the transcript carries one; the last use
-        // is the fallback for a result that names none.
-        const runnerCmd = opts.testCmd.test(cmd) ? cmd : null;
-        if (obj.id != null) opts.runners.byId.set(String(obj.id), runnerCmd);
-        opts.runners.last = runnerCmd;
-      }
-    } else if (obj.type === "tool_result" && opts.fileRe) {
-      // Only RUNNER output is kept: prose that quotes a fail token never arms the referee.
+      // The edited path: an edit tool's file argument, or - for Bash - the first production
+      // path the command writes.
+      const path = isEditTool(name) ? editedPath(input) : name === "Bash" ? bashWrittenProdPath(cmd) : "";
+      out.push({ kind: "use", name, path, cmd });
+      // Remember which uses were test RUNS so their results can be told from everything else
+      // (a `cat`, an agent's report). Keyed by id when the transcript carries one; the last use
+      // is the fallback for a result that names none.
+      const runnerCmd = opts.testCmd.test(cmd) ? cmd : null;
+      if (obj.id != null) opts.runners.byId.set(String(obj.id), runnerCmd);
+      opts.runners.last = runnerCmd;
+    } else if (obj.type === "tool_result") {
+      // Only RUNNER output is kept: prose that quotes a fail token never arms the referee, and
+      // the commit tripwire reads a run's VERDICT from it (a failed run is not verification).
       const id = obj.tool_use_id != null ? String(obj.tool_use_id) : null;
       const cmd = id !== null && opts.runners.byId.has(id) ? opts.runners.byId.get(id) : opts.runners.last;
       if (id !== null) opts.runners.byId.delete(id);
       if (cmd) {
         const strings = [];
         walkStrings(obj.content, strings);
-        out.push({ kind: "result", cmd, lines: strings.join("\n").split("\n").filter((l) => opts.fileRe.test(l)) });
+        const text = strings.join("\n");
+        out.push({
+          kind: "result", cmd,
+          failed: obj.is_error === true || RUN_FAILED.test(text),
+          lines: opts.fileRe ? text.split("\n").filter((l) => opts.fileRe.test(l)) : [],
+        });
       }
     }
     for (const v of Object.values(obj)) walkEvents(v, out, opts);
@@ -261,43 +291,72 @@ const sget = (inp, key) => (inp && typeof inp === "object" && !Array.isArray(inp
 // The file path an edit-family tool touched (Edit/Write/MultiEdit and common MCP variants all
 // key it `file_path`; some use `path`/`filePath`). Returns "" when absent.
 function editedPath(inp) {
-  return String(sget(inp, "file_path") || sget(inp, "path") || sget(inp, "filePath") || "");
+  return String(sget(inp, "file_path") || sget(inp, "path") || sget(inp, "filePath") || sget(inp, "notebook_path") || "");
 }
-const isEditTool = (name) => /(?:^|_)(edit|write|multiedit)$/i.test(String(name || "")) ||
-  ["Edit", "Write", "MultiEdit"].includes(name);
+// Edit/Write/MultiEdit, NotebookEdit, and the MCP file tools (edit_file / write_file / create_file).
+const isEditTool = (name) => /(?:^|_)(?:edit|write|multiedit|create)(?:_?files?)?$|^notebookedit$/i.test(String(name || ""));
 
 const isProdSource = (p) => !!p && !TEST_PATH.test(p) && !DOC_OR_META.test(p);
+
+// The production path a Bash command WRITES, or "": the target of a redirect, of `sed -i`, or of
+// `tee`. Heredoc bodies are stripped first (a `>` inside one is data). Claude Code steers edits
+// through Bash in bypass-permissions mode, and none of these counted as an edit (#73).
+function bashWrittenProdPath(cmd) {
+  const text = withoutHeredocBodies(cmd);
+  const candidates = [];
+  let m;
+  REDIRECT_TARGET.lastIndex = 0;
+  while ((m = REDIRECT_TARGET.exec(text))) candidates.push(m[2]);
+  for (const seg of text.split(/[;&|]|\n/)) {
+    const s = seg.trim();
+    if (/^(?:\w+=\S+\s+)*sed\s+.*-i/.test(s)) candidates.push(s.split(/\s+/).pop());
+    const t = s.match(/^(?:\w+=\S+\s+)*tee\s+(?:-a\s+)?(["']?)([^\s"']+)\1/);
+    if (t) candidates.push(t[2]);
+  }
+  for (const raw of candidates) {
+    const p = String(raw || "").replace(/^["']|["']$/g, "");
+    if (p && !p.startsWith("-") && !NOT_SOURCE_PATH.test(p) && isProdSource(p)) return p;
+  }
+  return "";
+}
 const basename = (p) => String(p || "").split(/[\\/]/).pop() || "";
 
 // ------------------------------------------------------------------- tripwire 1: commit
 
-// Scan the events up to now: find the LAST production-source edit, and whether any test/receipt
-// COMMAND ran strictly AFTER it. The signal is the Bash command that was INVOKED (test_command
-// patterns) - matched on the command string, not on a runner's output text, which is format-
-// dependent and could false-allow from prose. Returns { editedFile } to deny, else null.
+// Scan the events up to now: find the LAST production-source edit, and whether a test/receipt
+// COMMAND ran after it AND passed. The run is the Bash command that was INVOKED (test_command
+// patterns); its verdict is read from its own tool_result (`is_error`, a failure line) - prose
+// that merely quotes a pass never clears anything. Returns { editedFile, runFailed } to deny,
+// else null.
 function commitTripwire(events, testCmd) {
   let lastProdEditIdx = -1, lastProdEditFile = "";
-  let testRanAfterEdit = false;
+  let verified = false, runFailed = false;
   events.forEach((e, i) => {
-    if (e.kind === "use" && isProdSource(e.path)) { lastProdEditIdx = i; lastProdEditFile = e.path; testRanAfterEdit = false; }
-    if (i > lastProdEditIdx && lastProdEditIdx >= 0 && e.kind === "use" && e.name === "Bash" && testCmd.test(e.cmd)) {
-      testRanAfterEdit = true;
-    }
+    if (e.kind === "use" && isProdSource(e.path)) { lastProdEditIdx = i; lastProdEditFile = e.path; verified = false; runFailed = false; }
+    if (lastProdEditIdx < 0) return;
+    // A run in the SAME command as the write (`sed -i ... && npm test`) exercised the edit too.
+    if (i >= lastProdEditIdx && e.kind === "use" && e.name === "Bash" && testCmd.test(e.cmd)) { verified = true; runFailed = false; }
+    // "Ran the tests" is not "the tests passed": a red run leaves the edit unverified (#73).
+    if (i > lastProdEditIdx && e.kind === "result" && e.failed) { verified = false; runFailed = true; }
   });
   if (lastProdEditIdx < 0) return null;        // nothing risky was edited this session
-  if (testRanAfterEdit) return null;           // the code was exercised after the edit
-  return { editedFile: lastProdEditFile };
+  if (verified) return null;                   // the code was exercised after the edit, and passed
+  return { editedFile: lastProdEditFile, runFailed };
 }
 
-function commitReason(editedFile) {
+function commitReason(hit) {
+  const gap = hit.runFailed
+    ? "was followed by a test run that FAILED - the code you changed was exercised and did not pass"
+    : "was NOT followed by any test or receipt command - nothing ran the code you changed";
   return (
     "TRIPWIRE (commit-without-verification): you are about to `git commit`, but the last " +
-    "production-source edit this session (" + (editedFile || "a source file") + ") was NOT " +
-    "followed by any test or receipt command - nothing ran the code you changed. A commit is a " +
-    "claim it works; per the Gates (G0/G9) that claim needs a red->green receipt, not a hopeful " +
-    "commit. Do ONE of:\n" +
-    "  - run the tests (e.g. `npm test` / `pytest` / `go test ...`) or `receipts observe ...`, " +
-    "then re-run the commit; or\n" +
+    "production-source edit this session (" + (hit.editedFile || "a source file") + ") " + gap +
+    ". A commit is a claim it works; per the Gates (G0/G9) that claim needs a red->green receipt, " +
+    "not a hopeful commit. Do ONE of:\n" +
+    (hit.runFailed
+      ? "  - fix the code until the tests pass (never the test - G11), then re-run the commit; or\n"
+      : "  - run the tests (e.g. `npm test` / `pytest` / `go test ...`) or `receipts observe ...`, " +
+        "then re-run the commit; or\n") +
     "  - if the tests genuinely do not apply (docs-only follow-up, WIP checkpoint you will verify " +
     "before the PR), re-run the commit carrying an EXPLICIT ack in the command: prepend " +
     "`RECEIPTS_ACK='<why no test>'` (e.g. `RECEIPTS_ACK='wip checkpoint, tests before PR' git commit ...`), " +
@@ -505,12 +564,13 @@ async function main() {
     if (ACK_TAG.test(command)) return;                 // one explicit escape covers both -> allow
     if (!tp) return;                                   // no transcript -> fail safe (allow)
     let events;
-    try { events = await parseTranscript(tp, { fileRe: null }); } catch { return; }
+    const testCmd = testCmdMatcher(cfg);
+    try { events = await parseTranscript(tp, { fileRe: null, testCmd }); } catch { return; }
     if (!events) return;
     if (commitMode !== "off") {                         // "nothing ran the code" - the fundamental miss
       let hit = null;
-      try { hit = commitTripwire(events, testCmdMatcher(cfg)); } catch { return; }
-      if (hit) { emit(commitMode, commitReason(hit.editedFile)); return; }
+      try { hit = commitTripwire(events, testCmd); } catch { return; }
+      if (hit) { emit(commitMode, commitReason(hit)); return; }
     }
     if (renderMode !== "off") {                         // verified, but data-only against a render edit
       let rhit = null;
@@ -551,7 +611,7 @@ async function main() {
 // safe = allow).
 async function parseTranscript(tp, opts) {
   const events = [];
-  if (opts.fileRe) opts.runners = { byId: new Map(), last: null }; // which uses were test runs
+  opts.runners = { byId: new Map(), last: null }; // which uses were test runs
   try {
     const rl = readline.createInterface({ input: fs.createReadStream(tp, { encoding: "utf8" }), crlfDelay: Infinity });
     for await (const line of rl) {
