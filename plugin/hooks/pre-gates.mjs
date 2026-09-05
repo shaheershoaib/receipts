@@ -226,16 +226,26 @@ function walkEvents(obj, out, opts) {
   if (obj && typeof obj === "object") {
     if (obj.type === "tool_use" && "name" in obj) {
       const name = String(obj.name || ""), input = obj.input ?? {};
-      out.push({
-        kind: "use", name,
-        path: isEditTool(name) ? editedPath(input) : "",
-        cmd: name === "Bash" ? String(sget(input, "command") || "") : "",
-      });
+      const cmd = name === "Bash" ? String(sget(input, "command") || "") : "";
+      out.push({ kind: "use", name, path: isEditTool(name) ? editedPath(input) : "", cmd });
+      if (opts.runners) {
+        // Remember which uses were test RUNS so their results can be told from everything else
+        // (a `cat`, an agent's report). Keyed by id when the transcript carries one; the last use
+        // is the fallback for a result that names none.
+        const runnerCmd = opts.testCmd.test(cmd) ? cmd : null;
+        if (obj.id != null) opts.runners.byId.set(String(obj.id), runnerCmd);
+        opts.runners.last = runnerCmd;
+      }
     } else if (obj.type === "tool_result" && opts.fileRe) {
-      const strings = [];
-      walkStrings(obj.content, strings);
-      const lines = strings.join("\n").split("\n").filter((l) => opts.fileRe.test(l));
-      if (lines.length) out.push({ kind: "result", lines });
+      // Only RUNNER output is kept: prose that quotes a fail token never arms the referee.
+      const id = obj.tool_use_id != null ? String(obj.tool_use_id) : null;
+      const cmd = id !== null && opts.runners.byId.has(id) ? opts.runners.byId.get(id) : opts.runners.last;
+      if (id !== null) opts.runners.byId.delete(id);
+      if (cmd) {
+        const strings = [];
+        walkStrings(obj.content, strings);
+        out.push({ kind: "result", cmd, lines: strings.join("\n").split("\n").filter((l) => opts.fileRe.test(l)) });
+      }
     }
     for (const v of Object.values(obj)) walkEvents(v, out, opts);
   }
@@ -342,17 +352,23 @@ function renderReason(editedFile) {
 
 // ------------------------------------------------------- tripwire 2: G11-live (edit the referee)
 
-// A test was seen FAILING in output, then the agent goes to EDIT that same test file with no
-// intervening passing run: the "weaken the referee to win" move. CONSERVATIVE - it fires only
-// when the edited test file's exact path (or, failing an absolute-path echo, its basename) is
-// named in a failing tool_result AND no later result shows that same file passing/green. When
-// unsure, allow.
+// A test RUN showed a file FAILING, then the agent goes to EDIT that same test file with no green
+// run since: the "weaken the referee to win" move. CONSERVATIVE - it fires only when the edited
+// test file's exact path (or, failing an absolute-path echo, its basename) is named on a failing
+// line of RUNNER output (the tool_result of a test command - prose that quotes a fail token, an
+// agent's own report, a `cat`, never arms it) AND no later run has shown it green. When unsure,
+// allow.
 //
-// Failing/passing signals are read from tool_result text (a runner's stdout lands there). We do
-// NOT try to fully parse every runner; we look for the file token co-located with a generic
-// FAIL/PASS token, which is enough to be conservative without false denies.
-const FAIL_TOKEN = /\b(FAIL|FAILED|failing|✕|✗|×|not ok|AssertionError|assert(?:ion)?\s+failed|Error:|✘)\b/;
-const PASS_TOKEN = /\b(PASS|PASSED|passing|✓|✔|ok\b|tests?\s+passed|0\s+fail(?:ing|ed|ures)?)\b/i;
+// Failing/passing signals are read from the runner's output. We do NOT try to fully parse every
+// runner; we look for the file token co-located with a generic FAIL/PASS token, which is enough
+// to be conservative without false denies. Word tokens keep their boundaries; the glyphs and
+// `Error:` cannot take one - `\b` needs a word character on one side, so `\b✕\b` never matched
+// and `\bError:\b` needed a letter right after the colon, and four of eight common runner lines
+// went unseen.
+const FAIL_TOKEN = /\b(?:FAIL(?:ED|URE|ING)?|failing|not ok|AssertionError|assert(?:ion)?\s+failed)\b|Error:|[✕✗✘✖×]/;
+const PASS_TOKEN = /\b(?:PASS(?:ED|ING)?|passing|ok|tests?\s+passed|0\s+fail(?:ing|ed|ures)?)\b|[✓✔]/i;
+// A runner command that names no test-file-looking argument ran the SUITE.
+const NAMES_A_TEST_FILE = /\S+\.(?:m?js|cjs|ts|tsx|jsx|py|rb|go|rs|java|kt|kts|cs|php|exs?|swift|dart|scala|feature|robot)\b/;
 
 // Match the file by its full path if the runner printed it, else by basename. Basename-only is
 // still conservative: it must appear in a result line that ALSO carries a fail token. The matcher
@@ -364,38 +380,52 @@ function fileMatcher(editedFile) {
 
 function g11LiveTripwire(events, editedFile) {
   if (!editedFile || !TEST_PATH.test(editedFile)) return null; // only guards edits to TEST files
-  let sawFailingForFile = false;
+  const base = basename(editedFile);
+  let armed = false;
   for (const e of events) {
-    if (e.kind !== "result") continue;
+    if (e.kind !== "result") continue; // runner output only - walkEvents kept nothing else
     // Line-scoped: the file token and a fail/pass token on the SAME line (a runner's per-file
     // status line), so an unrelated FAIL elsewhere in a long log does not bind to this file.
+    let fail = false, pass = false;
     for (const line of e.lines) {
-      if (FAIL_TOKEN.test(line)) sawFailingForFile = true;
-      else if (PASS_TOKEN.test(line)) sawFailingForFile = false; // an intervening green re-arms nothing
+      if (FAIL_TOKEN.test(line)) fail = true;
+      else if (PASS_TOKEN.test(line)) pass = true;
     }
+    if (fail) armed = true;
+    else if (pass) armed = false;
+    // A green re-run clears it even when the runner prints no per-file pass line (node --test's
+    // spec reporter names no files on success): a run that named this file, or ran the whole
+    // suite, and showed nothing failing for it. Before this the state was unclearable by any
+    // legitimate means for the rest of the session - which is what made bypassing it attractive.
+    // A run of some OTHER file says nothing about this one and clears nothing.
+    else if (armed && (e.cmd.includes(base) || !NAMES_A_TEST_FILE.test(e.cmd))) armed = false;
   }
-  if (!sawFailingForFile) return null;
-  return { editedFile };
+  return armed ? { editedFile } : null;
 }
 
 function g11Reason(editedFile) {
   return (
-    "TRIPWIRE (G11 referee integrity): a test in " + editedFile + " was seen FAILING earlier " +
-    "this session with no passing run since, and you are about to edit that test file. The Gates " +
+    "TRIPWIRE (G11 referee integrity): a test run earlier this session showed " + editedFile +
+    " FAILING, no run since has shown it green, and you are about to edit that test file. The Gates " +
     "G11: the suite is the referee - fix the CODE the test is catching, not the test. Do not " +
     "delete/skip/`.only`/loosen the assertion to turn it green; a green earned by weakening the " +
-    "referee proves nothing. If this test genuinely must change (a dead feature, a wrong " +
-    "expectation the reporter confirmed), proceed by carrying an EXPLICIT ack in the edit's " +
-    "content or via env: a `test-removal: <why>` note (the honest, reviewed removal) or " +
+    "referee proves nothing. If the code is already fixed, re-run the tests: a green run of this " +
+    "file or of the suite clears this. If this test genuinely must change (a dead feature, a wrong " +
+    "expectation the reporter confirmed), proceed by carrying an EXPLICIT ack in the content the " +
+    "edit WRITES: a `test-removal: <why>` note (the honest, reviewed removal) or " +
     "`RECEIPTS_ACK='<why the test itself is wrong>'`. The ack is greppable on purpose - an " +
     "honest, reviewable decision, never a quiet one."
   );
 }
 
-// The edit-family tools also carry the ack inline (the new content, the message, or an env-ish
-// string): let an ack in the edit's OWN payload clear the G11 tripwire, same escape as the commit.
+// The edit-family tools carry the ack inline, in the content the edit WRITES: Edit's new_string,
+// Write's content, MultiEdit's edits[].new_string. Never old_string - that is pre-edit text and
+// cannot express intent about the edit; a REMOVAL necessarily carries the deleted text there, so
+// reading it let an agent insert an ack, pass, then delete it and have the deletion cleared by the
+// very ack it was removing, leaving no ack in the diff (#49). The ack has to SURVIVE the edit.
 function editCarriesAck(inp) {
-  const bag = [sget(inp, "new_string"), sget(inp, "content"), sget(inp, "old_string")]
+  const edits = Array.isArray(sget(inp, "edits")) ? sget(inp, "edits") : [];
+  const bag = [sget(inp, "new_string"), sget(inp, "content"), ...edits.map((e) => (e && typeof e === "object" ? e.new_string : undefined))]
     .filter((s) => typeof s === "string").join("\n");
   return ACK_TAG.test(bag) || /test-removal\s*:/i.test(bag);
 }
@@ -501,7 +531,7 @@ async function main() {
     const fileRe = fileMatcher(file);
     if (!fileRe) return;
     let events;
-    try { events = await parseTranscript(tp, { fileRe }); } catch { return; }
+    try { events = await parseTranscript(tp, { fileRe, testCmd: testCmdMatcher(cfg) }); } catch { return; }
     if (!events) return;
     let hit = null;
     try { hit = g11LiveTripwire(events, file); } catch { return; }
@@ -518,6 +548,7 @@ async function main() {
 // safe = allow).
 async function parseTranscript(tp, opts) {
   const events = [];
+  if (opts.fileRe) opts.runners = { byId: new Map(), last: null }; // which uses were test runs
   try {
     const rl = readline.createInterface({ input: fs.createReadStream(tp, { encoding: "utf8" }), crlfDelay: Infinity });
     for await (const line of rl) {

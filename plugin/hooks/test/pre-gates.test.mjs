@@ -103,7 +103,7 @@ test("zero-config (no receipts.config.json anywhere): a commit after a productio
 
 test("zero-config: editing a test seen failing is ALLOWED (the G11-live referee is opt-in too)", () => {
   allows("Edit", { file_path: "src/pay.test.js", new_string: "x" },
-    [resultEntry("FAIL src/pay.test.js")], { projectConfig: null });
+    [useEntry("Bash", { command: "npm test" }), resultEntry("FAIL src/pay.test.js")], { projectConfig: null });
 });
 
 test("an agent-home config alone (no project config) turns the tripwires on", () => {
@@ -228,7 +228,7 @@ test("commit_unverified: warn lets the commit through and tells the agent what i
 });
 
 test("g11_live: default outside CI is ask, warn is advisory, deny is explicit", () => {
-  const failing = [resultEntry("FAIL src/pay.test.js")];
+  const failing = [useEntry("Bash", { command: "npm test" }), resultEntry("FAIL src/pay.test.js")];
   const edit = ["Edit", { file_path: "src/pay.test.js", new_string: "x" }];
   assert.match(asks(...edit, failing, { ci: null }), /G11/);
   assert.match(warns(...edit, failing, { projectConfig: { version: 1, agent: { tripwires: { g11_live: "warn" } } } }), /G11/);
@@ -293,53 +293,116 @@ test("only the LAST production edit matters: a test then a LATER unverified edit
 
 // ================================================================= G11-live referee tripwire
 
-test("editing a test seen FAILING (no green since) is DENIED with the G11 mandate", () => {
-  const reason = denies("Edit", { file_path: "src/pay.test.js", new_string: "expect(2).toBe(2)" },
-    [resultEntry("FAIL src/pay.test.js\n  expected 5 received 4")]);
+// A test RUN (the Bash command that invoked the runner) whose output then names the file failing.
+// Only runner output arms the tripwire - see "prose never binds" below.
+const RUN = useEntry("Bash", { command: "npm test" });
+const FAIL_PAY = [RUN, resultEntry("FAIL src/pay.test.js\n  expected 5 received 4")];
+const EDIT_PAY = ["Edit", { file_path: "src/pay.test.js", new_string: "x" }];
+
+test("editing a test a RUN just showed FAILING (no green since) is DENIED with the G11 mandate", () => {
+  const reason = denies("Edit", { file_path: "src/pay.test.js", new_string: "expect(2).toBe(2)" }, FAIL_PAY);
   assert.match(reason, /G11/);
   assert.match(reason, /fix the CODE/i);
   assert.match(reason, /test-removal|RECEIPTS_ACK/, "offers the explicit ack escape");
 });
 
 test("editing an UNRELATED test (never seen failing) is allowed (conservative)", () => {
-  allows("Edit", { file_path: "src/other.test.js", new_string: "x" },
-    [resultEntry("FAIL src/pay.test.js\n  expected 5 received 4")]);
+  allows("Edit", { file_path: "src/other.test.js", new_string: "x" }, FAIL_PAY);
 });
 
 test("editing a test that was failing but then PASSED (green since) is allowed", () => {
-  allows("Edit", { file_path: "src/pay.test.js", new_string: "x" }, [
-    resultEntry("FAIL src/pay.test.js"),
-    resultEntry("PASS src/pay.test.js\n  4 passing"),
-  ]);
+  allows(...EDIT_PAY, [...FAIL_PAY, RUN, resultEntry("PASS src/pay.test.js\n  4 passing")]);
 });
 
 test("editing a NON-test production file is never a G11-live concern (allow)", () => {
   // Even if the file appears in a failing log, the tripwire only guards edits to TEST files.
-  allows("Edit", { file_path: "src/pay.js", new_string: "x" },
-    [resultEntry("FAIL src/pay.js line 3")]);
+  allows("Edit", { file_path: "src/pay.js", new_string: "x" }, [RUN, resultEntry("FAIL src/pay.js line 3")]);
 });
 
 test("a Write to a failing test file with a test-removal ack is allowed", () => {
-  allows("Write", { file_path: "src/pay.test.js", content: "// test-removal: feature deleted in #123" },
-    [resultEntry("FAIL src/pay.test.js")]);
+  allows("Write", { file_path: "src/pay.test.js", content: "// test-removal: feature deleted in #123" }, FAIL_PAY);
 });
 
 test("a fail token that is NOT on the same line as the test file does not bind (conservative allow)", () => {
   // The file name and the FAIL token are on separate lines -> not a per-file status line.
-  allows("Edit", { file_path: "src/pay.test.js", new_string: "x" },
-    [resultEntry("Running src/pay.test.js\n... lots of setup ...\nSome unrelated module FAILED to load")]);
+  allows(...EDIT_PAY,
+    [RUN, resultEntry("Running src/pay.test.js\n... lots of setup ...\nSome unrelated module FAILED to load")]);
 });
 
 test("MultiEdit on a failing test file is guarded the same as Edit (DENY)", () => {
-  const reason = denies("MultiEdit", { file_path: "src/pay.test.js", edits: [{ old_string: "a", new_string: "b" }] },
-    [resultEntry("FAIL src/pay.test.js")]);
+  const reason = denies("MultiEdit", { file_path: "src/pay.test.js", edits: [{ old_string: "a", new_string: "b" }] }, FAIL_PAY);
   assert.match(reason, /G11/);
 });
 
 test("g11_live: off disables the referee tripwire (allow)", () => {
-  allows("Edit", { file_path: "src/pay.test.js", new_string: "x" },
-    [resultEntry("FAIL src/pay.test.js")],
-    { projectConfig: { version: 1, agent: { tripwires: { g11_live: "off" } } } });
+  allows(...EDIT_PAY, FAIL_PAY, { projectConfig: { version: 1, agent: { tripwires: { g11_live: "off" } } } });
+});
+
+// ---- what arms it: RUNNER output, in any runner's dialect ---------------------------------
+
+test("prose that names the file with a fail token is NOT runner output and does not arm (allow)", () => {
+  // The tripwire once bound to a prior agent's analysis ("FAIL src/pay.test.js probably means the
+  // fixture is stale") and stayed armed with no green run able to clear it - which is what made
+  // the #49 bypass attractive. Only the output of a test COMMAND counts.
+  allows(...EDIT_PAY, [resultEntry("Analysis: FAIL src/pay.test.js probably means the fixture is stale")]);
+  allows(...EDIT_PAY, [useEntry("Bash", { command: "cat notes.md" }), resultEntry("FAIL src/pay.test.js - see notes")]);
+});
+
+test("a result binds to the tool_use it answers (by id), not to whichever use came last", () => {
+  const withId = (e, id) => ({ ...e, message: { ...e.message, content: [{ ...e.message.content[0], id }] } });
+  const forId = (text, id) => ({ type: "user", message: { role: "user",
+    content: [{ type: "tool_result", tool_use_id: id, content: [{ type: "text", text }] }] } });
+  // Two calls in one turn: the runner and a `cat`. The runner's result (answering t1) arms...
+  denies(...EDIT_PAY, [withId(RUN, "t1"), withId(useEntry("Bash", { command: "cat notes.md" }), "t2"),
+    forId("FAIL src/pay.test.js", "t1")]);
+  // ...the cat's result (answering t2) does not, even though the runner was called first.
+  allows(...EDIT_PAY, [withId(RUN, "t1"), withId(useEntry("Bash", { command: "cat notes.md" }), "t2"),
+    forId("FAIL src/pay.test.js", "t2")]);
+});
+
+test("runner dialects: unicode markers and `Error:` on the file's line arm the tripwire", () => {
+  // `\b` cannot sit next to a non-word glyph, so `\b✕\b` never matched, and `\bError:\b` needed a
+  // word character right after the colon - four of eight common runner lines went unseen.
+  for (const line of [
+    "  ✕ src/pay.test.js > adds (12 ms)",       // vitest / jest
+    "✗ src/pay.test.js",                          // mocha-style
+    "× src/pay.test.js > adds",                   // vitest (windows glyph)
+    "✖ src/pay.test.js (1 failing)",              // node --test
+    "Error: expected 6 got 3 (src/pay.test.js)",  // stack-trace dialect
+    "not ok 1 - src/pay.test.js",                 // TAP
+    "FAILED src/pay.test.js::test_total - AssertionError", // pytest
+  ]) {
+    const d = runPre(...EDIT_PAY, [RUN, resultEntry(line)]);
+    assert.ok(d && d.hookSpecificOutput.permissionDecision === "deny", `expected "${line}" to arm the tripwire`);
+  }
+});
+
+test("a later GREEN run of the suite clears it, even when the runner prints no per-file pass line", () => {
+  // node --test's spec reporter names no files on success. The state was unclearable by
+  // legitimate means before this; a green re-run of the suite (or of the named file) clears it.
+  allows(...EDIT_PAY, [...FAIL_PAY, RUN, resultEntry("✔ 42 tests passed\n42 passing (1.2s)")]);
+  allows(...EDIT_PAY, [...FAIL_PAY, useEntry("Bash", { command: "npx jest src/pay.test.js" }), resultEntry("Tests: 4 passed, 4 total")]);
+});
+
+test("a later green run of an UNRELATED file does not clear it (deny)", () => {
+  denies(...EDIT_PAY, [...FAIL_PAY, useEntry("Bash", { command: "npx jest src/other.test.js" }),
+    resultEntry("PASS src/other.test.js")]);
+});
+
+// ---- the ack must SURVIVE the edit (#49) -------------------------------------------------
+
+test("#49: an ack that appears only in old_string does not clear the tripwire (insert, pass, remove)", () => {
+  // old_string is pre-edit text and cannot express intent about the edit; a REMOVAL necessarily
+  // carries the deleted text there, so reading it let an agent add an ack, pass, then delete it
+  // and have the deletion itself cleared by the ack it was deleting - no ack left in the diff.
+  const reason = denies("Edit", { file_path: "src/pay.test.js", old_string: "// RECEIPTS_ACK=temp", new_string: "" }, FAIL_PAY);
+  assert.match(reason, /G11/);
+});
+
+test("an ack in the NEW content clears it: Edit new_string, Write content, MultiEdit edits[].new_string", () => {
+  allows("Edit", { file_path: "src/pay.test.js", old_string: "a", new_string: "// RECEIPTS_ACK='dead feature #12'\nb" }, FAIL_PAY);
+  allows("Write", { file_path: "src/pay.test.js", content: "// test-removal: replaced by pay.e2e.test.js" }, FAIL_PAY);
+  allows("MultiEdit", { file_path: "src/pay.test.js", edits: [{ old_string: "a", new_string: "b" }, { old_string: "c", new_string: "// test-removal: dead\nd" }] }, FAIL_PAY);
 });
 
 // ================================================================= Stop-hook refire DAMPING
