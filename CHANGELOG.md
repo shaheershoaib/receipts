@@ -1,5 +1,71 @@
 # Changelog
 
+## Unreleased
+
+The spec stays `receipts/gates@1.5`; its scorecard now counts all twenty gates and G19 carries
+its receipt and enforcement lines.
+
+### Changed
+- **Enforcement is opt-in per repo.** The in-session tripwires and the Stop gate act only where a
+  `receipts.config.json` exists (the project walk-up or `~/.claude`), the rule the SessionStart
+  memory hook already followed. A fresh install used to deny a version-bump commit in every repo on
+  the machine and block `gh issue close` in a library repo for lacking deployed-build evidence. Only
+  the `receipts init --yes` guard runs without a config, because init is what writes it.
+  **BREAKING** for anyone who relied on zero-config enforcement: run `receipts init` in the repo, or
+  keep a `~/.claude/receipts.config.json` to opt in everywhere.
+- **Tripwires ask by default.** `agent.tripwires.*` accepts `deny | ask | warn | off`. `ask` raises
+  the user's permission prompt with the reason attached (even in auto mode); `warn` lets the action
+  through and tells the agent what it skipped via `additionalContext` (it used to be accepted and
+  ignored, PreToolUse having had no such channel). The default is `ask`, or `deny` when `CI` is set.
+- **`receipts init --yes` scaffolds a loop skill only on `--scaffold`**, and the interactive offer
+  defaults to No. The scaffolded skill's description repeated the `gates` trigger word for word, so
+  every bug was a coin flip between two skills; it now describes the trajectory touchpoints it owns.
+  **BREAKING** for `--yes` callers who relied on the scaffold. (#68)
+- **`AGENTS.md` gets a short block** (under 3 KB: the receipt rule, the honesty ladder, the tripwire
+  escapes, a pointer); the full G0-G19 adapter is written to `.receipts/gates.md`. `--no-agents`
+  skips both. (#68)
+- **The `gates` skill body is 9 KB, down from 23 KB**: the one-line-per-gate table, the receipt
+  rules, the honesty ladder and the tripwires stay in the body; the full mandates already lived in
+  `references/GATES.md`. The generated adapters shrink with it.
+- **README rewritten short**, demo first; the long-form moved to `docs/how-it-works.md` and
+  `docs/releasing.md`.
+
+### Fixed
+- **The hooks stream the transcript** instead of reading it whole: on a 166 MB session transcript
+  the Stop hook peaked at 854 MB RSS on every stop; it now peaks at 119 MB with identical decisions.
+- **The commit tripwire recognizes the project's own runner.** `receipts init` wrote `make test` as
+  the suite command and the tripwire then denied every commit that followed a `make test`. It now
+  reads `verify.test_command` / `suite_command` from the config, and the default list gains `make`,
+  the Gradle and Maven wrappers, bun, deno, rails/rake, `python -m unittest`, swift/flutter/dart, nx,
+  turbo, sbt, zig, cabal/stack, lein, elm-test, ava, karma, cypress, behave and robot.
+- **G11-live referee** (closes #49). Only runner output arms it - a `tool_result` of a test command,
+  bound to its `tool_use` by id - where any result that named the file next to a fail token did,
+  including a prior agent's prose. The fail regex now matches unicode markers and `Error: ...` (`\b`
+  cannot sit next to a glyph, so four of eight common runner lines went unseen). A green re-run of
+  the file or of the suite clears it even when the runner prints no per-file pass line, where the
+  state used to be unclearable for the rest of the session. And the ack must appear in the content
+  the edit WRITES: an ack in `old_string` cleared the check, so insert-then-remove bypassed it with
+  no ack left in the diff.
+- **`receipts init --print --yes` is a preview, not an unattended setup.** It writes nothing, yet
+  the tripwire denied it - the setup skill's own first step.
+- **The MCP bundle had drifted from its source since July**: `index.js` declared five tools and
+  `server.bundle.mjs` served four (`reopen_rate` missing) with CI green, because every test imported
+  the source. Rebuilt; a handshake test now compares the bundle's tool list with `index.js`. (#69)
+- **The spec version and the gate range agree everywhere they are stated**: the README said
+  `gates@1.4`, plugin.json `G0-G17`, marketplace.json `G0-G14`. A test pins all of them to
+  `spec/GATES.md`.
+- A `git commit` on its own line inside a heredoc body is data, not a commit; the tripwire no longer
+  denies writing a runbook that mentions the command. (#67)
+
+### Added
+- **CI installs the plugin the way a stranger does** (`scripts/plugin-install-smoke.sh`): from the
+  checkout as a marketplace into an isolated `CLAUDE_CONFIG_DIR`, reading back the registered
+  skills, hooks and MCP server and speaking the MCP handshake to the installed bundle. A
+  secret-gated step runs one real headless turn and asserts the SessionStart hook's output reached
+  the model. (#69)
+- `CONTRIBUTING.md`, issue templates (bug report, hook false positive) and a PR template that carries
+  the receipt line the enforcer reads.
+
 ## 0.5.2 - 2026-08-31
 
 ### Added

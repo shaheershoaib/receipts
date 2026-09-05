@@ -22,8 +22,8 @@ re-check), `agent-judgment` (carried by the agent adapter, no PR-side artifact),
 
 ## Enforcement scorecard
 
-Of the 19 gates: **8 executable** (G6, G7, G8, G9, G10, G11, G13, G14), **5 hybrid** (G0, G1,
-G3, G12, G17), **6 agent-judgment** (G2, G4, G5, G15, G16, G18). The roadmap's durability metric is moving gates
+Of the 20 gates: **8 executable** (G6, G7, G8, G9, G10, G11, G13, G14), **5 hybrid** (G0, G1,
+G3, G12, G17), **7 agent-judgment** (G2, G4, G5, G15, G16, G18, G19). The roadmap's durability metric is moving gates
 RIGHTWARD - from judgment to executable - because an executable gate a machine re-runs does
 not depend on which agent, or how careful an agent, produced the work; the wholly-judgment
 gates are the model-dependent surface, and shrinking that surface is how the standard stops
@@ -820,6 +820,12 @@ than a best-effort look around. A migration reconciles the whole table.
 **Scar.** A defect reported on one record was fixed on that record and closed. The same
 defect was re-reported four times from the same population, each time read as a new bug,
 because nothing had ever asked how many rows matched the predicate.
+
+**Receipt.** The predicate and its result over the whole population: zero matches after the fix,
+and the count before it (the blast radius) in the close-out.
+
+*Kind: target + verify (agent-side predicate; the receipt asserts the class is empty).*
+*Enforcement: agent-judgment today. The predicate is machine-runnable, so a `receipt-cmd:` that counts matches and expects zero is the natural executable assist; declaring the population stays with the agent.*
 
 
 ## The honesty ladder (when you cannot verify)

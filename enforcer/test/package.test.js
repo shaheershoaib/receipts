@@ -85,3 +85,33 @@ test("marketplace listing version tracks the plugin manifest", () => {
     "package.json version drifted from the plugin manifest - bump all three together"
   );
 });
+
+// The spec and the gate range are stated in five places that were all different at once:
+// README said gates@1.4 while the spec said 1.5; plugin.json said G0-G17, marketplace.json
+// G0-G14, the README table stopped at G14, and GATES.md shipped G19. Nothing derives them, so
+// this pins every statement to the one source of truth - spec/GATES.md - the same way the
+// versions above are pinned to the plugin manifest.
+test("the spec version and the gate range agree everywhere they are stated", () => {
+  const spec = fs.readFileSync(path.join(ROOT, "spec/GATES.md"), "utf8");
+  const specVersion = (spec.match(/Spec version: `receipts\/gates@(\d+\.\d+)`/) || [])[1];
+  assert.ok(specVersion, "spec/GATES.md must state its version as `receipts/gates@X.Y`");
+  const maxGate = Math.max(...[...spec.matchAll(/^## G(\d+)\b/gm)].map((m) => Number(m[1])));
+  assert.ok(maxGate >= 19, "expected at least G19 in spec/GATES.md");
+  const range = `G0-G${maxGate}`;
+
+  const readme = fs.readFileSync(path.join(ROOT, "README.md"), "utf8");
+  for (const v of readme.matchAll(/receipts\/gates@(\d+\.\d+)/g))
+    assert.equal(v[1], specVersion, `README cites receipts/gates@${v[1]} but spec/GATES.md is ${specVersion}`);
+  assert.ok(readme.includes(range), `README must name the full gate range ${range}`);
+
+  const plugin = readJson("plugin/.claude-plugin/plugin.json");
+  assert.ok(plugin.description.includes(range), `plugin.json description must say ${range}`);
+  const marketplace = readJson(".claude-plugin/marketplace.json");
+  assert.ok(marketplace.description.includes(range), `marketplace.json description must say ${range}`);
+  for (const p of marketplace.plugins)
+    assert.ok(p.description.includes(range), `marketplace plugin "${p.name}" description must say ${range}`);
+  // Any other range in a manifest is stale (a G0-G17 that survived a G19 spec).
+  for (const text of [plugin.description, marketplace.description, ...marketplace.plugins.map((p) => p.description)])
+    for (const m of text.matchAll(/G0-G(\d+)/g))
+      assert.equal(Number(m[1]), maxGate, `stale gate range G0-G${m[1]} in a manifest (spec has ${range})`);
+});
