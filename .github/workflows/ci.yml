@@ -61,3 +61,74 @@ jobs:
         with:
           node-version: '20'
       - uses: ./enforcer
+
+  plugin-install:
+    # Every job above drives the plugin's scripts directly - `node --test` on the hooks,
+    # the bench, the enforcer action. None of them ever asks Claude Code to LOAD the plugin,
+    # so a manifest it rejects, a skill dir it cannot see, a hooks.json it does not register,
+    # or an MCP bundle that launches but serves stale tools all pass CI and break on the
+    # first stranger's `claude plugin install`. (The bundle drifted from index.js for two
+    # months - four tools served, five declared - with every job green.) This is the one job
+    # that installs through Claude Code's own plugin manager, from this checkout as a
+    # marketplace, and reads back what registered: skills, hooks, MCP server, and the tools
+    # the INSTALLED bundle actually serves.
+    name: plugin install (as a stranger would)
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    env:
+      # Lifted into env so a STEP-level `if` can see whether the secret exists (a job-level
+      # `if` cannot read secrets; a step-level one can read env). Empty until the repo has it.
+      ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+      - name: Install Claude Code
+        run: npm install -g @anthropic-ai/claude-code
+      - name: Install the plugin through Claude Code's plugin manager and read back what registered
+        run: |
+          export CLAUDE_CONFIG_DIR="$RUNNER_TEMP/claude-config"
+          mkdir -p "$CLAUDE_CONFIG_DIR"
+          bash scripts/plugin-install-smoke.sh "$GITHUB_WORKSPACE"
+      # The smoke proves the plugin REGISTERS. Only a real turn proves a hook's output reaches
+      # the model: a SessionStart hook Claude Code runs but never injects would pass every check
+      # above. That needs an API key the repo has no secret for today, so the step is gated and
+      # announces the skip instead of passing silently.
+      - name: real session skipped (no ANTHROPIC_API_KEY secret)
+        if: ${{ env.ANTHROPIC_API_KEY == '' }}
+        run: echo "::notice::real-session step skipped - no ANTHROPIC_API_KEY secret"
+      - name: "real session: the SessionStart hook injects into a headless turn"
+        if: ${{ env.ANTHROPIC_API_KEY != '' }}
+        run: |
+          # A throwaway project whose receipts.config.json carries a sentinel auth route and the
+          # running plugin's version (read from the manifest, so the upgrade notice stays silent
+          # and the drive block is the only injected text). The hook fires on SessionStart; the
+          # model is asked to quote the sentinel back.
+          VERSION="$(node -p 'require(process.argv[1]).version' "$GITHUB_WORKSPACE/plugin/.claude-plugin/plugin.json")"
+          PROJ="$(mktemp -d "$RUNNER_TEMP/receipts-real-session.XXXXXX")"
+          node -e '
+            const [file, version] = process.argv.slice(1);
+            require("fs").writeFileSync(file, JSON.stringify({
+              version: 1,
+              agent: {
+                drive: { confirmed: true, auth: "SENTINEL-AUTH-ROUTE-7f3a", bypass: "", data: "", browser_surfaces: [] },
+                receipts_version: version,
+              },
+            }, null, 2) + "\n");
+          ' "$PROJ/receipts.config.json" "$VERSION"
+          cd "$PROJ"
+          # The smoke's config dir is NOT reused: the plugin is installed there, and --plugin-dir
+          # would load it a second time. The runner's default ~/.claude is fresh.
+          result="$(claude -p --plugin-dir "$GITHUB_WORKSPACE/plugin" --permission-mode dontAsk --max-turns 1 --output-format json \
+            "Quote verbatim every line of your context that contains the text SENTINEL-AUTH-ROUTE. If there is none, reply exactly: NONE")"
+          printf '%s\n' "$result"
+          printf '%s' "$result" | node -e '
+            const r = JSON.parse(require("fs").readFileSync(0, "utf8"));
+            const text = String(r.result ?? "");
+            if (!text.includes("SENTINEL-AUTH-ROUTE-7f3a")) {
+              console.error("FAIL: the SessionStart injection did not reach the model; it answered: " + JSON.stringify(text));
+              process.exit(1);
+            }
+            console.log("ok: SessionStart hook output reached the model in a real headless turn");
+          '
