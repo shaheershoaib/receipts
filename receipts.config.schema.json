@@ -446,18 +446,18 @@
         },
         "tripwires": {
           "type": "object",
-          "description": "In-session PreToolUse guards (the `pre-gates.mjs` hook) that fire AT the risky action, between the Stop-hook backstop and the CI enforcer. Each raises the weak-agent floor without waiting for a stop-cycle or a PR. All default to 'deny' with an EXPLICIT, greppable escape (an honesty tag in the command / edit - `RECEIPTS_ACK=<why>`, `RECEIPTS_TRIPWIRE=off`, `--no-verify-receipts`, or a `test-removal: <why>` note), never a silent skip. Ship generic; this only tunes THIS project.",
+          "description": "In-session PreToolUse guards (the `pre-gates.mjs` hook) that fire AT the risky action, between the Stop-hook backstop and the CI enforcer. Each raises the weak-agent floor without waiting for a stop-cycle or a PR. They run only where a receipts.config.json exists (project or agent-home) - enforcement is opt-in. Modes: 'deny' blocks; 'ask' raises the user's permission prompt with the reason (even in auto mode); 'warn' lets the action through and tells the agent what it skipped via additionalContext; 'off' disables. The agent-facing tripwires default to 'ask', or 'deny' when CI is set (nobody can be asked). Every block carries an EXPLICIT, greppable escape (an honesty tag in the command / edit - `RECEIPTS_ACK=<why>`, `RECEIPTS_TRIPWIRE=off`, `--no-verify-receipts`, or a `test-removal: <why>` note), never a silent skip. Ship generic; this only tunes THIS project.",
           "additionalProperties": false,
           "properties": {
             "commit_unverified": {
-              "enum": ["deny", "warn", "off"],
-              "description": "The commit-without-verification tripwire (Bash `git commit`): a commit that lands right after a production-source edit with NO test / receipt command run in between is denied - a commit is a claim it works (G0/G9). 'deny' (default): block with the escape instructions. 'off': disable. 'warn' is accepted but is a NO-OP at PreToolUse (there is no reliable agent-visible warn channel there) - use 'deny' to enforce or 'off' to disable.",
-              "default": "deny"
+              "enum": ["deny", "ask", "warn", "off"],
+              "description": "The commit-without-verification tripwire (Bash `git commit`): a commit that lands right after a production-source edit with NO test / receipt command run in between is stopped - a commit is a claim it works (G0/G9). The project's own verify.test_command / suite_command and a broad default runner list count as 'ran the code'. 'ask' (default outside CI): the human is prompted with the reason and may approve. 'deny' (default under CI): block with the escape instructions - the untrusted-agent posture. 'warn': allow, and tell the agent what it skipped. 'off': disable.",
+              "default": "ask"
             },
             "g11_live": {
-              "enum": ["deny", "warn", "off"],
-              "description": "The G11-live referee tripwire (Edit/Write/MultiEdit on a TEST file): editing a test that was seen FAILING earlier this session with no passing run since is the 'shoot the referee' move - fix the code, not the test (G11). 'deny' (default): block unless the edit carries a `test-removal: <why>` note or a `RECEIPTS_ACK`. 'off': disable. 'warn' is a NO-OP (see commit_unverified).",
-              "default": "deny"
+              "enum": ["deny", "ask", "warn", "off"],
+              "description": "The G11-live referee tripwire (Edit/Write/MultiEdit on a TEST file): editing a test that a test RUN just showed FAILING, with no green run since, is the 'shoot the referee' move - fix the code, not the test (G11). Only runner output (a tool_result of a test command) arms it, never prose; a later green run clears it. 'ask' (default outside CI) / 'deny' (default under CI) / 'warn' / 'off' as for commit_unverified. An edit whose NEW content carries a `test-removal: <why>` note or a `RECEIPTS_ACK` is the honest, reviewed way through.",
+              "default": "ask"
             },
             "test_command_patterns": {
               "type": "array",
@@ -465,13 +465,13 @@
               "description": "Extra regex patterns (matched against the Bash command string) that count as 'ran the code / produced a receipt' for the commit tripwire, on top of the generic defaults (npm/pnpm/yarn test, node --test, vitest/jest/mocha/playwright, pytest/tox/nox, go/cargo/mvn/gradle test, rspec, mix test, phpunit, dotnet test, receipts observe/verify, ...). Add a bespoke runner here, e.g. \"run-checks\\\\.sh\"."
             },
             "init_unattended": {
-              "enum": ["deny", "warn", "off"],
-              "description": "The unattended-setup tripwire (Bash `receipts init --yes`): --yes skips the reachability interview, whose four answers (auth route, dev bypass, data realism, browser-only surfaces) have no other source - detection cannot find them. An agent taking --yes answers them 'unknown' on the human's behalf, producing a config-shaped hole the gates exist to close. 'deny' (default): blocked unless CI is set or the command carries a RECEIPTS_ACK. 'warn' is a NO-OP (see commit_unverified).",
+              "enum": ["deny", "ask", "warn", "off"],
+              "description": "The unattended-setup tripwire (Bash `receipts init --yes`): --yes skips the reachability interview, whose four answers (auth route, dev bypass, data realism, browser-only surfaces) have no other source - detection cannot find them. An agent taking --yes answers them 'unknown' on the human's behalf, producing a config-shaped hole the gates exist to close. 'deny' (default): blocked unless CI is set, the command relays the answers (--drive-*), or it carries a RECEIPTS_ACK. This one runs even with no config present - it fires during the very setup that writes the config. 'ask' / 'warn' / 'off' as for commit_unverified.",
               "default": "deny"
             },
             "render_unverified": {
-              "enum": ["deny", "warn", "off"],
-              "description": "The producer-without-render-receipt tripwire (Bash `git commit`): after editing a render-feeding source, a commit whose only verification was a DATA read (a query / curl / data-form `receipts observe`) - never the RENDERED surface - is denied, because a value can exist in the data and be dropped by the render layer (G1 render-count parity, G4, G6). OPT-IN: inert unless render surfaces are declared (via gates.G6.render_twins[].surfaces or render_source_globs). 'off' (default): disabled. 'deny': enforce. 'warn' is a NO-OP (see commit_unverified).",
+              "enum": ["deny", "ask", "warn", "off"],
+              "description": "The producer-without-render-receipt tripwire (Bash `git commit`): after editing a render-feeding source, a commit whose only verification was a DATA read (a query / curl / data-form `receipts observe`) - never the RENDERED surface - is stopped, because a value can exist in the data and be dropped by the render layer (G1 render-count parity, G4, G6). OPT-IN: inert unless render surfaces are declared (via gates.G6.render_twins[].surfaces or render_source_globs). 'off' (default): disabled. 'deny' / 'ask' / 'warn' as for commit_unverified.",
               "default": "off"
             },
             "render_source_globs": {

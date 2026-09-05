@@ -23,8 +23,11 @@
  * all turns the tripwires off (enforcement is opt-in; only init_unattended runs regardless).
  *
  * Input:  PreToolUse JSON on stdin ({tool_name, tool_input, transcript_path, cwd, ...}).
- * Output: {"hookSpecificOutput":{"hookEventName":"PreToolUse","permissionDecision":"deny",
- *          "permissionDecisionReason":"..."}} to block; nothing (exit 0) to allow.
+ * Output: {"hookSpecificOutput":{"hookEventName":"PreToolUse","permissionDecision":"deny"|"ask",
+ *          "permissionDecisionReason":"..."}} to block or prompt; {"hookSpecificOutput":{...,
+ *          "additionalContext":"..."}} to warn (the action proceeds); nothing (exit 0) to allow.
+ *          Mode per tripwire under agent.tripwires: deny | ask | warn | off; the default is ask,
+ *          or deny under CI (see defaultMode).
  */
 import fs from "node:fs";
 import os from "node:os";
@@ -138,12 +141,17 @@ function loadReceiptsConfig(start) {
   return { cfg: deepMerge(homeRaw || {}, proj || {}), found: homeRaw !== null || proj !== null };
 }
 
-// One tripwire's mode, honoring `off`. Unknown values fall back to the default.
+// One tripwire's mode: deny | ask | warn | off. Unknown values fall back to the default.
 function tripwireMode(cfg, key, dflt) {
   const t = ((cfg.agent || {}).tripwires) || {};
   const v = String(t[key] || "").toLowerCase();
-  return v === "off" || v === "warn" || v === "deny" ? v : dflt;
+  return ["off", "warn", "ask", "deny"].includes(v) ? v : dflt;
 }
+// The default posture for the agent-facing tripwires: ASK when a human can be prompted (the hook's
+// `ask` decision raises the permission prompt even in auto mode, with the reason attached), DENY
+// where nobody can be asked - CI. A human approving a wip commit IS the honest note; a project
+// that wants the untrusted-agent posture everywhere pins `deny` explicitly.
+const defaultMode = () => (process.env.CI ? "deny" : "ask");
 function testCmdMatcher(cfg) {
   const t = ((cfg.agent || {}).tripwires) || {};
   const extra = (t.test_command_patterns || []).filter((p) => String(p || "").trim());
@@ -388,14 +396,15 @@ function initUnattendedReason() {
 
 // ------------------------------------------------------------------------- output helpers
 
-function deny(reason) {
-  process.stdout.write(JSON.stringify({
-    hookSpecificOutput: {
-      hookEventName: "PreToolUse",
-      permissionDecision: "deny",
-      permissionDecisionReason: reason,
-    },
-  }) + "\n");
+// The three shapes a tripwire can take. `deny` and `ask` are permission decisions (ask raises the
+// user prompt with the reason attached, even in auto mode). `warn` decides nothing: it rides along
+// as additionalContext, so the action proceeds and the agent is TOLD what it skipped - the channel
+// PreToolUse hooks gained after this file was first written with "warn is a no-op" baked in.
+function emit(mode, reason) {
+  const out = { hookEventName: "PreToolUse" };
+  if (mode === "warn") out.additionalContext = "receipts tripwire (advisory - the action went ahead): " + reason;
+  else { out.permissionDecision = mode; out.permissionDecisionReason = reason; }
+  process.stdout.write(JSON.stringify({ hookSpecificOutput: out }) + "\n");
 }
 
 // ------------------------------------------------------------------------- main
@@ -417,9 +426,8 @@ async function main() {
   const { cfg, found } = loadReceiptsConfig(payload.cwd);
 
   // ---- commit tripwires (Bash `git commit`) --------------------------------------------
-  // warn mode is an intentional no-op at PreToolUse (no reliable agent-visible warn channel);
-  // deny is the enforcing mode. commit-without-verification defaults deny; the render tripwire
-  // defaults off (opt-in: it needs the project to declare render surfaces).
+  // commit-without-verification defaults to ask (deny under CI, see defaultMode); the render
+  // tripwire defaults off (opt-in: it needs the project to declare render surfaces).
   if (toolName === "Bash") {
     const command = String(sget(toolInput, "command") || "");
     // Unattended init: checked BEFORE the commit early-return, which lets every non-commit
@@ -427,31 +435,32 @@ async function main() {
     // --drive-* means the questions WERE put to a human and the answers are being relayed
     // (an agent cannot drive init's readline, so this is the supported path) - not a skip.
     const relayedAnswers = /--drive-(?:auth|bypass|data|browser-surfaces)\b/.test(command);
+    const initMode = tripwireMode(cfg, "init_unattended", "deny");
     if (INIT_UNATTENDED.test(withoutHeredocBodies(command)) && !relayedAnswers && !ACK_TAG.test(command) && !process.env.CI &&
-        tripwireMode(cfg, "init_unattended", "deny") === "deny") {
-      deny(initUnattendedReason()); return;
+        initMode !== "off") {
+      emit(initMode, initUnattendedReason()); return;
     }
     if (!found) return;                                // not opted in (no config anywhere) -> allow
     if (!GIT_COMMIT.test(withoutHeredocBodies(command))) return;             // not a commit -> allow
-    const commitMode = tripwireMode(cfg, "commit_unverified", "deny");
+    const commitMode = tripwireMode(cfg, "commit_unverified", defaultMode());
     const renderMode = tripwireMode(cfg, "render_unverified", "off");
-    if (commitMode !== "deny" && renderMode !== "deny") return;   // nothing to enforce
+    if (commitMode === "off" && renderMode === "off") return;   // nothing to enforce
     if (ACK_TAG.test(command)) return;                 // one explicit escape covers both -> allow
     if (!tp) return;                                   // no transcript -> fail safe (allow)
     let events;
     try { events = await parseTranscript(tp, { fileRe: null }); } catch { return; }
     if (!events) return;
-    if (commitMode === "deny") {                        // "nothing ran the code" - the fundamental miss
+    if (commitMode !== "off") {                         // "nothing ran the code" - the fundamental miss
       let hit = null;
       try { hit = commitTripwire(events, testCmdMatcher(cfg)); } catch { return; }
-      if (hit) { deny(commitReason(hit.editedFile)); return; }
+      if (hit) { emit(commitMode, commitReason(hit.editedFile)); return; }
     }
-    if (renderMode === "deny") {                        // verified, but data-only against a render edit
+    if (renderMode !== "off") {                         // verified, but data-only against a render edit
       let rhit = null;
       try {
         rhit = renderTripwire(events, renderSourceMatcher(cfg), dataOnlyMatcher(), renderExercisedMatcher(cfg));
       } catch { return; }
-      if (rhit) { deny(renderReason(rhit.editedFile)); return; }
+      if (rhit) { emit(renderMode, renderReason(rhit.editedFile)); return; }
     }
     return;
   }
@@ -461,7 +470,7 @@ async function main() {
     if (!found) return;                                // not opted in (no config anywhere) -> allow
     const file = editedPath(toolInput);
     if (!file || !TEST_PATH.test(file)) return;        // only test-file edits are guarded
-    const mode = tripwireMode(cfg, "g11_live", "deny");
+    const mode = tripwireMode(cfg, "g11_live", defaultMode());
     if (mode === "off") return;
     if (editCarriesAck(toolInput)) return;             // explicit ack in the edit -> allow
     if (!tp) return;
@@ -472,7 +481,7 @@ async function main() {
     if (!events) return;
     let hit = null;
     try { hit = g11LiveTripwire(events, file); } catch { return; }
-    if (hit && mode === "deny") deny(g11Reason(hit.editedFile));
+    if (hit) emit(mode, g11Reason(hit.editedFile));
     return;
   }
   // any other tool -> allow (emit nothing)

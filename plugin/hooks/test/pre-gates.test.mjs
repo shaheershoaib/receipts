@@ -43,7 +43,10 @@ const userTurn = (text = "please continue") => ({
 // walk-up or agent-home), so the driver writes a minimal project config by default and the
 // fixtures exercise exactly what a configured repo gets (generic defaults, nothing tuned). Pass
 // `projectConfig: null` for the zero-config case, `homeConfig` for the agent-home layer.
-function runPre(toolName, toolInput, transcriptEntries, { projectConfig = { version: 1 }, homeConfig } = {}) {
+// The default MODE depends on whether a human can be prompted: `ask` outside CI, `deny` under it.
+// The driver pins CI=1 unless told otherwise, so the firing-condition tests below read as plain
+// denies whatever machine runs them; the mode tests pass `ci: null` to get the interactive default.
+function runPre(toolName, toolInput, transcriptEntries, { projectConfig = { version: 1 }, homeConfig, ci = "1" } = {}) {
   const td = fs.mkdtempSync(path.join(os.tmpdir(), "receipts-pre-"));
   const tp = path.join(td, "transcript.jsonl");
   fs.writeFileSync(tp, (transcriptEntries || []).map((e) => JSON.stringify(e)).join("\n") + "\n");
@@ -54,11 +57,11 @@ function runPre(toolName, toolInput, transcriptEntries, { projectConfig = { vers
     fs.mkdirSync(path.join(home, ".claude"), { recursive: true });
     fs.writeFileSync(path.join(home, ".claude", "receipts.config.json"), JSON.stringify(homeConfig));
   }
+  const env = { ...process.env, HOME: home, USERPROFILE: home };
+  delete env.CI;
+  if (ci) env.CI = ci;
   const stdin = JSON.stringify({ tool_name: toolName, tool_input: toolInput, transcript_path: tp, cwd: td });
-  const out = execFileSync("node", [PRE_HOOK], {
-    input: stdin, encoding: "utf8",
-    env: { ...process.env, HOME: home, USERPROFILE: home },
-  }).trim();
+  const out = execFileSync("node", [PRE_HOOK], { input: stdin, encoding: "utf8", env }).trim();
   return out ? JSON.parse(out) : null;
 }
 const denies = (name, inp, entries, opts) => {
@@ -70,6 +73,22 @@ const denies = (name, inp, entries, opts) => {
 };
 const allows = (name, inp, entries, opts) =>
   assert.equal(runPre(name, inp, entries, opts), null, "expected allow (no output), hook denied");
+const asks = (name, inp, entries, opts) => {
+  const d = runPre(name, inp, entries, opts);
+  assert.ok(d, "expected an ask decision, hook was silent");
+  assert.equal(d.hookSpecificOutput.permissionDecision, "ask");
+  return d.hookSpecificOutput.permissionDecisionReason;
+};
+// warn = the tool call proceeds (no permission decision at all) and the agent is TOLD, through
+// additionalContext, what it skipped - the channel PreToolUse hooks gained after this tripwire
+// was written with "warn is a no-op" baked in.
+const warns = (name, inp, entries, opts) => {
+  const d = runPre(name, inp, entries, opts);
+  assert.ok(d, "expected a warning, hook was silent");
+  assert.equal(d.hookSpecificOutput.permissionDecision, undefined, "warn must not decide the permission");
+  assert.ok(d.hookSpecificOutput.additionalContext, "warn carries additionalContext");
+  return d.hookSpecificOutput.additionalContext;
+};
 
 const PROD_EDIT = useEntry("Edit", { file_path: "src/pay.js", old_string: "a", new_string: "b" });
 
@@ -179,9 +198,41 @@ test("commit_unverified: off disables the commit tripwire (allow)", () => {
     { projectConfig: { version: 1, agent: { tripwires: { commit_unverified: "off" } } } });
 });
 
-test("commit_unverified: warn is a no-op at PreToolUse (allow - no reliable warn channel)", () => {
-  allows("Bash", { command: "git commit -m fix" }, [PROD_EDIT],
+// ============================================================ modes: deny / ask / warn / off
+
+test("default mode OUTSIDE CI is ask: the human is prompted with the tripwire's reason", () => {
+  // A human at the keyboard can approve a wip commit; only an unattended run has nobody to ask.
+  const reason = asks("Bash", { command: "git commit -m fix" }, [PROD_EDIT], { ci: null });
+  assert.match(reason, /commit-without-verification/);
+});
+
+test("default mode UNDER CI is deny (nobody can be asked)", () => {
+  denies("Bash", { command: "git commit -m fix" }, [PROD_EDIT], { ci: "true" });
+});
+
+test("commit_unverified: deny (explicit) denies even outside CI - the untrusted-agent posture", () => {
+  denies("Bash", { command: "git commit -m fix" }, [PROD_EDIT],
+    { ci: null, projectConfig: { version: 1, agent: { tripwires: { commit_unverified: "deny" } } } });
+});
+
+test("commit_unverified: ask (explicit) prompts even under CI", () => {
+  asks("Bash", { command: "git commit -m fix" }, [PROD_EDIT],
+    { projectConfig: { version: 1, agent: { tripwires: { commit_unverified: "ask" } } } });
+});
+
+test("commit_unverified: warn lets the commit through and tells the agent what it skipped", () => {
+  const ctx = warns("Bash", { command: "git commit -m fix" }, [PROD_EDIT],
     { projectConfig: { version: 1, agent: { tripwires: { commit_unverified: "warn" } } } });
+  assert.match(ctx, /commit-without-verification/);
+  assert.match(ctx, /src\/pay\.js/, "still names the unverified edit");
+});
+
+test("g11_live: default outside CI is ask, warn is advisory, deny is explicit", () => {
+  const failing = [resultEntry("FAIL src/pay.test.js")];
+  const edit = ["Edit", { file_path: "src/pay.test.js", new_string: "x" }];
+  assert.match(asks(...edit, failing, { ci: null }), /G11/);
+  assert.match(warns(...edit, failing, { projectConfig: { version: 1, agent: { tripwires: { g11_live: "warn" } } } }), /G11/);
+  denies(...edit, failing, { ci: null, projectConfig: { version: 1, agent: { tripwires: { g11_live: "deny" } } } });
 });
 
 test("a project-configured test_command_pattern counts as running the code (allow)", () => {
