@@ -25,7 +25,8 @@
  *
  * Project specifics come from receipts.config.json - the agent-home
  * (~/.claude/receipts.config.json) as the base, the nearest project config (walked up
- * from the session cwd) merged over it. Zero-config still works via generic defaults.
+ * from the session cwd) merged over it. A config with nothing tuned runs the generic
+ * defaults; NO config at all means the gate stands down entirely (enforcement is opt-in).
  *
  * Input: Stop-hook JSON on stdin ({transcript_path, cwd, stop_hook_active, ...}).
  * Output: {"decision":"block","reason":...} when a check fires; nothing otherwise.
@@ -87,8 +88,12 @@ function deepMerge(base, over) {
 function loadReceiptsConfig(start) {
   // Agent-home as the base, nearest project config merged over - the split-repo
   // topology (skills + session cwd separate from the code repos) works via the home layer.
-  const home = readConfigFile(path.join(os.homedir(), ".claude", "receipts.config.json")) || {};
-  let proj = {};
+  // `found` = either layer exists, and it is the OPT-IN: a repo with no config anywhere gets
+  // no enforcement (the rule session-memory.mjs already follows). A plugin that blocks
+  // close-outs in every repo on the machine the moment it is installed gets uninstalled
+  // before anyone writes its config; the gate has to be asked for.
+  const homeRaw = readConfigFile(path.join(os.homedir(), ".claude", "receipts.config.json"));
+  let proj = null;
   let d = path.resolve(start || ".");
   for (let i = 0; i < 40; i++) {
     const c = readConfigFile(path.join(d, "receipts.config.json"));
@@ -97,7 +102,7 @@ function loadReceiptsConfig(start) {
     if (parent === d) break;
     d = parent;
   }
-  return deepMerge(home, proj);
+  return { cfg: deepMerge(homeRaw || {}, proj || {}), found: homeRaw !== null || proj !== null };
 }
 
 // "*.vercel.app" -> "\.vercel\.app" (glob prefix dropped, rest escaped as substring).
@@ -598,7 +603,8 @@ async function main() {
   const tp = payload.transcript_path;
   if (!tp) return;
 
-  const cfg = loadReceiptsConfig(payload.cwd);
+  const { cfg, found } = loadReceiptsConfig(payload.cwd);
+  if (!found) return; // not opted in: no receipts.config.json anywhere (see loadReceiptsConfig)
   const m = makeMatchers(cfg);
 
   // ONE STREAMING pass over the transcript feeds every check: tool_uses (classified into `seq`,

@@ -19,7 +19,8 @@
  *
  * Project specifics come from receipts.config.json (agent-home base, nearest project config
  * merged over) - the SAME resolution stop-gates uses. Tripwire behavior + patterns live under
- * `agent.tripwires`; zero-config works via generic defaults.
+ * `agent.tripwires`; a config with nothing tuned runs the generic defaults, and NO config at
+ * all turns the tripwires off (enforcement is opt-in; only init_unattended runs regardless).
  *
  * Input:  PreToolUse JSON on stdin ({tool_name, tool_input, transcript_path, cwd, ...}).
  * Output: {"hookSpecificOutput":{"hookEventName":"PreToolUse","permissionDecision":"deny",
@@ -120,9 +121,12 @@ function deepMerge(base, over) {
   }
   return out;
 }
+// `found` = a config exists in either layer. It is the OPT-IN for every tripwire but
+// init_unattended (which fires during the very setup that writes the config): a repo with no
+// receipts.config.json anywhere gets no enforcement, the same rule session-memory.mjs follows.
 function loadReceiptsConfig(start) {
-  const home = readConfigFile(path.join(os.homedir(), ".claude", "receipts.config.json")) || {};
-  let proj = {};
+  const homeRaw = readConfigFile(path.join(os.homedir(), ".claude", "receipts.config.json"));
+  let proj = null;
   let d = path.resolve(start || ".");
   for (let i = 0; i < 40; i++) {
     const c = readConfigFile(path.join(d, "receipts.config.json"));
@@ -131,7 +135,7 @@ function loadReceiptsConfig(start) {
     if (parent === d) break;
     d = parent;
   }
-  return deepMerge(home, proj);
+  return { cfg: deepMerge(homeRaw || {}, proj || {}), found: homeRaw !== null || proj !== null };
 }
 
 // One tripwire's mode, honoring `off`. Unknown values fall back to the default.
@@ -410,7 +414,7 @@ async function main() {
   const toolInput = payload.tool_input ?? {};
   const tp = payload.transcript_path;
 
-  const cfg = loadReceiptsConfig(payload.cwd);
+  const { cfg, found } = loadReceiptsConfig(payload.cwd);
 
   // ---- commit tripwires (Bash `git commit`) --------------------------------------------
   // warn mode is an intentional no-op at PreToolUse (no reliable agent-visible warn channel);
@@ -427,6 +431,7 @@ async function main() {
         tripwireMode(cfg, "init_unattended", "deny") === "deny") {
       deny(initUnattendedReason()); return;
     }
+    if (!found) return;                                // not opted in (no config anywhere) -> allow
     if (!GIT_COMMIT.test(withoutHeredocBodies(command))) return;             // not a commit -> allow
     const commitMode = tripwireMode(cfg, "commit_unverified", "deny");
     const renderMode = tripwireMode(cfg, "render_unverified", "off");
@@ -453,6 +458,7 @@ async function main() {
 
   // ---- G11-live tripwire (Edit/Write/MultiEdit on a test file) --------------------------
   if (isEditTool(toolName)) {
+    if (!found) return;                                // not opted in (no config anywhere) -> allow
     const file = editedPath(toolInput);
     if (!file || !TEST_PATH.test(file)) return;        // only test-file edits are guarded
     const mode = tripwireMode(cfg, "g11_live", "deny");

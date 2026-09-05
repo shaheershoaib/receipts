@@ -39,13 +39,21 @@ const userTurn = (text = "please continue") => ({
 // --- PreToolUse driver -----------------------------------------------------------------------
 // Writes the transcript, drives pre-gates.mjs over stdin with {tool_name, tool_input, ...}.
 // Returns the parsed decision object, or null when the hook allowed (emitted nothing).
-function runPre(toolName, toolInput, transcriptEntries, { projectConfig } = {}) {
+// Enforcement is OPT-IN: the tripwires act only where a receipts.config.json exists (project
+// walk-up or agent-home), so the driver writes a minimal project config by default and the
+// fixtures exercise exactly what a configured repo gets (generic defaults, nothing tuned). Pass
+// `projectConfig: null` for the zero-config case, `homeConfig` for the agent-home layer.
+function runPre(toolName, toolInput, transcriptEntries, { projectConfig = { version: 1 }, homeConfig } = {}) {
   const td = fs.mkdtempSync(path.join(os.tmpdir(), "receipts-pre-"));
   const tp = path.join(td, "transcript.jsonl");
   fs.writeFileSync(tp, (transcriptEntries || []).map((e) => JSON.stringify(e)).join("\n") + "\n");
   const home = path.join(td, "home");
   fs.mkdirSync(home, { recursive: true });
   if (projectConfig) fs.writeFileSync(path.join(td, "receipts.config.json"), JSON.stringify(projectConfig));
+  if (homeConfig) {
+    fs.mkdirSync(path.join(home, ".claude"), { recursive: true });
+    fs.writeFileSync(path.join(home, ".claude", "receipts.config.json"), JSON.stringify(homeConfig));
+  }
   const stdin = JSON.stringify({ tool_name: toolName, tool_input: toolInput, transcript_path: tp, cwd: td });
   const out = execFileSync("node", [PRE_HOOK], {
     input: stdin, encoding: "utf8",
@@ -64,6 +72,28 @@ const allows = (name, inp, entries, opts) =>
   assert.equal(runPre(name, inp, entries, opts), null, "expected allow (no output), hook denied");
 
 const PROD_EDIT = useEntry("Edit", { file_path: "src/pay.js", old_string: "a", new_string: "b" });
+
+// ============================================================ opt-in: the tripwires need a config
+
+test("zero-config (no receipts.config.json anywhere): a commit after a production edit is ALLOWED", () => {
+  // Enforcement is opt-in by config, the rule the SessionStart memory hook already follows: a repo
+  // that never ran `receipts init` gets zero behavior change from installing the plugin. Before
+  // this, a fresh install denied a version-bump commit in every unrelated repo on the machine.
+  allows("Bash", { command: "git commit -m 'fix pay'" }, [PROD_EDIT], { projectConfig: null });
+});
+
+test("zero-config: editing a test seen failing is ALLOWED (the G11-live referee is opt-in too)", () => {
+  allows("Edit", { file_path: "src/pay.test.js", new_string: "x" },
+    [resultEntry("FAIL src/pay.test.js")], { projectConfig: null });
+});
+
+test("an agent-home config alone (no project config) turns the tripwires on", () => {
+  // The split topology: skills + session cwd in one place, code repos elsewhere. The home layer
+  // is the deliberate opt-in for every repo on the machine.
+  const reason = denies("Bash", { command: "git commit -m fix" }, [PROD_EDIT],
+    { projectConfig: null, homeConfig: { version: 1 } });
+  assert.match(reason, /commit-without-verification/);
+});
 
 // ============================================================ commit-without-verification tripwire
 
@@ -231,6 +261,7 @@ function makeStopSession() {
   const tp = path.join(td, "transcript.jsonl");
   const home = path.join(td, "home");
   fs.mkdirSync(home, { recursive: true });
+  fs.writeFileSync(path.join(td, "receipts.config.json"), JSON.stringify({ version: 1 })); // opted in
   const entries = [];
   const flush = () => fs.writeFileSync(tp, entries.map((e) => JSON.stringify(e)).join("\n") + "\n");
   return {
@@ -308,6 +339,7 @@ test("damping: state-file unwritable -> fail-open to blocking (never a lost gate
   const home = path.join(td, "home");
   fs.mkdirSync(home, { recursive: true });
   fs.writeFileSync(tp, JSON.stringify(CLOSEOUT) + "\n");
+  fs.writeFileSync(path.join(td, "receipts.config.json"), JSON.stringify({ version: 1 })); // opted in
   const roTmp = path.join(td, "ro-tmp");
   fs.mkdirSync(roTmp);
   fs.chmodSync(roTmp, 0o500); // read+execute, no write

@@ -21,13 +21,21 @@ const HOOK = path.join(HERE, "..", "stop-gates.mjs");
 
 const tu = (name, inp = {}) => ({ type: "tool_use", name, input: inp });
 
-function runHook(events, { projectConfig } = {}) {
+// Enforcement is OPT-IN: the gate acts only where a receipts.config.json exists (project walk-up
+// or agent-home), so the driver writes a minimal project config by default and the fixtures
+// exercise exactly what a configured repo gets (generic defaults, nothing tuned). Pass
+// `projectConfig: null` for the zero-config case, `homeConfig` for the agent-home layer.
+function runHook(events, { projectConfig = { version: 1 }, homeConfig } = {}) {
   const td = fs.mkdtempSync(path.join(os.tmpdir(), "receipts-hook-"));
   const tp = path.join(td, "transcript.jsonl");
   fs.writeFileSync(tp, events.map((e) => JSON.stringify(e)).join("\n") + "\n");
   const home = path.join(td, "home");
-  fs.mkdirSync(home, { recursive: true }); // empty -> generic defaults
+  fs.mkdirSync(home, { recursive: true });
   if (projectConfig) fs.writeFileSync(path.join(td, "receipts.config.json"), JSON.stringify(projectConfig));
+  if (homeConfig) {
+    fs.mkdirSync(path.join(home, ".claude"), { recursive: true });
+    fs.writeFileSync(path.join(home, ".claude", "receipts.config.json"), JSON.stringify(homeConfig));
+  }
   const stdin = JSON.stringify({ transcript_path: tp, cwd: td, stop_hook_active: false });
   const out = execFileSync("node", [HOOK], {
     input: stdin, encoding: "utf8",
@@ -135,6 +143,20 @@ test("a library config (sha_source: none) stands the deployed-build gate down", 
   );
 });
 
+// ------------------------------------------------------ opt-in: the gate needs a config
+
+test("zero-config (no receipts.config.json anywhere): an unverified close-out is NOT blocked", () => {
+  // Installing the plugin must change nothing in a repo that never opted in - the rule the
+  // SessionStart memory hook already follows. Before this, a fresh install blocked `gh issue
+  // close` in every library repo on the machine for lacking deployed-build evidence.
+  silent([MERGE, tu("mcp__linear__update_issue", { state: "Done" })], { projectConfig: null });
+});
+
+test("an agent-home config alone turns the gate on for every repo (the split topology)", () => {
+  blocks([MERGE, tu("mcp__linear__update_issue", { state: "Done" })],
+    { projectConfig: null, homeConfig: { version: 1 } });
+});
+
 // ------------------------------------------------------------- trajectory reminder
 
 test("a loop close-out without an append gets the trajectory nudge (combined output)", () => {
@@ -172,6 +194,7 @@ test("stop_hook_active short-circuits (never loop)", () => {
   const td = fs.mkdtempSync(path.join(os.tmpdir(), "receipts-hook-"));
   const tp = path.join(td, "t.jsonl");
   fs.writeFileSync(tp, JSON.stringify(tu("mcp__linear__update_issue", { state: "Done" })) + "\n");
+  fs.writeFileSync(path.join(td, "receipts.config.json"), JSON.stringify({ version: 1 })); // opted in
   const out = execFileSync("node", [HOOK], {
     input: JSON.stringify({ transcript_path: tp, cwd: td, stop_hook_active: true }),
     encoding: "utf8",
