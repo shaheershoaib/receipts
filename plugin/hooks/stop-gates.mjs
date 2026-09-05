@@ -34,6 +34,7 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import crypto from "node:crypto";
+import readline from "node:readline";
 
 // ---------------------------------------------------------------- shared matchers
 
@@ -120,11 +121,15 @@ function gateOn(gates, gid) {
 
 // -------------------------------------------------------------- transcript parse
 
-function walkToolUses(obj, out) {
-  if (Array.isArray(obj)) { for (const v of obj) walkToolUses(v, out); return; }
+// Each tool_use is CLASSIFIED as it is met and only the compact verdict is kept, never the input
+// object: a long session's transcript holds tens of thousands of tool_uses whose inputs (whole
+// files written through Write, multi-KB Edit strings) are exactly what a hook that streams the
+// file must not accumulate (see main()).
+function walkToolUses(obj, out, classify) {
+  if (Array.isArray(obj)) { for (const v of obj) walkToolUses(v, out, classify); return; }
   if (obj && typeof obj === "object") {
-    if (obj.type === "tool_use" && "name" in obj) out.push([String(obj.name || ""), obj.input ?? {}]);
-    for (const v of Object.values(obj)) walkToolUses(v, out);
+    if (obj.type === "tool_use" && "name" in obj) out.push(classify(String(obj.name || ""), obj.input ?? {}));
+    for (const v of Object.values(obj)) walkToolUses(v, out, classify);
   }
 }
 
@@ -311,7 +316,7 @@ function driveClause(cfg) {
   return "";
 }
 
-function verificationGate(seq, cfg, m, liveIdxs) {
+function verificationGate(seq, cfg, liveIdxs) {
   // Stand down when THIS repo has no URL-deployed build to observe: an explicit
   // library/CLI/artifact build block, or G1/G3 disabled. A config with NO build block
   // (an agent-home) keeps enforcing - the split topology's code repos deploy elsewhere.
@@ -327,14 +332,11 @@ function verificationGate(seq, cfg, m, liveIdxs) {
   let lastCloseout = -1;
   let lastCloseoutDowngraded = false;
   const mergeIdxs = [], bindingIdxs = [], obsIdxs = [];
-  seq.forEach(([name, inp], i) => {
-    if (isMerge(name, inp)) mergeIdxs.push(i);
-    if (isDeployBinding(name, inp, m)) bindingIdxs.push(i);
-    if (isObservation(name, inp, m)) obsIdxs.push(i);
-    if (isFixedCloseout(name, inp, m)) {
-      lastCloseout = i;
-      lastCloseoutDowngraded = m.downgrade.test(txt(inp));
-    }
+  seq.forEach((e, i) => {
+    if (e.merge) mergeIdxs.push(i);
+    if (e.binding) bindingIdxs.push(i);
+    if (e.obs) obsIdxs.push(i);
+    if (e.closeout) { lastCloseout = i; lastCloseoutDowngraded = e.downgraded; }
   });
 
   if (lastCloseout < 0) return null; // nothing was claimed fixed this session
@@ -431,31 +433,12 @@ function exitDispositionRe(tags) {
   return alts.length ? new RegExp(alts.join("|"), "i") : /(?!x)x/;
 }
 
-function trajectoryReminder(seq, cfg, m) {
-  const agent = cfg.agent || {};
-  const claim = cfg.claim || {};
-  const loops = agent.loop_skills || DEFAULT_LOOP_SKILLS;
-  const exitRe = exitDispositionRe([...(claim.downgrade_tags || ["unverified-reasoned", "speculative", "reverted"]), "won't fix"]);
-
-  const isLoop = (name, inp) => name === "Skill" && loops.includes(sget(inp, "skill"));
-  const isCloseout = (name, inp) => {
-    const n = name.toLowerCase();
-    if (n.includes("merge_pull_request")) return true;
-    if (name === "Bash" && GH_MERGE.test(String(sget(inp, "command") || ""))) return true;
-    if (name === "Bash" && GH_ISSUE_CLOSE.test(String(sget(inp, "command") || ""))) return true;
-    if (TRACKER_WRITE.test(name || "")) {
-      if (TRACKER_CLOSE.test(name || "")) return true;
-      const s = txt(inp);
-      return m.statusValue.test(s) || exitRe.test(s) || CLOSEOUT_STATUS.test(s);
-    }
-    return false;
-  };
-
+function trajectoryReminder(seq) {
   let loopSeen = false, lastCloseout = -1, lastAppend = -1;
-  seq.forEach(([name, inp], i) => {
-    if (isLoop(name, inp)) loopSeen = true;
-    if (isCloseout(name, inp)) lastCloseout = i;
-    if (name.toLowerCase().includes("append_trajectory")) lastAppend = i;
+  seq.forEach((e, i) => {
+    if (e.loop) loopSeen = true;
+    if (e.loopExit) lastCloseout = i;
+    if (e.append) lastAppend = i;
   });
 
   if (!(loopSeen && lastCloseout >= 0 && lastAppend < lastCloseout)) return null;
@@ -471,6 +454,49 @@ function trajectoryReminder(seq, cfg, m) {
     "wall) - OR briefly state why it does not apply (e.g. the loop is genuinely " +
     "mid-flight and paused, not exited). Then stop."
   );
+}
+
+// ------------------------------------------------------------ per-tool-use classification
+//
+// One compact record per tool_use, computed once as the transcript streams past. Every downstream
+// check - the verification gate, the trajectory reminder, the damping signature - reads these
+// flags instead of re-deriving them from the raw input, which the record deliberately does not
+// keep. `body` (the serialized input, capped) survives ONLY for a close-out, because the damping
+// signature hashes it.
+function makeClassifier(cfg, m) {
+  const agent = cfg.agent || {};
+  const claim = cfg.claim || {};
+  const loops = agent.loop_skills || DEFAULT_LOOP_SKILLS;
+  const exitRe = exitDispositionRe([...(claim.downgrade_tags || ["unverified-reasoned", "speculative", "reverted"]), "won't fix"]);
+  // A loop EXIT for the trajectory reminder: a merge, an issue close, or a tracker write that
+  // sets a fixed status OR carries an exit disposition (a downgrade tag, won't fix).
+  const isLoopExit = (name, inp) => {
+    const n = name.toLowerCase();
+    if (n.includes("merge_pull_request")) return true;
+    if (name === "Bash" && GH_MERGE.test(String(sget(inp, "command") || ""))) return true;
+    if (name === "Bash" && GH_ISSUE_CLOSE.test(String(sget(inp, "command") || ""))) return true;
+    if (TRACKER_WRITE.test(name || "")) {
+      if (TRACKER_CLOSE.test(name || "")) return true;
+      const s = txt(inp);
+      return m.statusValue.test(s) || exitRe.test(s) || CLOSEOUT_STATUS.test(s);
+    }
+    return false;
+  };
+  return (name, inp) => {
+    const closeout = isFixedCloseout(name, inp, m);
+    return {
+      name,
+      merge: isMerge(name, inp),
+      binding: isDeployBinding(name, inp, m),
+      obs: isObservation(name, inp, m),
+      closeout,
+      downgraded: closeout && m.downgrade.test(txt(inp)),
+      body: closeout ? txt(inp).slice(0, 4000) : "",
+      loop: name === "Skill" && loops.includes(sget(inp, "skill")),
+      loopExit: isLoopExit(name, inp),
+      append: name.toLowerCase().includes("append_trajectory"),
+    };
+  };
 }
 
 // ------------------------------------------------------------- refire-damping state
@@ -492,26 +518,20 @@ function trajectoryReminder(seq, cfg, m) {
 // gate.
 
 // A genuine USER turn (a human message), NOT a tool_result that Claude Code also records as a
-// role:"user" entry. Count entries that are user-role with text/string content and no tool_result.
-function userTurnCount(lines) {
-  let n = 0;
-  for (const line of lines) {
-    const t = line.trim();
-    if (!t) continue;
-    let e;
-    try { e = JSON.parse(t); } catch { continue; }
-    if (!e || e.type !== "user") continue;
-    const msg = e.message;
-    if (!msg || msg.role !== "user") continue;
-    const c = msg.content;
-    if (typeof c === "string") { if (c.trim()) n++; continue; }
-    if (Array.isArray(c)) {
-      const hasToolResult = c.some((p) => p && typeof p === "object" && p.type === "tool_result");
-      const hasText = c.some((p) => p && typeof p === "object" && p.type === "text" && String(p.text || "").trim());
-      if (hasText && !hasToolResult) n++;
-    }
+// role:"user" entry: user-role with text/string content and no tool_result. Counted in the same
+// streaming pass as everything else (main()).
+function isUserTurn(e) {
+  if (!e || e.type !== "user") return false;
+  const msg = e.message;
+  if (!msg || msg.role !== "user") return false;
+  const c = msg.content;
+  if (typeof c === "string") return !!c.trim();
+  if (Array.isArray(c)) {
+    const hasToolResult = c.some((p) => p && typeof p === "object" && p.type === "tool_result");
+    const hasText = c.some((p) => p && typeof p === "object" && p.type === "text" && String(p.text || "").trim());
+    return hasText && !hasToolResult;
   }
-  return n;
+  return false;
 }
 
 // SIGNATURE of what is being blocked: the last close-out's seq index + a hash of its content,
@@ -581,32 +601,37 @@ async function main() {
   const cfg = loadReceiptsConfig(payload.cwd);
   const m = makeMatchers(cfg);
 
-  let lines;
-  try { lines = fs.readFileSync(tp, "utf8").split("\n"); }
-  catch { return; }
-
-  // ONE parse of the transcript feeds every check: tool_uses (ordered in `seq`) AND the
-  // live-receipt markers embedded in tool_result output. A line's live receipts are anchored
-  // at the current seq length, so they sort into seq-index space RIGHT AFTER the tool_uses seen
-  // so far (which includes the Bash `observe` call that emitted them) - the same index space the
-  // merge-floor windowing uses.
+  // ONE STREAMING pass over the transcript feeds every check: tool_uses (classified into `seq`,
+  // ordered), the live-receipt markers embedded in tool_result output, and the count of genuine
+  // user turns (for damping). Streamed line by line rather than read whole: a long session's
+  // transcript runs to hundreds of MB, and holding it as one string plus its split plus every
+  // parsed object peaked near 1 GB of RSS on EVERY stop - the JSONL is never needed all at once.
+  // A line's live receipts are anchored at the current seq length, so they sort into seq-index
+  // space RIGHT AFTER the tool_uses seen so far (which includes the Bash `observe` call that
+  // emitted them) - the same index space the merge-floor windowing uses.
+  const classify = makeClassifier(cfg, m);
   const seq = [];
   const liveIdxs = [];
-  for (const line of lines) {
-    const t = line.trim();
-    if (!t) continue;
-    let entry;
-    try { entry = JSON.parse(t); } catch { continue; /* skip a corrupt line */ }
-    try { walkToolUses(entry, seq); } catch { /* fail safe */ }
-    try { for (const r of liveReceiptsInEntry(entry)) liveIdxs.push({ i: seq.length, receipt: r }); }
-    catch { /* fail safe */ }
-  }
+  let userTurns = 0;
+  try {
+    const rl = readline.createInterface({ input: fs.createReadStream(tp, { encoding: "utf8" }), crlfDelay: Infinity });
+    for await (const line of rl) {
+      const t = line.trim();
+      if (!t) continue;
+      let entry;
+      try { entry = JSON.parse(t); } catch { continue; /* skip a corrupt line */ }
+      try { walkToolUses(entry, seq, classify); } catch { /* fail safe */ }
+      try { for (const r of liveReceiptsInEntry(entry)) liveIdxs.push({ i: seq.length, receipt: r }); }
+      catch { /* fail safe */ }
+      try { if (isUserTurn(entry)) userTurns++; } catch { /* fail safe */ }
+    }
+  } catch { return; } // unreadable transcript -> fail safe (no block)
   if (!seq.length) return; // no structured tool calls -> fail safe
 
   const reasons = [];
   const halves = new Set();
-  try { const r = verificationGate(seq, cfg, m, liveIdxs); if (r) { reasons.push(r); halves.add("verification"); } } catch { /* fail safe */ }
-  try { const r = trajectoryReminder(seq, cfg, m); if (r) { reasons.push(r); halves.add("trajectory"); } } catch { /* fail safe */ }
+  try { const r = verificationGate(seq, cfg, liveIdxs); if (r) { reasons.push(r); halves.add("verification"); } } catch { /* fail safe */ }
+  try { const r = trajectoryReminder(seq); if (r) { reasons.push(r); halves.add("trajectory"); } } catch { /* fail safe */ }
   if (!reasons.length) return; // nothing to block on
 
   // Refire-damping: build the block SIGNATURE, then stand down if the human has already seen this
@@ -618,11 +643,11 @@ async function main() {
   try {
     let lastCloseout = null; // [index, serialized-input]
     const mergeIdxs = [], evidenceIdxs = [], appendIdxs = [];
-    seq.forEach(([name, inp], i) => {
-      if (isMerge(name, inp)) mergeIdxs.push(i);
-      if (isDeployBinding(name, inp, m) || isObservation(name, inp, m)) evidenceIdxs.push(i);
-      if (name.toLowerCase().includes("append_trajectory")) appendIdxs.push(i);
-      if (isFixedCloseout(name, inp, m)) lastCloseout = [i, txt(inp)];
+    seq.forEach((e, i) => {
+      if (e.merge) mergeIdxs.push(i);
+      if (e.binding || e.obs) evidenceIdxs.push(i);
+      if (e.append) appendIdxs.push(i);
+      if (e.closeout) lastCloseout = [i, e.body];
     });
     // Live-receipt evidence also re-arms: fold its indices in (a new receipt changes the signature).
     for (const L of liveIdxs) evidenceIdxs.push(L.i);
@@ -634,7 +659,7 @@ async function main() {
 
   if (signature) {
     let damp = false;
-    try { damp = shouldDamp(tp, signature, userTurnCount(lines)); } catch { damp = false; }
+    try { damp = shouldDamp(tp, signature, userTurns); } catch { damp = false; }
     if (damp) return; // seen it twice + a fresh user turn -> silent stand-down for this signature
   }
 

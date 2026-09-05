@@ -28,6 +28,7 @@
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
+import readline from "node:readline";
 
 // ------------------------------------------------------------ shared matchers/heuristics
 //
@@ -176,21 +177,31 @@ function dataOnlyMatcher() {
 
 // -------------------------------------------------------------- transcript parse (as stop-gates)
 
-// Ordered walk that captures BOTH tool_use (name + input) and tool_result (the output text a
-// prior tool produced). The commit tripwire needs to interleave "an edit happened" with "a test
-// command ran" and "a test failed in output", so tool_results are first-class here (stop-gates
-// only needed tool_uses + the embedded live-receipt markers).
-function walkEvents(obj, out) {
-  if (Array.isArray(obj)) { for (const v of obj) walkEvents(v, out); return; }
+// Ordered walk that captures BOTH tool_use and tool_result, COMPACTED as each is met. A use keeps
+// only its name, the edited path (edit-family tools) and the command (Bash) - never the input
+// object. A result keeps only the lines that name the file under G11 scrutiny (`opts.fileRe`),
+// and is dropped outright when no file is under scrutiny: the commit tripwire reads the commands
+// that were INVOKED, never their output. The tripwires interleave "an edit happened" with "a test
+// command ran" and "a test failed in output", so results stay first-class in the ORDER - but never
+// in bulk: tool output is most of a long session's transcript, and the hook streams the file
+// precisely so it never holds that (see parseTranscript).
+function walkEvents(obj, out, opts) {
+  if (Array.isArray(obj)) { for (const v of obj) walkEvents(v, out, opts); return; }
   if (obj && typeof obj === "object") {
     if (obj.type === "tool_use" && "name" in obj) {
-      out.push({ kind: "use", name: String(obj.name || ""), input: obj.input ?? {} });
-    } else if (obj.type === "tool_result") {
+      const name = String(obj.name || ""), input = obj.input ?? {};
+      out.push({
+        kind: "use", name,
+        path: isEditTool(name) ? editedPath(input) : "",
+        cmd: name === "Bash" ? String(sget(input, "command") || "") : "",
+      });
+    } else if (obj.type === "tool_result" && opts.fileRe) {
       const strings = [];
       walkStrings(obj.content, strings);
-      out.push({ kind: "result", text: strings.join("\n") });
+      const lines = strings.join("\n").split("\n").filter((l) => opts.fileRe.test(l));
+      if (lines.length) out.push({ kind: "result", lines });
     }
-    for (const v of Object.values(obj)) walkEvents(v, out);
+    for (const v of Object.values(obj)) walkEvents(v, out, opts);
   }
 }
 function walkStrings(obj, out) {
@@ -222,12 +233,8 @@ function commitTripwire(events, testCmd) {
   let lastProdEditIdx = -1, lastProdEditFile = "";
   let testRanAfterEdit = false;
   events.forEach((e, i) => {
-    if (e.kind === "use" && isEditTool(e.name)) {
-      const f = editedPath(e.input);
-      if (isProdSource(f)) { lastProdEditIdx = i; lastProdEditFile = f; testRanAfterEdit = false; }
-    }
-    if (i > lastProdEditIdx && lastProdEditIdx >= 0 &&
-        e.kind === "use" && e.name === "Bash" && testCmd.test(String(sget(e.input, "command") || ""))) {
+    if (e.kind === "use" && isProdSource(e.path)) { lastProdEditIdx = i; lastProdEditFile = e.path; testRanAfterEdit = false; }
+    if (i > lastProdEditIdx && lastProdEditIdx >= 0 && e.kind === "use" && e.name === "Bash" && testCmd.test(e.cmd)) {
       testRanAfterEdit = true;
     }
   });
@@ -267,16 +274,12 @@ function renderTripwire(events, isRenderSource, dataOnly, exercised) {
   let lastIdx = -1, lastFile = "";
   let sawDataOnly = false, sawExercised = false;
   events.forEach((e, i) => {
-    if (e.kind === "use" && isEditTool(e.name)) {
-      const f = editedPath(e.input);
-      if (isProdSource(f) && isRenderSource.test(f)) {
-        lastIdx = i; lastFile = f; sawDataOnly = false; sawExercised = false;
-      }
+    if (e.kind === "use" && isProdSource(e.path) && isRenderSource.test(e.path)) {
+      lastIdx = i; lastFile = e.path; sawDataOnly = false; sawExercised = false;
     }
     if (i > lastIdx && lastIdx >= 0 && e.kind === "use" && e.name === "Bash") {
-      const cmd = String(sget(e.input, "command") || "");
-      if (exercised.test(cmd)) sawExercised = true;      // a runner / real render-observe -> exercised
-      else if (dataOnly.test(cmd)) sawDataOnly = true;   // a data read only
+      if (exercised.test(e.cmd)) sawExercised = true;      // a runner / real render-observe -> exercised
+      else if (dataOnly.test(e.cmd)) sawDataOnly = true;   // a data read only
     }
   });
   if (lastIdx < 0) return null;                 // no render-feeding source edited
@@ -315,22 +318,22 @@ function renderReason(editedFile) {
 const FAIL_TOKEN = /\b(FAIL|FAILED|failing|✕|✗|×|not ok|AssertionError|assert(?:ion)?\s+failed|Error:|✘)\b/;
 const PASS_TOKEN = /\b(PASS|PASSED|passing|✓|✔|ok\b|tests?\s+passed|0\s+fail(?:ing|ed|ures)?)\b/i;
 
+// Match the file by its full path if the runner printed it, else by basename. Basename-only is
+// still conservative: it must appear in a result line that ALSO carries a fail token. The matcher
+// is built BEFORE the transcript is parsed, so parseTranscript keeps only the lines that name it.
+function fileMatcher(editedFile) {
+  const base = basename(editedFile);
+  return base ? new RegExp(escapeRe(editedFile) + "|" + escapeRe(base)) : null;
+}
+
 function g11LiveTripwire(events, editedFile) {
   if (!editedFile || !TEST_PATH.test(editedFile)) return null; // only guards edits to TEST files
-  const base = basename(editedFile);
-  if (!base) return null;
-  // Match the file by its full path if the runner printed it, else by basename. Basename-only is
-  // still conservative: it must appear in a result line that ALSO carries a fail token.
-  const fileRe = new RegExp(escapeRe(editedFile) + "|" + escapeRe(base));
   let sawFailingForFile = false;
   for (const e of events) {
     if (e.kind !== "result") continue;
-    const text = e.text || "";
-    if (!fileRe.test(text)) continue;
     // Line-scoped: the file token and a fail/pass token on the SAME line (a runner's per-file
     // status line), so an unrelated FAIL elsewhere in a long log does not bind to this file.
-    for (const line of text.split("\n")) {
-      if (!fileRe.test(line)) continue;
+    for (const line of e.lines) {
       if (FAIL_TOKEN.test(line)) sawFailingForFile = true;
       else if (PASS_TOKEN.test(line)) sawFailingForFile = false; // an intervening green re-arms nothing
     }
@@ -431,7 +434,7 @@ async function main() {
     if (ACK_TAG.test(command)) return;                 // one explicit escape covers both -> allow
     if (!tp) return;                                   // no transcript -> fail safe (allow)
     let events;
-    try { events = parseTranscript(tp); } catch { return; }
+    try { events = await parseTranscript(tp, { fileRe: null }); } catch { return; }
     if (!events) return;
     if (commitMode === "deny") {                        // "nothing ran the code" - the fundamental miss
       let hit = null;
@@ -456,8 +459,10 @@ async function main() {
     if (mode === "off") return;
     if (editCarriesAck(toolInput)) return;             // explicit ack in the edit -> allow
     if (!tp) return;
+    const fileRe = fileMatcher(file);
+    if (!fileRe) return;
     let events;
-    try { events = parseTranscript(tp); } catch { return; }
+    try { events = await parseTranscript(tp, { fileRe }); } catch { return; }
     if (!events) return;
     let hit = null;
     try { hit = g11LiveTripwire(events, file); } catch { return; }
@@ -467,20 +472,23 @@ async function main() {
   // any other tool -> allow (emit nothing)
 }
 
-// Parse the transcript JSONL into an ordered event stream (tool_use + tool_result). Returns null
-// on IO failure (caller fails safe = allow).
-function parseTranscript(tp) {
-  let lines;
-  try { lines = fs.readFileSync(tp, "utf8").split("\n"); }
-  catch { return null; }
+// Parse the transcript JSONL into an ordered, COMPACT event stream (tool_use + the tool_result
+// lines under scrutiny - see walkEvents). Streamed line by line: this hook runs on every commit
+// and every test-file edit, and a long session's transcript runs to hundreds of MB, so it must
+// never hold the file (or its parsed objects) whole. Returns null on IO failure (caller fails
+// safe = allow).
+async function parseTranscript(tp, opts) {
   const events = [];
-  for (const line of lines) {
-    const t = line.trim();
-    if (!t) continue;
-    let entry;
-    try { entry = JSON.parse(t); } catch { continue; }
-    try { walkEvents(entry, events); } catch { /* fail safe */ }
-  }
+  try {
+    const rl = readline.createInterface({ input: fs.createReadStream(tp, { encoding: "utf8" }), crlfDelay: Infinity });
+    for await (const line of rl) {
+      const t = line.trim();
+      if (!t) continue;
+      let entry;
+      try { entry = JSON.parse(t); } catch { continue; }
+      try { walkEvents(entry, events, opts); } catch { /* fail safe */ }
+    }
+  } catch { return null; }
   return events;
 }
 
