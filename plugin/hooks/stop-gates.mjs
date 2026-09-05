@@ -40,14 +40,22 @@ import readline from "node:readline";
 // ---------------------------------------------------------------- shared matchers
 
 // `gh pr merge` / `gh issue close` only at a command boundary, so a printf/grep that
-// CONTAINS the string as data does not match.
-const GH_MERGE = /(?:^|[;&|]|\n)\s*gh\s+pr\s+merge\b/;
-const GH_ISSUE_CLOSE = /(?:^|[;&|]|\n)\s*gh\s+issue\s+close\b/;
+// CONTAINS the string as data does not match - allowing an env prefix and gh's global flags
+// between `gh` and the subcommand: every real `gh issue close` in one machine's transcripts
+// was `gh -R owner/repo issue close`, which anchored `gh\s+issue` never saw (#74).
+const GH_CMD = (sub) => new RegExp(
+  `(?:^|[;&|]|\\n)\\s*(?:[A-Za-z_]\\w*=(?:"[^"]*"|'[^']*'|\\S+)\\s+)*gh(?:\\s+(?:-R|--repo|--hostname)\\s+\\S+|\\s+--[\\w-]+(?:=\\S+)?)*\\s+${sub}\\b`);
+const GH_MERGE = GH_CMD("pr\\s+merge");
+const GH_ISSUE_CLOSE = GH_CMD("issue\\s+close");
 
-// Tracker-agnostic close-out NAME shapes: update/transition/resolve/close on an
-// issue/ticket/task/story/card/page/item across Notion, Linear, Jira, GitHub, etc.
-const TRACKER_WRITE = /(update|set|edit|patch|transition|move|resolve|close)[-_ ]?(issue|ticket|task|story|card|page|item|bug|work[-_ ]?item)/i;
-const TRACKER_CLOSE = /(close|resolve)[-_ ]?(issue|ticket|task|bug|item|story|card)/i;
+// Tracker-agnostic close-out NAME shapes, in either word order: update_issue / close_issue and
+// the noun-first issue_write / issue_update of the current GitHub MCP. `write` counts only
+// noun-first, and the payload's status value decides (an issue_write that retitles is not a
+// close-out).
+const NOUN = "(issue|ticket|task|story|card|page|item|bug|work[-_ ]?item)";
+const VERB = "(update|set|edit|patch|transition|move|resolve|close)";
+const TRACKER_WRITE = new RegExp(`${VERB}[-_ ]?${NOUN}|${NOUN}[-_ ]?(?:${VERB}|write)`, "i");
+const TRACKER_CLOSE = /(close|resolve)[-_ ]?(issue|ticket|task|bug|item|story|card)|(issue|ticket|task|bug|item|story|card)[-_ ]?(close|resolve)/i;
 // A Status/State KEY set to a generic closeout VALUE (anchored on the key, so a
 // "1. Fixed the..." Resolution Note does not match - that is a different key).
 const CLOSEOUT_STATUS = /"(?:bug\s+)?(?:status|state)"\s*:\s*"\s*(?:fixed|closed|verified|done|resolved|complete|completed)\b/i;
@@ -56,7 +64,12 @@ const CLOSEOUT_STATUS = /"(?:bug\s+)?(?:status|state)"\s*:\s*"\s*(?:fixed|closed
 const DEFAULT_DEPLOYED_HOST_SRC =
   "\\.vercel\\.app|\\.railway\\.app|\\.up\\.railway\\.app|\\.netlify\\.app|\\.fly\\.dev|" +
   "\\.onrender\\.com|\\.pages\\.dev|stg\\.|staging|\\.preview\\.";
-const DEFAULT_STAGING_QUERY_SRC = "STAGING_DB_URL|DATABASE_URL|db[_-]?proxy|mysql_query|psql";
+// A by-value data read in a Bash command is an OBSERVATION. Only the forms that NAME a remote
+// environment - a staging URL, a db-proxy host - are also a deploy BINDING: a bare psql or
+// mysql_query is most often the local dev database, not the build that carries the commit (G3).
+// Configured agent.staging_query_patterns name the project's own hosts and bind too.
+const DEFAULT_DATA_READ_SRC = "STAGING_DB_URL|DATABASE_URL|db[_-]?proxy|mysql_query|psql";
+const DEFAULT_STAGING_QUERY_SRC = "STAGING_DB_URL|db[_-]?proxy";
 const DEFAULT_DOWNGRADE_SRC = "unverified[- ]?reasoned|unverified|speculative";
 const DEFAULT_FIXED_STATUSES = ["Pending Retest", "Verified"];
 const DEFAULT_LOOP_SKILLS = ["gates"];
@@ -224,7 +237,8 @@ function makeMatchers(cfg) {
   const statuses = (agent.closeout_fixed_statuses || DEFAULT_FIXED_STATUSES).filter(Boolean);
   return {
     deployedHost: extend(DEFAULT_DEPLOYED_HOST_SRC, build.deploy_host_patterns),
-    stagingQuery: extend(DEFAULT_STAGING_QUERY_SRC, agent.staging_query_patterns),
+    stagingQuery: extend(DEFAULT_STAGING_QUERY_SRC, agent.staging_query_patterns), // binds
+    dataRead: extend(DEFAULT_DATA_READ_SRC, agent.staging_query_patterns),          // observes
     downgrade: extend(DEFAULT_DOWNGRADE_SRC, claim.downgrade_tags),
     // ANCHORED: the configured status must appear at the START of a JSON string
     // VALUE (`: "Pending Retest"`), covering flat ({"status": "..."}), nested
@@ -258,9 +272,10 @@ function isDeployBinding(name, inp, m) {
   // Evidence you are POINTED AT the deployed build (not which value you saw).
   const n = name.toLowerCase();
   if (n.includes("navigate") && m.deployedHost.test(String(sget(inp, "url") || ""))) return true;
-  if (n.includes("claude_preview") || n.includes("preview_")) return true;
+  // A preview tool binds only when its URL is a deployed host: a dev server on localhost is not
+  // the build that carries the commit (#74).
+  if ((n.includes("claude_preview") || n.includes("preview_")) && m.deployedHost.test(String(sget(inp, "url") || ""))) return true;
   if (n.includes("get_deployment")) return true;
-  if (n.includes("mysql_query")) return true;
   if (name === "Bash" && m.stagingQuery.test(String(sget(inp, "command") || ""))) return true;
   // browser_batch wraps its real actions in input.actions - a batched navigate to a
   // deployed host is the same binding as a top-level one.
@@ -278,7 +293,7 @@ function isObservation(name, inp, m) {
   if (DOM_READ_TOOL.test(n)) return true;
   if (n.includes("computer") && txt(inp).toLowerCase().includes("screenshot")) return true;
   if (n.includes("mysql_query")) return true;
-  if (name === "Bash" && m.stagingQuery.test(String(sget(inp, "command") || ""))) return true;
+  if (name === "Bash" && m.dataRead.test(String(sget(inp, "command") || ""))) return true;
   // A batched screenshot / DOM-read counts exactly like a top-level one (the recurring
   // false-positive: the live verify was driven via browser_batch and the hook fired).
   if (n.includes("browser_batch")) {

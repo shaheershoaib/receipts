@@ -301,3 +301,62 @@ test("a live receipt embedded in a JSONL-stringified tool_result is detected (ma
   const roundTripped = JSON.parse(JSON.stringify(entry)); // exactly what readFileSync->JSON.parse yields
   silent([MERGE, roundTripped, tu("mcp__linear__update_issue", { state: "Done" })]);
 });
+
+// ---------------------------------------------- #74: close-outs the matchers did not see
+
+const CLOSE_LINEAR = tu("mcp__linear__update_issue", { state: "Done" });
+
+test("#74: GitHub MCP issue_write with state closed is a close-out (noun-then-verb tool name)", () => {
+  // TRACKER_WRITE read verb-then-noun (update_issue, close_issue); the current GitHub MCP exposes
+  // issue_write, so its closes were invisible while `gh issue close` in Bash was caught.
+  blocks([MERGE, tu("mcp__github__issue_write", { method: "update", owner: "o", repo: "r", issue_number: 12, state: "closed", state_reason: "completed" })]);
+});
+
+test("#74: an issue_write that only retitles is not a close-out (allow)", () => {
+  silent([MERGE, tu("mcp__github__issue_write", { method: "update", issue_number: 12, title: "clearer title" })]);
+});
+
+test("#74: gh global flags before the subcommand are still a close-out (block)", () => {
+  // Every real `gh issue close` in one machine's transcripts put --repo/-R first.
+  blocks([MERGE, tu("Bash", { command: "gh -R o/r issue close 12" })]);
+  blocks([MERGE, tu("Bash", { command: "GH_TOKEN=x gh --repo o/r issue close 12 -c 'fixed'" })]);
+});
+
+test("#74: a flag-first `gh -R o/r pr merge` is the merge that moves the evidence window (block)", () => {
+  // Evidence gathered BEFORE the shipping merge is out of window; a merge the regex could not see
+  // let stale evidence count for the close-out.
+  blocks([NAV, SHOT, tu("Bash", { command: "gh -R o/r pr merge 7 --squash" }), CLOSE_LINEAR]);
+});
+
+// ------------------------------------- #74: what counts as the DEPLOYED build (binding)
+
+test("#74: a LOCAL preview plus a DOM read is not deployed-build evidence (block)", () => {
+  // Any tool name containing `preview_` bound the gate, so a dev server on localhost read as the
+  // deployed build - the opposite of what G3 asks.
+  const d = blocks([MERGE, tu("mcp__Claude_Browser__preview_start", { url: "http://localhost:3000" }),
+    tu("mcp__Claude_Browser__read_page", {}), tu("Bash", { command: "gh issue close 12" })]);
+  assert.match(d.reason, /DEPLOYED/);
+});
+
+test("#74: a preview whose URL is a deployed host still binds (allow)", () => {
+  silent([MERGE, tu("mcp__vercel__preview_open", { url: "https://app-git-fix-12.vercel.app" }),
+    tu("mcp__Claude_Browser__read_page", {}), CLOSE_LINEAR]);
+});
+
+test("#74: a bare DB query is an observation, not a deploy binding (block)", () => {
+  // mysql_query alone, or psql against $DATABASE_URL, satisfied BOTH halves of the gate - while the
+  // block message itself asks a data ticket for the query AND a sha-confirm. A local dev database
+  // is the common target of a bare query.
+  blocks([MERGE, tu("mcp__mysql__mysql_query", { sql: "select status from orders where id=42" }), tu("Bash", { command: "gh issue close 12" })]);
+  blocks([MERGE, tu("Bash", { command: "psql $DATABASE_URL -tAc 'select status from orders where id=42'" }), CLOSE_LINEAR]);
+});
+
+test("#74: a query that names a STAGING host binds and observes: STAGING_DB_URL, a db proxy, or a configured pattern (allow)", () => {
+  silent([MERGE, tu("Bash", { command: "psql $STAGING_DB_URL -tAc 'select status from orders where id=42'" }), CLOSE_LINEAR]);
+  silent([MERGE, tu("Bash", { command: "mysql -h proxy.rlwy.net -e 'select 1'" }), CLOSE_LINEAR],
+    { projectConfig: { version: 1, agent: { staging_query_patterns: ["proxy.rlwy.net"] } } });
+});
+
+test("#74: a DB observation plus a get_deployment binding satisfies the gate (the message's option b)", () => {
+  silent([MERGE, tu("mcp__vercel__get_deployment", { id: "dpl_1" }), tu("mcp__mysql__mysql_query", { sql: "select 1" }), CLOSE_LINEAR]);
+});

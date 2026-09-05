@@ -429,6 +429,31 @@ const HOOK_BEHAVIORS = [
     events: [MERGE, NAV, SHOT, CLOSE],
     expected: "ALLOW",
   },
+  // The evasion cells (#74): close-outs and "evidence" the matchers once let through.
+  {
+    name: "close-via-issue-write-without-evidence",
+    gate: "verification-gate (G0/G1/G3)",
+    defective: true,
+    // The current GitHub MCP closes through a noun-then-verb tool name.
+    events: [MERGE, tu("mcp__github__issue_write", { method: "update", issue_number: 1, state: "closed" })],
+    expected: "BLOCK",
+  },
+  {
+    name: "close-via-gh-repo-flag-without-evidence",
+    gate: "verification-gate (G0/G1/G3)",
+    defective: true,
+    // `gh -R owner/repo issue close`: the flag sits between `gh` and the subcommand.
+    events: [MERGE, tu("Bash", { command: "gh -R acme/app issue close 1" })],
+    expected: "BLOCK",
+  },
+  {
+    name: "close-after-local-preview-only",
+    gate: "verification-gate (G0/G1/G3)",
+    defective: true,
+    // A dev server on localhost plus a DOM read: observed, but never on the DEPLOYED build (G3).
+    events: [MERGE, tu("mcp__browser__preview_start", { url: "http://localhost:3000" }), tu("mcp__browser__read_page", {}), CLOSE],
+    expected: "BLOCK",
+  },
 ];
 
 module.exports = { ENFORCER_BEHAVIORS, HOOK_BEHAVIORS };
