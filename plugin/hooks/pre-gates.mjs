@@ -30,16 +30,15 @@
  *          or deny under CI (see defaultMode).
  */
 import fs from "node:fs";
-import os from "node:os";
 import path from "node:path";
 import readline from "node:readline";
+import { loadReceiptsConfig } from "./lib/receipts-config.mjs";
 
 // ------------------------------------------------------------ shared matchers/heuristics
 //
-// Deliberately DUPLICATED from stop-gates.mjs (small, stable primitives) rather than shared
-// through an import: the two hooks run as independent processes and must not couple, and
-// keeping stop-gates byte-for-byte unchanged protects its test suite. Any drift here is
-// contained to the PreToolUse path.
+// The small matchers below are this hook's own (stop-gates.mjs keeps its own set; the two
+// hooks run as independent processes and guard different actions). What the hooks must agree
+// on - how receipts.config.json is found and merged - is imported from lib/receipts-config.mjs.
 
 // `git commit` only at a command boundary, so a printf/echo/grep that CONTAINS "git commit" as
 // data does not match. Env-var prefixes (FOO=bar git commit) are skipped so an inline
@@ -157,36 +156,11 @@ const REDIRECT_TARGET = /(?<![<>&\d-])>{1,2}\s*(?![&>|(])(["']?)([^\s"'|;&<>()]*
 // Not source, whatever the extension: devices, temp dirs, the agent's own config, logs.
 const NOT_SOURCE_PATH = /^(?:\/dev\/|\/tmp\/|\/private\/tmp\/|\/var\/folders\/|\$\{?(?:TMPDIR|TMP|TEMP|RUNNER_TEMP)\b)|(?:^|\/)\.claude\/|\.(?:log|out)$/;
 
-// ------------------------------------------------------------------- config load (as stop-gates)
-
-function readConfigFile(p) {
-  try { return JSON.parse(fs.readFileSync(p, "utf8")); }
-  catch (e) { return e && e.code === "ENOENT" ? null : {}; }
-}
-function deepMerge(base, over) {
-  const out = { ...(base || {}) };
-  for (const [k, v] of Object.entries(over || {})) {
-    out[k] = v && typeof v === "object" && !Array.isArray(v) && out[k] && typeof out[k] === "object" && !Array.isArray(out[k])
-      ? deepMerge(out[k], v) : v;
-  }
-  return out;
-}
-// `found` = a config exists in either layer. It is the OPT-IN for every tripwire but
-// init_unattended (which fires during the very setup that writes the config): a repo with no
-// receipts.config.json anywhere gets no enforcement, the same rule session-memory.mjs follows.
-function loadReceiptsConfig(start) {
-  const homeRaw = readConfigFile(path.join(os.homedir(), ".claude", "receipts.config.json"));
-  let proj = null;
-  let d = path.resolve(start || ".");
-  for (let i = 0; i < 40; i++) {
-    const c = readConfigFile(path.join(d, "receipts.config.json"));
-    if (c !== null) { proj = c; break; }
-    const parent = path.dirname(d);
-    if (parent === d) break;
-    d = parent;
-  }
-  return { cfg: deepMerge(homeRaw || {}, proj || {}), found: homeRaw !== null || proj !== null };
-}
+// ------------------------------------------------------------------- config load
+//
+// loadReceiptsConfig (lib/receipts-config.mjs): `found` = a config exists in either layer. It
+// is the OPT-IN for every tripwire but init_unattended (which fires during the very setup that
+// writes the config): a repo with no receipts.config.json anywhere gets no enforcement.
 
 // One tripwire's mode: deny | ask | warn | off. Unknown values fall back to the default.
 function tripwireMode(cfg, key, dflt) {
