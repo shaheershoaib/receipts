@@ -96,7 +96,15 @@ receipts init --yes --dir <dir> \
 
 Add `--env <name> --env-url <url>` when the project has a deployed environment to verify against.
 Add `--force` to overwrite an existing config; warn the user first that it overwrites, and copy
-any hand-tuned values across.
+any hand-tuned values across. Add `--scaffold` only if the project wants its own
+`<repo>-fix-loop` skill for the trajectory touchpoints; by default `init` writes none, because
+the bundled `gates` skill already drives the loop. `init` also writes a short receipts block into
+`AGENTS.md` and the full gates into `.receipts/gates.md` for non-Claude agents (`--no-agents`
+skips both).
+
+Writing the config is also what turns enforcement ON for this repo: the in-session tripwires and
+the Stop gate stand down wherever no `receipts.config.json` (project or `~/.claude`) exists, so
+tell the user that from now on an unverified commit prompts them (`ask`) rather than passing.
 
 **Never run `init --yes` without the `--drive-*` flags to get past the prompts.** That records
 `drive.confirmed: false` - answering on the user's behalf with "unknown" - and a PreToolUse
