@@ -85,12 +85,15 @@ function runVerify({ dir, base, head, prBody, env }) {
 // Claude Code invokes it: JSONL transcript on disk, Stop-hook JSON on stdin, an isolated
 // HOME so no developer ~/.claude/receipts.config.json leaks in. Returns the parsed block
 // decision, or null when the hook stays silent (the close-out is allowed).
-function runHook(events, { projectConfig } = {}) {
+// The hook enforces only where a receipts.config.json exists (opt-in, like the memory hook), so a
+// minimal project config is written by default: the cells then measure a configured repo running
+// the hook's generic defaults, which is the posture the bench is about.
+function runHook(events, { projectConfig = { version: 1 } } = {}) {
   const td = fs.mkdtempSync(path.join(os.tmpdir(), "gates-bench-hook-"));
   const tp = path.join(td, "transcript.jsonl");
   fs.writeFileSync(tp, events.map((e) => JSON.stringify(e)).join("\n") + "\n");
   const home = path.join(td, "home");
-  fs.mkdirSync(home, { recursive: true }); // empty -> the hook's generic defaults
+  fs.mkdirSync(home, { recursive: true }); // empty -> nothing tuned beyond the generic defaults
   if (projectConfig) fs.writeFileSync(path.join(td, "receipts.config.json"), JSON.stringify(projectConfig));
   const stdin = JSON.stringify({ transcript_path: tp, cwd: td, stop_hook_active: false });
   let out = "";

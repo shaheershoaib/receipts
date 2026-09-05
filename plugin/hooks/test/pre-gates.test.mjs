@@ -39,18 +39,29 @@ const userTurn = (text = "please continue") => ({
 // --- PreToolUse driver -----------------------------------------------------------------------
 // Writes the transcript, drives pre-gates.mjs over stdin with {tool_name, tool_input, ...}.
 // Returns the parsed decision object, or null when the hook allowed (emitted nothing).
-function runPre(toolName, toolInput, transcriptEntries, { projectConfig } = {}) {
+// Enforcement is OPT-IN: the tripwires act only where a receipts.config.json exists (project
+// walk-up or agent-home), so the driver writes a minimal project config by default and the
+// fixtures exercise exactly what a configured repo gets (generic defaults, nothing tuned). Pass
+// `projectConfig: null` for the zero-config case, `homeConfig` for the agent-home layer.
+// The default MODE depends on whether a human can be prompted: `ask` outside CI, `deny` under it.
+// The driver pins CI=1 unless told otherwise, so the firing-condition tests below read as plain
+// denies whatever machine runs them; the mode tests pass `ci: null` to get the interactive default.
+function runPre(toolName, toolInput, transcriptEntries, { projectConfig = { version: 1 }, homeConfig, ci = "1" } = {}) {
   const td = fs.mkdtempSync(path.join(os.tmpdir(), "receipts-pre-"));
   const tp = path.join(td, "transcript.jsonl");
   fs.writeFileSync(tp, (transcriptEntries || []).map((e) => JSON.stringify(e)).join("\n") + "\n");
   const home = path.join(td, "home");
   fs.mkdirSync(home, { recursive: true });
   if (projectConfig) fs.writeFileSync(path.join(td, "receipts.config.json"), JSON.stringify(projectConfig));
+  if (homeConfig) {
+    fs.mkdirSync(path.join(home, ".claude"), { recursive: true });
+    fs.writeFileSync(path.join(home, ".claude", "receipts.config.json"), JSON.stringify(homeConfig));
+  }
+  const env = { ...process.env, HOME: home, USERPROFILE: home };
+  delete env.CI;
+  if (ci) env.CI = ci;
   const stdin = JSON.stringify({ tool_name: toolName, tool_input: toolInput, transcript_path: tp, cwd: td });
-  const out = execFileSync("node", [PRE_HOOK], {
-    input: stdin, encoding: "utf8",
-    env: { ...process.env, HOME: home, USERPROFILE: home },
-  }).trim();
+  const out = execFileSync("node", [PRE_HOOK], { input: stdin, encoding: "utf8", env }).trim();
   return out ? JSON.parse(out) : null;
 }
 const denies = (name, inp, entries, opts) => {
@@ -62,8 +73,46 @@ const denies = (name, inp, entries, opts) => {
 };
 const allows = (name, inp, entries, opts) =>
   assert.equal(runPre(name, inp, entries, opts), null, "expected allow (no output), hook denied");
+const asks = (name, inp, entries, opts) => {
+  const d = runPre(name, inp, entries, opts);
+  assert.ok(d, "expected an ask decision, hook was silent");
+  assert.equal(d.hookSpecificOutput.permissionDecision, "ask");
+  return d.hookSpecificOutput.permissionDecisionReason;
+};
+// warn = the tool call proceeds (no permission decision at all) and the agent is TOLD, through
+// additionalContext, what it skipped - the channel PreToolUse hooks gained after this tripwire
+// was written with "warn is a no-op" baked in.
+const warns = (name, inp, entries, opts) => {
+  const d = runPre(name, inp, entries, opts);
+  assert.ok(d, "expected a warning, hook was silent");
+  assert.equal(d.hookSpecificOutput.permissionDecision, undefined, "warn must not decide the permission");
+  assert.ok(d.hookSpecificOutput.additionalContext, "warn carries additionalContext");
+  return d.hookSpecificOutput.additionalContext;
+};
 
 const PROD_EDIT = useEntry("Edit", { file_path: "src/pay.js", old_string: "a", new_string: "b" });
+
+// ============================================================ opt-in: the tripwires need a config
+
+test("zero-config (no receipts.config.json anywhere): a commit after a production edit is ALLOWED", () => {
+  // Enforcement is opt-in by config, the rule the SessionStart memory hook already follows: a repo
+  // that never ran `receipts init` gets zero behavior change from installing the plugin. Before
+  // this, a fresh install denied a version-bump commit in every unrelated repo on the machine.
+  allows("Bash", { command: "git commit -m 'fix pay'" }, [PROD_EDIT], { projectConfig: null });
+});
+
+test("zero-config: editing a test seen failing is ALLOWED (the G11-live referee is opt-in too)", () => {
+  allows("Edit", { file_path: "src/pay.test.js", new_string: "x" },
+    [useEntry("Bash", { command: "npm test" }), resultEntry("FAIL src/pay.test.js")], { projectConfig: null });
+});
+
+test("an agent-home config alone (no project config) turns the tripwires on", () => {
+  // The split topology: skills + session cwd in one place, code repos elsewhere. The home layer
+  // is the deliberate opt-in for every repo on the machine.
+  const reason = denies("Bash", { command: "git commit -m fix" }, [PROD_EDIT],
+    { projectConfig: null, homeConfig: { version: 1 } });
+  assert.match(reason, /commit-without-verification/);
+});
 
 // ============================================================ commit-without-verification tripwire
 
@@ -149,9 +198,41 @@ test("commit_unverified: off disables the commit tripwire (allow)", () => {
     { projectConfig: { version: 1, agent: { tripwires: { commit_unverified: "off" } } } });
 });
 
-test("commit_unverified: warn is a no-op at PreToolUse (allow - no reliable warn channel)", () => {
-  allows("Bash", { command: "git commit -m fix" }, [PROD_EDIT],
+// ============================================================ modes: deny / ask / warn / off
+
+test("default mode OUTSIDE CI is ask: the human is prompted with the tripwire's reason", () => {
+  // A human at the keyboard can approve a wip commit; only an unattended run has nobody to ask.
+  const reason = asks("Bash", { command: "git commit -m fix" }, [PROD_EDIT], { ci: null });
+  assert.match(reason, /commit-without-verification/);
+});
+
+test("default mode UNDER CI is deny (nobody can be asked)", () => {
+  denies("Bash", { command: "git commit -m fix" }, [PROD_EDIT], { ci: "true" });
+});
+
+test("commit_unverified: deny (explicit) denies even outside CI - the untrusted-agent posture", () => {
+  denies("Bash", { command: "git commit -m fix" }, [PROD_EDIT],
+    { ci: null, projectConfig: { version: 1, agent: { tripwires: { commit_unverified: "deny" } } } });
+});
+
+test("commit_unverified: ask (explicit) prompts even under CI", () => {
+  asks("Bash", { command: "git commit -m fix" }, [PROD_EDIT],
+    { projectConfig: { version: 1, agent: { tripwires: { commit_unverified: "ask" } } } });
+});
+
+test("commit_unverified: warn lets the commit through and tells the agent what it skipped", () => {
+  const ctx = warns("Bash", { command: "git commit -m fix" }, [PROD_EDIT],
     { projectConfig: { version: 1, agent: { tripwires: { commit_unverified: "warn" } } } });
+  assert.match(ctx, /commit-without-verification/);
+  assert.match(ctx, /src\/pay\.js/, "still names the unverified edit");
+});
+
+test("g11_live: default outside CI is ask, warn is advisory, deny is explicit", () => {
+  const failing = [useEntry("Bash", { command: "npm test" }), resultEntry("FAIL src/pay.test.js")];
+  const edit = ["Edit", { file_path: "src/pay.test.js", new_string: "x" }];
+  assert.match(asks(...edit, failing, { ci: null }), /G11/);
+  assert.match(warns(...edit, failing, { projectConfig: { version: 1, agent: { tripwires: { g11_live: "warn" } } } }), /G11/);
+  denies(...edit, failing, { ci: null, projectConfig: { version: 1, agent: { tripwires: { g11_live: "deny" } } } });
 });
 
 test("a project-configured test_command_pattern counts as running the code (allow)", () => {
@@ -159,6 +240,46 @@ test("a project-configured test_command_pattern counts as running the code (allo
   allows("Bash", { command: "git commit -m fix" },
     [PROD_EDIT, useEntry("Bash", { command: "./scripts/run-checks.sh" })],
     { projectConfig: { version: 1, agent: { tripwires: { test_command_patterns: ["run-checks\\.sh"] } } } });
+});
+
+// ============================================================ what counts as "the tests ran"
+
+test("the project's OWN verify.test_command counts as running the code, with no second declaration", () => {
+  // `receipts init` wrote `make test` as the suite command and the tripwire then denied every
+  // commit that followed a `make test`, because the default runner list had never heard of it.
+  // The config already says how THIS project runs its tests; the tripwire reads it.
+  allows("Bash", { command: "git commit -m fix" },
+    [PROD_EDIT, useEntry("Bash", { command: "./scripts/check src/pay.test.js" })],
+    { projectConfig: { version: 1, verify: { test_command: "./scripts/check {test}" } } });
+});
+
+test("verify.suite_command counts too, and a placeholder mid-command matches its invoked form", () => {
+  allows("Bash", { command: "git commit -m fix" },
+    [PROD_EDIT, useEntry("Bash", { command: "./scripts/suite --all" })],
+    { projectConfig: { version: 1, verify: { test_command: "pytest {test}", suite_command: "./scripts/suite" } } });
+  allows("Bash", { command: "git commit -m fix" },
+    [PROD_EDIT, useEntry("Bash", { command: "mvn -Dtest=PayTest test" })],
+    { projectConfig: { version: 1, verify: { test_command: "mvn -Dtest={test_classes} test" } } });
+});
+
+test("a REPLACE_ME placeholder command is not a runner (never a false allow)", () => {
+  denies("Bash", { command: "git commit -m fix" },
+    [PROD_EDIT, useEntry("Bash", { command: "REPLACE_ME: no test runner detected" })],
+    { projectConfig: { version: 1, verify: { test_command: "REPLACE_ME: no test runner detected" } } });
+});
+
+test("the default runner list covers the common wrappers and runtimes", () => {
+  // Each of these was a false DENY: `init` detects several of them, and none was in the list.
+  for (const cmd of [
+    "make test", "make check", "./gradlew test", "./mvnw test", "bun test", "deno test",
+    "bin/rails test", "bundle exec rake test", "python -m unittest", "python3 -m pytest",
+    "swift test", "flutter test", "dart test", "nx test app", "npx nx run app:test",
+    "turbo run test", "sbt test", "zig build test", "cabal test", "stack test", "lein test",
+    "elm-test", "npx ava", "karma start", "npx cypress run", "behave", "robot tests/",
+  ]) {
+    assert.equal(runPre("Bash", { command: "git commit -m fix" }, [PROD_EDIT, useEntry("Bash", { command: cmd })]), null,
+      `expected "${cmd}" to count as running the tests`);
+  }
 });
 
 test("only the LAST production edit matters: a test then a LATER unverified edit re-arms the tripwire", () => {
@@ -172,53 +293,116 @@ test("only the LAST production edit matters: a test then a LATER unverified edit
 
 // ================================================================= G11-live referee tripwire
 
-test("editing a test seen FAILING (no green since) is DENIED with the G11 mandate", () => {
-  const reason = denies("Edit", { file_path: "src/pay.test.js", new_string: "expect(2).toBe(2)" },
-    [resultEntry("FAIL src/pay.test.js\n  expected 5 received 4")]);
+// A test RUN (the Bash command that invoked the runner) whose output then names the file failing.
+// Only runner output arms the tripwire - see "prose never binds" below.
+const RUN = useEntry("Bash", { command: "npm test" });
+const FAIL_PAY = [RUN, resultEntry("FAIL src/pay.test.js\n  expected 5 received 4")];
+const EDIT_PAY = ["Edit", { file_path: "src/pay.test.js", new_string: "x" }];
+
+test("editing a test a RUN just showed FAILING (no green since) is DENIED with the G11 mandate", () => {
+  const reason = denies("Edit", { file_path: "src/pay.test.js", new_string: "expect(2).toBe(2)" }, FAIL_PAY);
   assert.match(reason, /G11/);
   assert.match(reason, /fix the CODE/i);
   assert.match(reason, /test-removal|RECEIPTS_ACK/, "offers the explicit ack escape");
 });
 
 test("editing an UNRELATED test (never seen failing) is allowed (conservative)", () => {
-  allows("Edit", { file_path: "src/other.test.js", new_string: "x" },
-    [resultEntry("FAIL src/pay.test.js\n  expected 5 received 4")]);
+  allows("Edit", { file_path: "src/other.test.js", new_string: "x" }, FAIL_PAY);
 });
 
 test("editing a test that was failing but then PASSED (green since) is allowed", () => {
-  allows("Edit", { file_path: "src/pay.test.js", new_string: "x" }, [
-    resultEntry("FAIL src/pay.test.js"),
-    resultEntry("PASS src/pay.test.js\n  4 passing"),
-  ]);
+  allows(...EDIT_PAY, [...FAIL_PAY, RUN, resultEntry("PASS src/pay.test.js\n  4 passing")]);
 });
 
 test("editing a NON-test production file is never a G11-live concern (allow)", () => {
   // Even if the file appears in a failing log, the tripwire only guards edits to TEST files.
-  allows("Edit", { file_path: "src/pay.js", new_string: "x" },
-    [resultEntry("FAIL src/pay.js line 3")]);
+  allows("Edit", { file_path: "src/pay.js", new_string: "x" }, [RUN, resultEntry("FAIL src/pay.js line 3")]);
 });
 
 test("a Write to a failing test file with a test-removal ack is allowed", () => {
-  allows("Write", { file_path: "src/pay.test.js", content: "// test-removal: feature deleted in #123" },
-    [resultEntry("FAIL src/pay.test.js")]);
+  allows("Write", { file_path: "src/pay.test.js", content: "// test-removal: feature deleted in #123" }, FAIL_PAY);
 });
 
 test("a fail token that is NOT on the same line as the test file does not bind (conservative allow)", () => {
   // The file name and the FAIL token are on separate lines -> not a per-file status line.
-  allows("Edit", { file_path: "src/pay.test.js", new_string: "x" },
-    [resultEntry("Running src/pay.test.js\n... lots of setup ...\nSome unrelated module FAILED to load")]);
+  allows(...EDIT_PAY,
+    [RUN, resultEntry("Running src/pay.test.js\n... lots of setup ...\nSome unrelated module FAILED to load")]);
 });
 
 test("MultiEdit on a failing test file is guarded the same as Edit (DENY)", () => {
-  const reason = denies("MultiEdit", { file_path: "src/pay.test.js", edits: [{ old_string: "a", new_string: "b" }] },
-    [resultEntry("FAIL src/pay.test.js")]);
+  const reason = denies("MultiEdit", { file_path: "src/pay.test.js", edits: [{ old_string: "a", new_string: "b" }] }, FAIL_PAY);
   assert.match(reason, /G11/);
 });
 
 test("g11_live: off disables the referee tripwire (allow)", () => {
-  allows("Edit", { file_path: "src/pay.test.js", new_string: "x" },
-    [resultEntry("FAIL src/pay.test.js")],
-    { projectConfig: { version: 1, agent: { tripwires: { g11_live: "off" } } } });
+  allows(...EDIT_PAY, FAIL_PAY, { projectConfig: { version: 1, agent: { tripwires: { g11_live: "off" } } } });
+});
+
+// ---- what arms it: RUNNER output, in any runner's dialect ---------------------------------
+
+test("prose that names the file with a fail token is NOT runner output and does not arm (allow)", () => {
+  // The tripwire once bound to a prior agent's analysis ("FAIL src/pay.test.js probably means the
+  // fixture is stale") and stayed armed with no green run able to clear it - which is what made
+  // the #49 bypass attractive. Only the output of a test COMMAND counts.
+  allows(...EDIT_PAY, [resultEntry("Analysis: FAIL src/pay.test.js probably means the fixture is stale")]);
+  allows(...EDIT_PAY, [useEntry("Bash", { command: "cat notes.md" }), resultEntry("FAIL src/pay.test.js - see notes")]);
+});
+
+test("a result binds to the tool_use it answers (by id), not to whichever use came last", () => {
+  const withId = (e, id) => ({ ...e, message: { ...e.message, content: [{ ...e.message.content[0], id }] } });
+  const forId = (text, id) => ({ type: "user", message: { role: "user",
+    content: [{ type: "tool_result", tool_use_id: id, content: [{ type: "text", text }] }] } });
+  // Two calls in one turn: the runner and a `cat`. The runner's result (answering t1) arms...
+  denies(...EDIT_PAY, [withId(RUN, "t1"), withId(useEntry("Bash", { command: "cat notes.md" }), "t2"),
+    forId("FAIL src/pay.test.js", "t1")]);
+  // ...the cat's result (answering t2) does not, even though the runner was called first.
+  allows(...EDIT_PAY, [withId(RUN, "t1"), withId(useEntry("Bash", { command: "cat notes.md" }), "t2"),
+    forId("FAIL src/pay.test.js", "t2")]);
+});
+
+test("runner dialects: unicode markers and `Error:` on the file's line arm the tripwire", () => {
+  // `\b` cannot sit next to a non-word glyph, so `\b✕\b` never matched, and `\bError:\b` needed a
+  // word character right after the colon - four of eight common runner lines went unseen.
+  for (const line of [
+    "  ✕ src/pay.test.js > adds (12 ms)",       // vitest / jest
+    "✗ src/pay.test.js",                          // mocha-style
+    "× src/pay.test.js > adds",                   // vitest (windows glyph)
+    "✖ src/pay.test.js (1 failing)",              // node --test
+    "Error: expected 6 got 3 (src/pay.test.js)",  // stack-trace dialect
+    "not ok 1 - src/pay.test.js",                 // TAP
+    "FAILED src/pay.test.js::test_total - AssertionError", // pytest
+  ]) {
+    const d = runPre(...EDIT_PAY, [RUN, resultEntry(line)]);
+    assert.ok(d && d.hookSpecificOutput.permissionDecision === "deny", `expected "${line}" to arm the tripwire`);
+  }
+});
+
+test("a later GREEN run of the suite clears it, even when the runner prints no per-file pass line", () => {
+  // node --test's spec reporter names no files on success. The state was unclearable by
+  // legitimate means before this; a green re-run of the suite (or of the named file) clears it.
+  allows(...EDIT_PAY, [...FAIL_PAY, RUN, resultEntry("✔ 42 tests passed\n42 passing (1.2s)")]);
+  allows(...EDIT_PAY, [...FAIL_PAY, useEntry("Bash", { command: "npx jest src/pay.test.js" }), resultEntry("Tests: 4 passed, 4 total")]);
+});
+
+test("a later green run of an UNRELATED file does not clear it (deny)", () => {
+  denies(...EDIT_PAY, [...FAIL_PAY, useEntry("Bash", { command: "npx jest src/other.test.js" }),
+    resultEntry("PASS src/other.test.js")]);
+});
+
+// ---- the ack must SURVIVE the edit (#49) -------------------------------------------------
+
+test("#49: an ack that appears only in old_string does not clear the tripwire (insert, pass, remove)", () => {
+  // old_string is pre-edit text and cannot express intent about the edit; a REMOVAL necessarily
+  // carries the deleted text there, so reading it let an agent add an ack, pass, then delete it
+  // and have the deletion itself cleared by the ack it was deleting - no ack left in the diff.
+  const reason = denies("Edit", { file_path: "src/pay.test.js", old_string: "// RECEIPTS_ACK=temp", new_string: "" }, FAIL_PAY);
+  assert.match(reason, /G11/);
+});
+
+test("an ack in the NEW content clears it: Edit new_string, Write content, MultiEdit edits[].new_string", () => {
+  allows("Edit", { file_path: "src/pay.test.js", old_string: "a", new_string: "// RECEIPTS_ACK='dead feature #12'\nb" }, FAIL_PAY);
+  allows("Write", { file_path: "src/pay.test.js", content: "// test-removal: replaced by pay.e2e.test.js" }, FAIL_PAY);
+  allows("MultiEdit", { file_path: "src/pay.test.js", edits: [{ old_string: "a", new_string: "b" }, { old_string: "c", new_string: "// test-removal: dead\nd" }] }, FAIL_PAY);
 });
 
 // ================================================================= Stop-hook refire DAMPING
@@ -231,6 +415,7 @@ function makeStopSession() {
   const tp = path.join(td, "transcript.jsonl");
   const home = path.join(td, "home");
   fs.mkdirSync(home, { recursive: true });
+  fs.writeFileSync(path.join(td, "receipts.config.json"), JSON.stringify({ version: 1 })); // opted in
   const entries = [];
   const flush = () => fs.writeFileSync(tp, entries.map((e) => JSON.stringify(e)).join("\n") + "\n");
   return {
@@ -308,6 +493,7 @@ test("damping: state-file unwritable -> fail-open to blocking (never a lost gate
   const home = path.join(td, "home");
   fs.mkdirSync(home, { recursive: true });
   fs.writeFileSync(tp, JSON.stringify(CLOSEOUT) + "\n");
+  fs.writeFileSync(path.join(td, "receipts.config.json"), JSON.stringify({ version: 1 })); // opted in
   const roTmp = path.join(td, "ro-tmp");
   fs.mkdirSync(roTmp);
   fs.chmodSync(roTmp, 0o500); // read+execute, no write

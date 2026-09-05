@@ -19,15 +19,20 @@
  *
  * Project specifics come from receipts.config.json (agent-home base, nearest project config
  * merged over) - the SAME resolution stop-gates uses. Tripwire behavior + patterns live under
- * `agent.tripwires`; zero-config works via generic defaults.
+ * `agent.tripwires`; a config with nothing tuned runs the generic defaults, and NO config at
+ * all turns the tripwires off (enforcement is opt-in; only init_unattended runs regardless).
  *
  * Input:  PreToolUse JSON on stdin ({tool_name, tool_input, transcript_path, cwd, ...}).
- * Output: {"hookSpecificOutput":{"hookEventName":"PreToolUse","permissionDecision":"deny",
- *          "permissionDecisionReason":"..."}} to block; nothing (exit 0) to allow.
+ * Output: {"hookSpecificOutput":{"hookEventName":"PreToolUse","permissionDecision":"deny"|"ask",
+ *          "permissionDecisionReason":"..."}} to block or prompt; {"hookSpecificOutput":{...,
+ *          "additionalContext":"..."}} to warn (the action proceeds); nothing (exit 0) to allow.
+ *          Mode per tripwire under agent.tripwires: deny | ask | warn | off; the default is ask,
+ *          or deny under CI (see defaultMode).
  */
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
+import readline from "node:readline";
 
 // ------------------------------------------------------------ shared matchers/heuristics
 //
@@ -75,7 +80,31 @@ const DEFAULT_TEST_CMD_SRC = [
   "\\bgo\\s+test\\b", "\\bcargo\\s+test\\b", "\\bmvn\\b[^\\n]*\\btest\\b", "\\bgradle\\b[^\\n]*\\btest\\b",
   "\\brspec\\b", "\\bmix\\s+test\\b", "\\bphpunit\\b", "\\bdotnet\\s+test\\b", "\\bctest\\b", "\\bbats\\b",
   "\\breceipts\\s+(?:observe|verify)\\b", "receipts-cli\\s+(?:observe|verify)\\b",
+  // The wrappers and runtimes the first list missed - each was a false deny on a project whose
+  // runner `init` itself detects (`make test`) or that is the everyday form of a listed one
+  // (`./gradlew test`, where `\bgradle\b` cannot match "gradlew"). A wrapper script is preceded
+  // by `./` or a path, so those anchor on a separator rather than a word boundary.
+  "\\bmake\\s+(?:test|check)\\b", "(?:^|[\\s;&|/])gradlew\\b[^\\n]*\\btest\\b", "(?:^|[\\s;&|/])mvnw\\b[^\\n]*\\btest\\b",
+  "\\bbun\\s+test\\b", "\\bdeno\\s+test\\b", "\\brails\\s+test\\b", "\\brake\\s+(?:test|spec)\\b",
+  "\\bpython3?\\s+-m\\s+(?:unittest|pytest)\\b", "\\bswift\\s+test\\b", "\\bflutter\\s+test\\b", "\\bdart\\s+test\\b",
+  "\\bnx\\s+(?:run\\s+\\S+:)?test\\b", "\\bturbo\\s+(?:run\\s+)?test\\b", "\\bsbt\\b[^\\n]*\\btest\\b",
+  "\\bzig\\s+(?:build\\s+)?test\\b", "\\bcabal\\s+test\\b", "\\bstack\\s+test\\b", "\\blein\\s+test\\b", "\\belm-test\\b",
+  "\\bava\\b", "\\bkarma\\s+(?:start|run)\\b", "\\bcypress\\s+run\\b", "\\bbehave\\b", "\\brobot\\b",
 ];
+
+// The project's OWN runner, straight from receipts.config.json: verify.test_command and
+// suite_command, each cut at its first placeholder ({test} / {test_dirs} / {test_classes}) and
+// matched at a command boundary. A project whose runner the default list never heard of is
+// recognized the moment it has a config - the config already says how THIS project runs its
+// tests, so there is no second place to declare it. The init placeholder (REPLACE_ME...) is
+// prose, never a runner.
+function configuredRunnerPatterns(cfg) {
+  const v = cfg.verify && typeof cfg.verify === "object" && !Array.isArray(cfg.verify) ? cfg.verify : {};
+  return [v.test_command, v.suite_command]
+    .map((c) => String(c || "").split(/\{test(?:_dirs|_classes)?\}/)[0].trim())
+    .filter((seg) => seg && !/REPLACE_ME/.test(seg))
+    .map((seg) => "(?:^|[\\s;&|(])" + escapeRe(seg));
+}
 
 // --- render-receipt tripwire matchers (opt-in; see renderTripwire) --------------------------
 // A command that EXERCISES a render: a real browser / component-render runner, or a receipts
@@ -119,9 +148,12 @@ function deepMerge(base, over) {
   }
   return out;
 }
+// `found` = a config exists in either layer. It is the OPT-IN for every tripwire but
+// init_unattended (which fires during the very setup that writes the config): a repo with no
+// receipts.config.json anywhere gets no enforcement, the same rule session-memory.mjs follows.
 function loadReceiptsConfig(start) {
-  const home = readConfigFile(path.join(os.homedir(), ".claude", "receipts.config.json")) || {};
-  let proj = {};
+  const homeRaw = readConfigFile(path.join(os.homedir(), ".claude", "receipts.config.json"));
+  let proj = null;
   let d = path.resolve(start || ".");
   for (let i = 0; i < 40; i++) {
     const c = readConfigFile(path.join(d, "receipts.config.json"));
@@ -130,19 +162,24 @@ function loadReceiptsConfig(start) {
     if (parent === d) break;
     d = parent;
   }
-  return deepMerge(home, proj);
+  return { cfg: deepMerge(homeRaw || {}, proj || {}), found: homeRaw !== null || proj !== null };
 }
 
-// One tripwire's mode, honoring `off`. Unknown values fall back to the default.
+// One tripwire's mode: deny | ask | warn | off. Unknown values fall back to the default.
 function tripwireMode(cfg, key, dflt) {
   const t = ((cfg.agent || {}).tripwires) || {};
   const v = String(t[key] || "").toLowerCase();
-  return v === "off" || v === "warn" || v === "deny" ? v : dflt;
+  return ["off", "warn", "ask", "deny"].includes(v) ? v : dflt;
 }
+// The default posture for the agent-facing tripwires: ASK when a human can be prompted (the hook's
+// `ask` decision raises the permission prompt even in auto mode, with the reason attached), DENY
+// where nobody can be asked - CI. A human approving a wip commit IS the honest note; a project
+// that wants the untrusted-agent posture everywhere pins `deny` explicitly.
+const defaultMode = () => (process.env.CI ? "deny" : "ask");
 function testCmdMatcher(cfg) {
   const t = ((cfg.agent || {}).tripwires) || {};
   const extra = (t.test_command_patterns || []).filter((p) => String(p || "").trim());
-  const parts = [...DEFAULT_TEST_CMD_SRC, ...extra];
+  const parts = [...DEFAULT_TEST_CMD_SRC, ...configuredRunnerPatterns(cfg), ...extra];
   return new RegExp(`(?:${parts.join("|")})`, "i");
 }
 
@@ -168,7 +205,7 @@ function renderSourceMatcher(cfg) {
 function renderExercisedMatcher(cfg) {
   const extra = (((cfg.agent || {}).tripwires || {}).test_command_patterns || [])
     .filter((p) => String(p || "").trim());
-  return new RegExp(`(?:${[...TEST_RUNNER_CMD_SRC, ...RENDER_OBSERVE_CMD_SRC, ...extra].join("|")})`, "i");
+  return new RegExp(`(?:${[...TEST_RUNNER_CMD_SRC, ...RENDER_OBSERVE_CMD_SRC, ...configuredRunnerPatterns(cfg), ...extra].join("|")})`, "i");
 }
 function dataOnlyMatcher() {
   return new RegExp(`(?:${DATA_ONLY_CMD_SRC.join("|")})`, "i");
@@ -176,21 +213,41 @@ function dataOnlyMatcher() {
 
 // -------------------------------------------------------------- transcript parse (as stop-gates)
 
-// Ordered walk that captures BOTH tool_use (name + input) and tool_result (the output text a
-// prior tool produced). The commit tripwire needs to interleave "an edit happened" with "a test
-// command ran" and "a test failed in output", so tool_results are first-class here (stop-gates
-// only needed tool_uses + the embedded live-receipt markers).
-function walkEvents(obj, out) {
-  if (Array.isArray(obj)) { for (const v of obj) walkEvents(v, out); return; }
+// Ordered walk that captures BOTH tool_use and tool_result, COMPACTED as each is met. A use keeps
+// only its name, the edited path (edit-family tools) and the command (Bash) - never the input
+// object. A result keeps only the lines that name the file under G11 scrutiny (`opts.fileRe`),
+// and is dropped outright when no file is under scrutiny: the commit tripwire reads the commands
+// that were INVOKED, never their output. The tripwires interleave "an edit happened" with "a test
+// command ran" and "a test failed in output", so results stay first-class in the ORDER - but never
+// in bulk: tool output is most of a long session's transcript, and the hook streams the file
+// precisely so it never holds that (see parseTranscript).
+function walkEvents(obj, out, opts) {
+  if (Array.isArray(obj)) { for (const v of obj) walkEvents(v, out, opts); return; }
   if (obj && typeof obj === "object") {
     if (obj.type === "tool_use" && "name" in obj) {
-      out.push({ kind: "use", name: String(obj.name || ""), input: obj.input ?? {} });
-    } else if (obj.type === "tool_result") {
-      const strings = [];
-      walkStrings(obj.content, strings);
-      out.push({ kind: "result", text: strings.join("\n") });
+      const name = String(obj.name || ""), input = obj.input ?? {};
+      const cmd = name === "Bash" ? String(sget(input, "command") || "") : "";
+      out.push({ kind: "use", name, path: isEditTool(name) ? editedPath(input) : "", cmd });
+      if (opts.runners) {
+        // Remember which uses were test RUNS so their results can be told from everything else
+        // (a `cat`, an agent's report). Keyed by id when the transcript carries one; the last use
+        // is the fallback for a result that names none.
+        const runnerCmd = opts.testCmd.test(cmd) ? cmd : null;
+        if (obj.id != null) opts.runners.byId.set(String(obj.id), runnerCmd);
+        opts.runners.last = runnerCmd;
+      }
+    } else if (obj.type === "tool_result" && opts.fileRe) {
+      // Only RUNNER output is kept: prose that quotes a fail token never arms the referee.
+      const id = obj.tool_use_id != null ? String(obj.tool_use_id) : null;
+      const cmd = id !== null && opts.runners.byId.has(id) ? opts.runners.byId.get(id) : opts.runners.last;
+      if (id !== null) opts.runners.byId.delete(id);
+      if (cmd) {
+        const strings = [];
+        walkStrings(obj.content, strings);
+        out.push({ kind: "result", cmd, lines: strings.join("\n").split("\n").filter((l) => opts.fileRe.test(l)) });
+      }
     }
-    for (const v of Object.values(obj)) walkEvents(v, out);
+    for (const v of Object.values(obj)) walkEvents(v, out, opts);
   }
 }
 function walkStrings(obj, out) {
@@ -222,12 +279,8 @@ function commitTripwire(events, testCmd) {
   let lastProdEditIdx = -1, lastProdEditFile = "";
   let testRanAfterEdit = false;
   events.forEach((e, i) => {
-    if (e.kind === "use" && isEditTool(e.name)) {
-      const f = editedPath(e.input);
-      if (isProdSource(f)) { lastProdEditIdx = i; lastProdEditFile = f; testRanAfterEdit = false; }
-    }
-    if (i > lastProdEditIdx && lastProdEditIdx >= 0 &&
-        e.kind === "use" && e.name === "Bash" && testCmd.test(String(sget(e.input, "command") || ""))) {
+    if (e.kind === "use" && isProdSource(e.path)) { lastProdEditIdx = i; lastProdEditFile = e.path; testRanAfterEdit = false; }
+    if (i > lastProdEditIdx && lastProdEditIdx >= 0 && e.kind === "use" && e.name === "Bash" && testCmd.test(e.cmd)) {
       testRanAfterEdit = true;
     }
   });
@@ -267,16 +320,12 @@ function renderTripwire(events, isRenderSource, dataOnly, exercised) {
   let lastIdx = -1, lastFile = "";
   let sawDataOnly = false, sawExercised = false;
   events.forEach((e, i) => {
-    if (e.kind === "use" && isEditTool(e.name)) {
-      const f = editedPath(e.input);
-      if (isProdSource(f) && isRenderSource.test(f)) {
-        lastIdx = i; lastFile = f; sawDataOnly = false; sawExercised = false;
-      }
+    if (e.kind === "use" && isProdSource(e.path) && isRenderSource.test(e.path)) {
+      lastIdx = i; lastFile = e.path; sawDataOnly = false; sawExercised = false;
     }
     if (i > lastIdx && lastIdx >= 0 && e.kind === "use" && e.name === "Bash") {
-      const cmd = String(sget(e.input, "command") || "");
-      if (exercised.test(cmd)) sawExercised = true;      // a runner / real render-observe -> exercised
-      else if (dataOnly.test(cmd)) sawDataOnly = true;   // a data read only
+      if (exercised.test(e.cmd)) sawExercised = true;      // a runner / real render-observe -> exercised
+      else if (dataOnly.test(e.cmd)) sawDataOnly = true;   // a data read only
     }
   });
   if (lastIdx < 0) return null;                 // no render-feeding source edited
@@ -303,60 +352,80 @@ function renderReason(editedFile) {
 
 // ------------------------------------------------------- tripwire 2: G11-live (edit the referee)
 
-// A test was seen FAILING in output, then the agent goes to EDIT that same test file with no
-// intervening passing run: the "weaken the referee to win" move. CONSERVATIVE - it fires only
-// when the edited test file's exact path (or, failing an absolute-path echo, its basename) is
-// named in a failing tool_result AND no later result shows that same file passing/green. When
-// unsure, allow.
+// A test RUN showed a file FAILING, then the agent goes to EDIT that same test file with no green
+// run since: the "weaken the referee to win" move. CONSERVATIVE - it fires only when the edited
+// test file's exact path (or, failing an absolute-path echo, its basename) is named on a failing
+// line of RUNNER output (the tool_result of a test command - prose that quotes a fail token, an
+// agent's own report, a `cat`, never arms it) AND no later run has shown it green. When unsure,
+// allow.
 //
-// Failing/passing signals are read from tool_result text (a runner's stdout lands there). We do
-// NOT try to fully parse every runner; we look for the file token co-located with a generic
-// FAIL/PASS token, which is enough to be conservative without false denies.
-const FAIL_TOKEN = /\b(FAIL|FAILED|failing|✕|✗|×|not ok|AssertionError|assert(?:ion)?\s+failed|Error:|✘)\b/;
-const PASS_TOKEN = /\b(PASS|PASSED|passing|✓|✔|ok\b|tests?\s+passed|0\s+fail(?:ing|ed|ures)?)\b/i;
+// Failing/passing signals are read from the runner's output. We do NOT try to fully parse every
+// runner; we look for the file token co-located with a generic FAIL/PASS token, which is enough
+// to be conservative without false denies. Word tokens keep their boundaries; the glyphs and
+// `Error:` cannot take one - `\b` needs a word character on one side, so `\b✕\b` never matched
+// and `\bError:\b` needed a letter right after the colon, and four of eight common runner lines
+// went unseen.
+const FAIL_TOKEN = /\b(?:FAIL(?:ED|URE|ING)?|failing|not ok|AssertionError|assert(?:ion)?\s+failed)\b|Error:|[✕✗✘✖×]/;
+const PASS_TOKEN = /\b(?:PASS(?:ED|ING)?|passing|ok|tests?\s+passed|0\s+fail(?:ing|ed|ures)?)\b|[✓✔]/i;
+// A runner command that names no test-file-looking argument ran the SUITE.
+const NAMES_A_TEST_FILE = /\S+\.(?:m?js|cjs|ts|tsx|jsx|py|rb|go|rs|java|kt|kts|cs|php|exs?|swift|dart|scala|feature|robot)\b/;
+
+// Match the file by its full path if the runner printed it, else by basename. Basename-only is
+// still conservative: it must appear in a result line that ALSO carries a fail token. The matcher
+// is built BEFORE the transcript is parsed, so parseTranscript keeps only the lines that name it.
+function fileMatcher(editedFile) {
+  const base = basename(editedFile);
+  return base ? new RegExp(escapeRe(editedFile) + "|" + escapeRe(base)) : null;
+}
 
 function g11LiveTripwire(events, editedFile) {
   if (!editedFile || !TEST_PATH.test(editedFile)) return null; // only guards edits to TEST files
   const base = basename(editedFile);
-  if (!base) return null;
-  // Match the file by its full path if the runner printed it, else by basename. Basename-only is
-  // still conservative: it must appear in a result line that ALSO carries a fail token.
-  const fileRe = new RegExp(escapeRe(editedFile) + "|" + escapeRe(base));
-  let sawFailingForFile = false;
+  let armed = false;
   for (const e of events) {
-    if (e.kind !== "result") continue;
-    const text = e.text || "";
-    if (!fileRe.test(text)) continue;
+    if (e.kind !== "result") continue; // runner output only - walkEvents kept nothing else
     // Line-scoped: the file token and a fail/pass token on the SAME line (a runner's per-file
     // status line), so an unrelated FAIL elsewhere in a long log does not bind to this file.
-    for (const line of text.split("\n")) {
-      if (!fileRe.test(line)) continue;
-      if (FAIL_TOKEN.test(line)) sawFailingForFile = true;
-      else if (PASS_TOKEN.test(line)) sawFailingForFile = false; // an intervening green re-arms nothing
+    let fail = false, pass = false;
+    for (const line of e.lines) {
+      if (FAIL_TOKEN.test(line)) fail = true;
+      else if (PASS_TOKEN.test(line)) pass = true;
     }
+    if (fail) armed = true;
+    else if (pass) armed = false;
+    // A green re-run clears it even when the runner prints no per-file pass line (node --test's
+    // spec reporter names no files on success): a run that named this file, or ran the whole
+    // suite, and showed nothing failing for it. Before this the state was unclearable by any
+    // legitimate means for the rest of the session - which is what made bypassing it attractive.
+    // A run of some OTHER file says nothing about this one and clears nothing.
+    else if (armed && (e.cmd.includes(base) || !NAMES_A_TEST_FILE.test(e.cmd))) armed = false;
   }
-  if (!sawFailingForFile) return null;
-  return { editedFile };
+  return armed ? { editedFile } : null;
 }
 
 function g11Reason(editedFile) {
   return (
-    "TRIPWIRE (G11 referee integrity): a test in " + editedFile + " was seen FAILING earlier " +
-    "this session with no passing run since, and you are about to edit that test file. The Gates " +
+    "TRIPWIRE (G11 referee integrity): a test run earlier this session showed " + editedFile +
+    " FAILING, no run since has shown it green, and you are about to edit that test file. The Gates " +
     "G11: the suite is the referee - fix the CODE the test is catching, not the test. Do not " +
     "delete/skip/`.only`/loosen the assertion to turn it green; a green earned by weakening the " +
-    "referee proves nothing. If this test genuinely must change (a dead feature, a wrong " +
-    "expectation the reporter confirmed), proceed by carrying an EXPLICIT ack in the edit's " +
-    "content or via env: a `test-removal: <why>` note (the honest, reviewed removal) or " +
+    "referee proves nothing. If the code is already fixed, re-run the tests: a green run of this " +
+    "file or of the suite clears this. If this test genuinely must change (a dead feature, a wrong " +
+    "expectation the reporter confirmed), proceed by carrying an EXPLICIT ack in the content the " +
+    "edit WRITES: a `test-removal: <why>` note (the honest, reviewed removal) or " +
     "`RECEIPTS_ACK='<why the test itself is wrong>'`. The ack is greppable on purpose - an " +
     "honest, reviewable decision, never a quiet one."
   );
 }
 
-// The edit-family tools also carry the ack inline (the new content, the message, or an env-ish
-// string): let an ack in the edit's OWN payload clear the G11 tripwire, same escape as the commit.
+// The edit-family tools carry the ack inline, in the content the edit WRITES: Edit's new_string,
+// Write's content, MultiEdit's edits[].new_string. Never old_string - that is pre-edit text and
+// cannot express intent about the edit; a REMOVAL necessarily carries the deleted text there, so
+// reading it let an agent insert an ack, pass, then delete it and have the deletion cleared by the
+// very ack it was removing, leaving no ack in the diff (#49). The ack has to SURVIVE the edit.
 function editCarriesAck(inp) {
-  const bag = [sget(inp, "new_string"), sget(inp, "content"), sget(inp, "old_string")]
+  const edits = Array.isArray(sget(inp, "edits")) ? sget(inp, "edits") : [];
+  const bag = [sget(inp, "new_string"), sget(inp, "content"), ...edits.map((e) => (e && typeof e === "object" ? e.new_string : undefined))]
     .filter((s) => typeof s === "string").join("\n");
   return ACK_TAG.test(bag) || /test-removal\s*:/i.test(bag);
 }
@@ -381,14 +450,15 @@ function initUnattendedReason() {
 
 // ------------------------------------------------------------------------- output helpers
 
-function deny(reason) {
-  process.stdout.write(JSON.stringify({
-    hookSpecificOutput: {
-      hookEventName: "PreToolUse",
-      permissionDecision: "deny",
-      permissionDecisionReason: reason,
-    },
-  }) + "\n");
+// The three shapes a tripwire can take. `deny` and `ask` are permission decisions (ask raises the
+// user prompt with the reason attached, even in auto mode). `warn` decides nothing: it rides along
+// as additionalContext, so the action proceeds and the agent is TOLD what it skipped - the channel
+// PreToolUse hooks gained after this file was first written with "warn is a no-op" baked in.
+function emit(mode, reason) {
+  const out = { hookEventName: "PreToolUse" };
+  if (mode === "warn") out.additionalContext = "receipts tripwire (advisory - the action went ahead): " + reason;
+  else { out.permissionDecision = mode; out.permissionDecisionReason = reason; }
+  process.stdout.write(JSON.stringify({ hookSpecificOutput: out }) + "\n");
 }
 
 // ------------------------------------------------------------------------- main
@@ -407,12 +477,11 @@ async function main() {
   const toolInput = payload.tool_input ?? {};
   const tp = payload.transcript_path;
 
-  const cfg = loadReceiptsConfig(payload.cwd);
+  const { cfg, found } = loadReceiptsConfig(payload.cwd);
 
   // ---- commit tripwires (Bash `git commit`) --------------------------------------------
-  // warn mode is an intentional no-op at PreToolUse (no reliable agent-visible warn channel);
-  // deny is the enforcing mode. commit-without-verification defaults deny; the render tripwire
-  // defaults off (opt-in: it needs the project to declare render surfaces).
+  // commit-without-verification defaults to ask (deny under CI, see defaultMode); the render
+  // tripwire defaults off (opt-in: it needs the project to declare render surfaces).
   if (toolName === "Bash") {
     const command = String(sget(toolInput, "command") || "");
     // Unattended init: checked BEFORE the commit early-return, which lets every non-commit
@@ -420,67 +489,79 @@ async function main() {
     // --drive-* means the questions WERE put to a human and the answers are being relayed
     // (an agent cannot drive init's readline, so this is the supported path) - not a skip.
     const relayedAnswers = /--drive-(?:auth|bypass|data|browser-surfaces)\b/.test(command);
-    if (INIT_UNATTENDED.test(withoutHeredocBodies(command)) && !relayedAnswers && !ACK_TAG.test(command) && !process.env.CI &&
-        tripwireMode(cfg, "init_unattended", "deny") === "deny") {
-      deny(initUnattendedReason()); return;
+    // --print writes nothing (detection to stdout, so the interview can be grounded in what was
+    // found - the setup skill's own first step), so it cannot record "unknown" on anyone's behalf.
+    const previewOnly = /(?:^|\s)--print\b/.test(command);
+    const initMode = tripwireMode(cfg, "init_unattended", "deny");
+    if (INIT_UNATTENDED.test(withoutHeredocBodies(command)) && !relayedAnswers && !previewOnly && !ACK_TAG.test(command) && !process.env.CI &&
+        initMode !== "off") {
+      emit(initMode, initUnattendedReason()); return;
     }
+    if (!found) return;                                // not opted in (no config anywhere) -> allow
     if (!GIT_COMMIT.test(withoutHeredocBodies(command))) return;             // not a commit -> allow
-    const commitMode = tripwireMode(cfg, "commit_unverified", "deny");
+    const commitMode = tripwireMode(cfg, "commit_unverified", defaultMode());
     const renderMode = tripwireMode(cfg, "render_unverified", "off");
-    if (commitMode !== "deny" && renderMode !== "deny") return;   // nothing to enforce
+    if (commitMode === "off" && renderMode === "off") return;   // nothing to enforce
     if (ACK_TAG.test(command)) return;                 // one explicit escape covers both -> allow
     if (!tp) return;                                   // no transcript -> fail safe (allow)
     let events;
-    try { events = parseTranscript(tp); } catch { return; }
+    try { events = await parseTranscript(tp, { fileRe: null }); } catch { return; }
     if (!events) return;
-    if (commitMode === "deny") {                        // "nothing ran the code" - the fundamental miss
+    if (commitMode !== "off") {                         // "nothing ran the code" - the fundamental miss
       let hit = null;
       try { hit = commitTripwire(events, testCmdMatcher(cfg)); } catch { return; }
-      if (hit) { deny(commitReason(hit.editedFile)); return; }
+      if (hit) { emit(commitMode, commitReason(hit.editedFile)); return; }
     }
-    if (renderMode === "deny") {                        // verified, but data-only against a render edit
+    if (renderMode !== "off") {                         // verified, but data-only against a render edit
       let rhit = null;
       try {
         rhit = renderTripwire(events, renderSourceMatcher(cfg), dataOnlyMatcher(), renderExercisedMatcher(cfg));
       } catch { return; }
-      if (rhit) { deny(renderReason(rhit.editedFile)); return; }
+      if (rhit) { emit(renderMode, renderReason(rhit.editedFile)); return; }
     }
     return;
   }
 
   // ---- G11-live tripwire (Edit/Write/MultiEdit on a test file) --------------------------
   if (isEditTool(toolName)) {
+    if (!found) return;                                // not opted in (no config anywhere) -> allow
     const file = editedPath(toolInput);
     if (!file || !TEST_PATH.test(file)) return;        // only test-file edits are guarded
-    const mode = tripwireMode(cfg, "g11_live", "deny");
+    const mode = tripwireMode(cfg, "g11_live", defaultMode());
     if (mode === "off") return;
     if (editCarriesAck(toolInput)) return;             // explicit ack in the edit -> allow
     if (!tp) return;
+    const fileRe = fileMatcher(file);
+    if (!fileRe) return;
     let events;
-    try { events = parseTranscript(tp); } catch { return; }
+    try { events = await parseTranscript(tp, { fileRe, testCmd: testCmdMatcher(cfg) }); } catch { return; }
     if (!events) return;
     let hit = null;
     try { hit = g11LiveTripwire(events, file); } catch { return; }
-    if (hit && mode === "deny") deny(g11Reason(hit.editedFile));
+    if (hit) emit(mode, g11Reason(hit.editedFile));
     return;
   }
   // any other tool -> allow (emit nothing)
 }
 
-// Parse the transcript JSONL into an ordered event stream (tool_use + tool_result). Returns null
-// on IO failure (caller fails safe = allow).
-function parseTranscript(tp) {
-  let lines;
-  try { lines = fs.readFileSync(tp, "utf8").split("\n"); }
-  catch { return null; }
+// Parse the transcript JSONL into an ordered, COMPACT event stream (tool_use + the tool_result
+// lines under scrutiny - see walkEvents). Streamed line by line: this hook runs on every commit
+// and every test-file edit, and a long session's transcript runs to hundreds of MB, so it must
+// never hold the file (or its parsed objects) whole. Returns null on IO failure (caller fails
+// safe = allow).
+async function parseTranscript(tp, opts) {
   const events = [];
-  for (const line of lines) {
-    const t = line.trim();
-    if (!t) continue;
-    let entry;
-    try { entry = JSON.parse(t); } catch { continue; }
-    try { walkEvents(entry, events); } catch { /* fail safe */ }
-  }
+  if (opts.fileRe) opts.runners = { byId: new Map(), last: null }; // which uses were test runs
+  try {
+    const rl = readline.createInterface({ input: fs.createReadStream(tp, { encoding: "utf8" }), crlfDelay: Infinity });
+    for await (const line of rl) {
+      const t = line.trim();
+      if (!t) continue;
+      let entry;
+      try { entry = JSON.parse(t); } catch { continue; }
+      try { walkEvents(entry, events, opts); } catch { /* fail safe */ }
+    }
+  } catch { return null; }
   return events;
 }
 
