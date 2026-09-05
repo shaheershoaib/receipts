@@ -489,8 +489,11 @@ async function main() {
     // --drive-* means the questions WERE put to a human and the answers are being relayed
     // (an agent cannot drive init's readline, so this is the supported path) - not a skip.
     const relayedAnswers = /--drive-(?:auth|bypass|data|browser-surfaces)\b/.test(command);
+    // --print writes nothing (detection to stdout, so the interview can be grounded in what was
+    // found - the setup skill's own first step), so it cannot record "unknown" on anyone's behalf.
+    const previewOnly = /(?:^|\s)--print\b/.test(command);
     const initMode = tripwireMode(cfg, "init_unattended", "deny");
-    if (INIT_UNATTENDED.test(withoutHeredocBodies(command)) && !relayedAnswers && !ACK_TAG.test(command) && !process.env.CI &&
+    if (INIT_UNATTENDED.test(withoutHeredocBodies(command)) && !relayedAnswers && !previewOnly && !ACK_TAG.test(command) && !process.env.CI &&
         initMode !== "off") {
       emit(initMode, initUnattendedReason()); return;
     }

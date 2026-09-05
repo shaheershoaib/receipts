@@ -55,8 +55,16 @@ test("every invocation form an agent would reach for is caught", () => {
   denies("npx receipts-cli init --yes");
   denies("receipts init -y");
   denies("receipts init --dir /some/app --yes");
-  // the exact command this bug was found through
-  denies("node bin/receipts.js init --print --yes --dir /Users/x/app");
+  denies("node bin/receipts.js init --yes --dir /Users/x/app");
+});
+
+test("--print writes nothing, so `--print --yes` is a preview, not an unattended setup (allow)", () => {
+  // The setup skill's own first step is `receipts init --print --yes --dir <dir>`: detection
+  // printed to stdout so the interview can be grounded in what was found. No file is written,
+  // so nothing records "unknown" on the human's behalf - yet the tripwire denied it and stalled
+  // the very flow it exists to start.
+  allows("node bin/receipts.js init --print --yes --dir /Users/x/app");
+  allows("npx receipts-cli init --yes --print");
 });
 
 test("CI is the one legitimate caller of --yes", () => {
