@@ -1,0 +1,55 @@
+name: Bug report
+description: Something in the enforcer, the CLI, the plugin or the memory server did the wrong thing.
+labels: [bug]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        A bug here means a WRONG verdict or a crash: a fix that should have been blocked passed, a correct fix was blocked, `receipts init` wrote something wrong, `receipts verify` misread a receipt. For a hook that fired when it should not have, use the "Hook false positive" template instead.
+  - type: dropdown
+    id: component
+    attributes:
+      label: Component
+      options:
+        - enforcer (verify.js / the GitHub Action / receipts verify)
+        - CLI (init, doctor, observe, replay, explain, lock, report, kb)
+        - plugin skill (gates / setup)
+        - trajectory-kb (the MCP memory server or the SessionStart injection)
+        - spec / docs
+    validations:
+      required: true
+  - type: input
+    id: version
+    attributes:
+      label: Version
+      description: "`claude plugin list` for the plugin, `npm ls -g receipts-cli` or the `receipts_version` in your receipts.config.json for the CLI."
+      placeholder: "plugin 0.5.2 / receipts-cli 0.5.2"
+    validations:
+      required: true
+  - type: textarea
+    id: what-happened
+    attributes:
+      label: What happened
+      description: The verdict, output or crash you saw. Paste the exact text.
+      render: text
+    validations:
+      required: true
+  - type: textarea
+    id: expected
+    attributes:
+      label: What you expected
+      description: Which gate, rule or documented behaviour says otherwise.
+    validations:
+      required: true
+  - type: textarea
+    id: repro
+    attributes:
+      label: How to reproduce
+      description: The smallest repo shape, config and command that shows it. A receipt artifact (`--receipt-out`) or a `receipts explain` printout is ideal.
+      render: text
+  - type: textarea
+    id: config
+    attributes:
+      label: receipts.config.json
+      description: Paste it with any URLs or account names redacted.
+      render: json

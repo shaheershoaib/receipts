@@ -1,0 +1,68 @@
+name: Hook false positive
+description: A plugin hook blocked, prompted or nagged when it should not have (or stayed silent when it should have fired).
+labels: [bug, hooks]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        The hooks read your session transcript and decide from tool calls, not prose. A false positive is a matcher bug, never something you should configure around, so the report that fixes it fastest carries the exact evidence the hook saw.
+  - type: dropdown
+    id: hook
+    attributes:
+      label: Which hook
+      options:
+        - PreToolUse commit-without-verification (git commit stopped)
+        - PreToolUse G11-live referee (test-file edit stopped)
+        - PreToolUse init unattended (receipts init --yes stopped)
+        - PreToolUse render tripwire
+        - Stop verification gate (close-out blocked for missing deployed-build evidence)
+        - Stop trajectory reminder
+        - SessionStart memory / upgrade notice (wrong or noisy injection)
+    validations:
+      required: true
+  - type: dropdown
+    id: direction
+    attributes:
+      label: Direction
+      options:
+        - Fired when it should not have (false positive)
+        - Stayed silent when it should have fired (false negative)
+    validations:
+      required: true
+  - type: textarea
+    id: message
+    attributes:
+      label: The exact hook message
+      description: Paste the deny / ask / block text verbatim.
+      render: text
+    validations:
+      required: true
+  - type: textarea
+    id: action
+    attributes:
+      label: The tool call it stopped
+      description: The command (for Bash) or the file path and tool (Edit / Write / MultiEdit / a tracker MCP tool). Redact secrets.
+      render: text
+    validations:
+      required: true
+  - type: textarea
+    id: transcript
+    attributes:
+      label: Transcript lines around it
+      description: |
+        The hook decided from `tool_use` / `tool_result` entries in your session transcript, at `~/.claude/projects/<project>/<session-id>.jsonl`. Paste the entries for the last edit, the last test run and its output, and the stopped action (redact paths and secrets). What test command did you run, and what did it print?
+      render: json
+  - type: textarea
+    id: config
+    attributes:
+      label: receipts.config.json
+      description: The project config the hook read (and `~/.claude/receipts.config.json` if you have one), redacted.
+      render: json
+  - type: input
+    id: version
+    attributes:
+      label: Plugin version
+      description: "`claude plugin list`"
+      placeholder: "0.5.2"
+    validations:
+      required: true

@@ -14,12 +14,21 @@ the Gates before a PR is ever opened. This is the agent-side half of `receipts`
   change compatible across the deploy window (G10), then write the red->green receipt.
   Project-agnostic by
   design - a project supplies its own facts via `receipts.config.json`.
-- **`hooks/stop-gates.mjs`** - the Stop-hook backstop, both checks in ONE transcript
-  pass (Node - the plugin already needs Node for its MCP server, and python3 was never
-  a given on Windows): it blocks a "fixed" close-out that lacks deployed-build
-  evidence (binding + observation - the local precursor to the CI enforcer), and it
-  nudges the agent to record what was tried on a surface and how it turned out, so
-  the memory grows (and captures failures, not just wins).
+- **`skills/setup/`** - install / update / configure: owns the `receipts init` interview
+  (the four reachability questions only a human can answer) and `receipts doctor`.
+- **`hooks/stop-gates.mjs`** - the Stop-hook backstop, both checks in ONE streaming
+  pass over the transcript (Node - the plugin already needs Node for its MCP server, and
+  python3 was never a given on Windows): it blocks a "fixed" close-out that lacks
+  deployed-build evidence (binding + observation - the local precursor to the CI
+  enforcer), and it nudges the agent to record what was tried on a surface and how it
+  turned out, so the memory grows (and captures failures, not just wins).
+- **`hooks/pre-gates.mjs`** - the in-session tripwires, at the risky action: a `git
+  commit` with no test run since the last production edit, an edit to a test a run just
+  showed failing (G11-live), `receipts init --yes` skipping the interview, and the
+  opt-in render tripwire.
+- **`hooks/session-memory.mjs`** - memory that pushes: injects the repo's prior scars and
+  its recorded way in (`agent.drive`) at session start, and announces a plugin upgrade
+  the config predates.
 - Pairs with the **`../mcp/trajectory-kb`** server (the verification memory).
 
 ## Wiring
@@ -42,8 +51,11 @@ merged over it. So a clean install + `receipts init` tunes them with no hand-edi
 and a **split repo** - skills + session cwd separate from the code repos (e.g. a
 central skills project + several code repos) - is supported via the agent-home layer
 (run `receipts init` there to write an agent-only config; the code repos get the
-enforcer's verify/build config). With no config found the hooks fall back to the
-generic defaults, so a zero-config install still works:
+enforcer's verify/build config). **The config is also the switch**: with no
+`receipts.config.json` found anywhere the tripwires and the Stop gate stand down
+entirely (enforcement is opt-in per repo - only the `receipts init --yes` guard runs
+regardless, because init is what writes the config), and a config with nothing tuned runs
+these generic defaults:
 
 - `hooks/stop-gates.mjs` extends, from config: the deployed-host patterns
   (`build.deploy_host_patterns`), the by-value-query patterns
@@ -54,13 +66,16 @@ generic defaults, so a zero-config install still works:
   fix/build loops (`agent.loop_skills` - the shipped `gates` plus any project loops),
   so the trajectory reminder watches the project's actual loops, not just the bundled
   one.
+- `hooks/pre-gates.mjs` reads its posture from `agent.tripwires` (per guard `deny` |
+  `ask` | `warn` | `off`; default `ask`, or `deny` under CI), and counts the project's own
+  `verify.test_command` / `suite_command` as "the tests ran".
 - `skills/gates/` stays project-agnostic. For a project with its own loop,
-  `receipts init` registers it in `agent.loop_skills`; for a project with none, `init`
-  scaffolds one from `templates/loop-skill/SKILL.md.tmpl` (filled with the project's
-  facts) so the trajectory-kb is driven out of the box.
+  `receipts init` registers it in `agent.loop_skills`; `init --scaffold` adds one from
+  `templates/loop-skill/SKILL.md.tmpl` (filled with the project's facts) for a project
+  that wants its own - the bundled `gates` drives the loop otherwise.
 
 ## Roadmap
 
 - [x] `receipts.config.json` for host / loop-skill / fixed-status overrides - the hooks read it.
-- [x] `receipts init` detects + registers loop skills and scaffolds a harness when none exists; `receipts doctor` reports drift.
-- [ ] Install-test that the hooks + MCP auto-activate from the manifest in a real session.
+- [x] `receipts init` detects + registers loop skills (and scaffolds a harness on `--scaffold`); `receipts doctor` reports drift.
+- [x] Install-test through Claude Code's own plugin manager: CI installs the plugin from the checkout as a marketplace, reads back the registered skills / hooks / MCP server, speaks the MCP handshake to the installed bundle (`scripts/plugin-install-smoke.sh`), and - when the repo has an `ANTHROPIC_API_KEY` secret - runs one real headless turn and asserts the SessionStart hook's output reached the model.
