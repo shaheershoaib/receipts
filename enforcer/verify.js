@@ -271,32 +271,31 @@ function resolveTimeout(verify) {
   return n > 0 ? n : 1200000;
 }
 
-// Schema-lite key validation. The repo ships a real JSON schema, but validating against
-// it would need a dependency - so this mirrors just the KEY SETS. A typo'd key ("gatez",
-// "test_comand") silently meaning "default behavior" is exactly the quiet
+// Key validation against the SHIPPED JSON schema (receipts.config.schema.json is in the npm
+// `files`): one source of truth, walked for every nested `properties` block. A typo'd key
+// ("gatez", "test_comand") silently meaning "default behavior" is exactly the quiet
 // misconfiguration a verification tool must not allow. Unknown keys WARN, never block
-// (forward-compat: an older enforcer meeting a newer config keeps working, loudly).
-const KNOWN_KEYS = {
-  "": ["$schema", "version", "claim", "build", "verify", "degrade", "gates", "agent"],
-  claim: ["issue_link", "require_receipt_for", "downgrade_tags", "require_receipt_lock"],
-  build: ["sha_source", "platform", "deploy_host_patterns", "environments", "verify_against"],
-  verify: ["test_command", "suite_command", "require_fresh_base", "on_load_error_red", "command_timeout_ms", "receipt_runs", "live_drive", "browser_receipt"],
-  "verify.browser_receipt": ["command", "url_source", "url_env", "url_cmd", "mode", "timeout_ms"],
-  degrade: ["on_no_receipt", "on_unreachable_build"],
-  gates: ["medium", "work_type", "enabled", "disabled", "G6", "G7", "G8", "G10", "G11", "G12", "G13", "G14"],
-  "gates.G6": ["mode", "auto", "surfaces", "render_twins"],
-  "gates.G7": ["mode", "graph", "verify_all_dependents"],
-  "gates.G8": ["integration_branch"],
-  "gates.G10": ["contract_paths", "mode", "contract_pairs"],
-  "gates.G11": ["mode"],
-  "gates.G12": ["mode"],
-  "gates.G14": ["mode", "max_mutants"],
-  "gates.G13": ["coverage_command", "lcov_path", "mode"],
-  agent: ["loop_skills", "staging_query_patterns", "closeout_fixed_statuses", "repo_name", "trajectory_store", "evidence", "tripwires", "memory_inject", "drive"],
-  "agent.drive": ["confirmed", "auth", "bypass", "data", "browser_surfaces"],
-};
+// (forward-compat: an older enforcer meeting a newer config keeps working, loudly). Arrays and
+// free-form maps (build.environments) have no `properties` and are not walked. The hand-kept
+// copy this replaces flagged the schema-valid gates.G17 and never descended into
+// agent.tripwires, so a typo there was silent (#75).
+function knownKeysFromSchema(schema) {
+  const out = {};
+  const walk = (node, prefix) => {
+    if (!node || typeof node !== "object" || !node.properties) return;
+    out[prefix] = Object.keys(node.properties);
+    for (const [k, sub] of Object.entries(node.properties)) walk(sub, prefix ? `${prefix}.${k}` : k);
+  };
+  walk(schema, "");
+  return out;
+}
+const KNOWN_KEYS = (() => {
+  try { return knownKeysFromSchema(JSON.parse(fs.readFileSync(path.join(__dirname, "..", "receipts.config.schema.json"), "utf8"))); }
+  catch { return null; } // no schema beside the engine: key validation is skipped, never a false warning
+})();
 function unknownConfigKeys(cfg) {
   const out = [];
+  if (!KNOWN_KEYS) return out;
   const walk = (obj, prefix) => {
     const known = KNOWN_KEYS[prefix];
     if (!known || !obj || typeof obj !== "object" || Array.isArray(obj)) return;

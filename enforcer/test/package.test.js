@@ -65,6 +65,11 @@ test("npm files allowlist covers the shipped require graph (the 0.2.0 g6.js hole
     coveredBy(pkg.files, "plugin/templates/loop-skill/SKILL.md.tmpl"),
     "the loop-skill template init scaffolds from must ship in files"
   );
+  // Also a runtime read: the schema the enforcer derives its known config keys from.
+  assert.ok(
+    coveredBy(pkg.files, "receipts.config.schema.json"),
+    "receipts.config.schema.json must ship in files - verify.js reads it at load for key validation"
+  );
 });
 
 test("marketplace listing version tracks the plugin manifest", () => {

@@ -1,5 +1,34 @@
 # Changelog
 
+## Unreleased
+
+### Fixed
+- **The commit tripwire sees the commits agents actually make.** `git -C <dir> commit`, `git -c k=v
+  commit`, `git --no-pager commit` and a commit inside `sh -c '...'` were not commits to its regex (on
+  one machine 701 of 933 real commits took those forms); an edit made through Bash (`sed -i`, a `>` /
+  `>>` redirect, `tee`, a heredoc), an MCP file tool or NotebookEdit was not an edit; and a test run
+  that FAILED counted as verification, because only the command was read, never its result. The hook
+  now admits git's global options and `sh -c` as a boundary, classifies Bash-written paths with the
+  same TEST_PATH / DOC_OR_META rules (temp, device and agent-config targets excluded), and reads a
+  runner's `is_error` or failure line so a red run leaves the edit unverified. (#73)
+- **The Stop gate reads the close-outs and evidence it misjudged.** Noun-then-verb tracker tools
+  (`issue_write` with `state: closed`) and `gh -R owner/repo issue close` / `pr merge` are recognised;
+  a `preview_*` tool binds to the deployed build only when its URL is a deployed host (a localhost dev
+  server is not G3's build); a bare DB query (`mysql_query`, `psql $DATABASE_URL`) is an observation,
+  not a binding, while `STAGING_DB_URL`, a db-proxy host and configured `agent.staging_query_patterns`
+  still bind. **BREAKING** for a data ticket that closed on a bare local query alone: pair it with
+  `get_deployment`, a deployed-host navigate or a live receipt, as the block message already asked.
+  Three bench hook cells cover the evasions. (#74)
+- **`KNOWN_KEYS` is derived from `receipts.config.schema.json`** instead of a hand-maintained copy that
+  flagged the schema-valid `gates.G17` as unknown and never validated `agent.tripwires`, so a typo there
+  was silent. Closes the KNOWN_KEYS item of #32. (#75)
+
+### Changed
+- **G17's enforcement line no longer claims an executable detector.** Nothing reads
+  `gates.G17.downgrade_threshold`; the spec says agent-judgment and names the store-backed tally as the
+  next executable assist. The scorecard reads 8 executable / 4 hybrid / 8 agent-judgment; the spec stays
+  `receipts/gates@1.5`. (#75)
+
 ## 0.6.0 - 2026-09-05
 
 The spec stays `receipts/gates@1.5`; its scorecard now counts all twenty gates and G19 carries

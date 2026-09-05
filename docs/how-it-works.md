@@ -50,7 +50,7 @@ once - every gate carries the real scar that motivated it.
 | **G12** fix the CAUSE, not the alarm (no silencing) | target | hybrid | agent + enforcer |
 | **G15** force duplicated facts to AGREE | durability | judgment | agent |
 | **G16** repair or disclose EXISTING instances | durability | judgment | agent |
-| **G17** a repeated downgrade is a missing capability | process | hybrid | trajectory store |
+| **G17** a repeated downgrade is a missing capability | process | agent-judgment | agent (a store-backed tally is the next assist) |
 | **G18** prove a transform on the DESTINATION | verify | judgment | agent |
 | **G19** fix the whole CLASS, not the reported instance | target | judgment | agent |
 
