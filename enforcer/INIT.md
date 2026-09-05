@@ -44,7 +44,7 @@ project.
 | `build.verify_against` | one environment found -> use it; staging + prod found -> default staging | ask |
 | `claim.issue_link` | scan recent merged PRs for `closes/fixes/resolves #N` | default `closes #(\d+)` |
 | `claim.downgrade_tags` | - | default `unverified-reasoned`, `speculative`, `reverted` |
-| `agent.loop_skills` | `.claude/skills/*/SKILL.md` whose name/body reads like a fix/build loop (loop / fix / retest / feedback / build / parity / ...) | the shipped `gates`; if no project loop exists, scaffold one from the template |
+| `agent.loop_skills` | `.claude/skills/*/SKILL.md` whose name/body reads like a fix/build loop (loop / fix / retest / feedback / build / parity / ...) | the shipped `gates`; `--scaffold` (or a yes at the interactive offer) adds a `<repo>-fix-loop` from the template |
 | `agent.staging_query_patterns` / `agent.closeout_fixed_statuses` | - | generic defaults (DB-proxy / query tools; `Pending Retest` / `Verified`) |
 | `agent.drive.*` | **nothing - always asked.** Auth route to a signed-in state, any dev-mode shortcut (fixed OTP, seeded login, flag), whether the environment carries realistic data, and surfaces that only exist rendered in a browser | empty, which is honest: it records that nobody has said, so a gate can cite the gap rather than treat "auth-walled" as a fact of nature |
 | `agent.repo_name` | `package.json` name, else the directory name | directory name |
@@ -65,11 +65,14 @@ and appends at close-out. That lives in a **loop skill**. `init` makes the kb wo
 of the box two ways:
 
 - **Register** the project's existing fix/build loop skills into `agent.loop_skills`
-  (the Stop hooks watch these for the append-on-exit nudge).
-- **Scaffold** one from `plugin/templates/loop-skill/SKILL.md.tmpl` when the project
-  has none - a thin loop that rides on `gates`, carries the `query_trajectory` /
-  `append_trajectory` touchpoints, and is filled with the project's facts (repo name,
-  test command, deploy host), then registered in `agent.loop_skills` automatically.
+  (the Stop hooks watch these for the append-on-exit nudge). The bundled `gates` is
+  always registered, so a project with no loop of its own is still driven and watched.
+- **Scaffold** one from `plugin/templates/loop-skill/SKILL.md.tmpl` on request only
+  (`--scaffold`, or a yes at the interactive offer, whose default is no): a thin loop that
+  rides on `gates`, owns the `query_trajectory` / `append_trajectory` touchpoints, and is
+  filled with the project's facts (repo name, test command, deploy host), then registered
+  in `agent.loop_skills` automatically. Opt-in because a scaffolded twin that repeated the
+  `gates` trigger made every bug a coin flip between the two skills.
 
 Either way a clean install + `receipts init` leaves the kb driven and watched, no
 hand-editing.
@@ -93,7 +96,7 @@ receipts init - scanning .
 Write receipts.config.json with the above?  [Y]/n
 
 # (when NO project loop skill is found, init also offers:)
-  > No project loop skill found. Scaffold one (myapp-fix-loop) from the template? [Y]
+  > No project loop skill found. Scaffold one (myapp-fix-loop) from the template? [N]
 ```
 
 ## What it has to ASK (the residue)
@@ -114,10 +117,18 @@ A `receipts.config.json` at the repo root (schema: `receipts.config.schema.json`
 filled example: `receipts.config.example.json`). After `init`, the gates run tuned to
 this project with no further input - and each fix still carries its own proof.
 
+Alongside it, the agent-agnostic adapter, so a non-Claude agent (Codex, Cursor, any
+AGENTS.md reader) gets the same discipline: a SHORT block in `AGENTS.md` (the receipt rule,
+the honesty ladder, the tripwire escapes, and a pointer), delimited by markers so a
+hand-written file is appended to and only the block is replaced on re-run; and the full
+gates G0-G19 in `.receipts/gates.md`, overwritten on every run. `--no-agents` skips both.
+
 ## Modes
 
 - `receipts init` - interactive (the confirm flow above).
 - `receipts init --yes` - accept all detected values (CI / scripted setup).
+- `receipts init --scaffold` - also scaffold a `<repo>-fix-loop` skill when the project
+  has no loop skill of its own (`--no-scaffold` suppresses the interactive offer too).
 - `receipts init --agent` - hand the detection + drafting to an agent, surface only
   the residue for human confirmation.
 - `receipts doctor` - re-detect and diff against the current config (drift check;

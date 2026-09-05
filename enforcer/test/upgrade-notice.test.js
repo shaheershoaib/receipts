@@ -98,13 +98,35 @@ test("a freshly-initialised project is clean end to end", () => {
 
 // ---- AGENTS.md ---------------------------------------------------------------------------
 
-test("init writes AGENTS.md so a non-Claude agent gets the same discipline", () => {
+// The block is SHORT on purpose: the full 23 KB adapter pasted into AGENTS.md drowned the
+// house rules around it. AGENTS.md gets the rule, the ladder, the tripwire escapes and a
+// pointer; the full gates live in .receipts/gates.md.
+const BLOCK_RE = /<!-- BEGIN receipts gates[\s\S]*?<!-- END receipts gates -->/;
+
+test("init writes a SHORT AGENTS.md block so a non-Claude agent gets the discipline", () => {
   const d = project();
   runInit(d, ["--drive-auth", "none needed"]);
   const md = fs.readFileSync(path.join(d, "AGENTS.md"), "utf8");
-  assert.match(md, /BEGIN receipts gates/);
-  assert.match(md, /END receipts gates/);
-  assert.match(md, /RECEIPT/i, "the adapter body must actually be in there");
+  const block = (md.match(BLOCK_RE) || [""])[0];
+  assert.ok(block, "the delimited block must be there");
+  assert.ok(Buffer.byteLength(block) < 3000, `the block must stay under 3,000 bytes, got ${Buffer.byteLength(block)}`);
+  for (const must of [/RECEIPT/, /RED before the fix and\s+GREEN after/, /unverified-reasoned/, /speculative/, /reverted/,
+    /RECEIPTS_ACK='<why>'/, /--no-verify-receipts/, /test-removal: <why>/, /G0-G19/, /\.receipts\/gates\.md/])
+    assert.match(block, must);
+});
+
+test(".receipts/gates.md carries the full adapter verbatim after a one-line header, refreshed every run", () => {
+  const d = project();
+  runInit(d, ["--drive-auth", "none needed"]);
+  const full = path.join(d, ".receipts", "gates.md");
+  const adapter = fs.readFileSync(path.join(ROOT, "adapters", "AGENTS.md"), "utf8");
+  const afterHeader = (s) => s.slice(s.indexOf("\n") + 1);
+  const first = fs.readFileSync(full, "utf8");
+  assert.match(first.split("\n")[0], /GENERATED/);
+  assert.equal(afterHeader(first), adapter);
+  fs.writeFileSync(full, "stale hand edit\n");
+  runInit(d, ["--force", "--drive-auth", "none needed"]);
+  assert.equal(afterHeader(fs.readFileSync(full, "utf8")), adapter, "generated output is overwritten, not preserved");
 });
 
 test("an existing AGENTS.md is APPENDED to, never clobbered", () => {
@@ -125,10 +147,11 @@ test("re-running init REPLACES the block rather than stacking duplicates", () =>
   assert.match(md, /# House rules/);
 });
 
-test("--no-agents opts out", () => {
+test("--no-agents opts out of BOTH files", () => {
   const d = project();
   runInit(d, ["--no-agents", "--drive-auth", "none needed"]);
   assert.ok(!fs.existsSync(path.join(d, "AGENTS.md")));
+  assert.ok(!fs.existsSync(path.join(d, ".receipts", "gates.md")));
 });
 
 test("the adapter ships to npm, or init cannot write it", () => {

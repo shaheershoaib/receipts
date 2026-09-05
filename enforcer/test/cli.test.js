@@ -79,3 +79,41 @@ test("receipts explain summarizes a receipt artifact", () => {
   assert.match(ex.stdout, /red \(reproduced on base\): true/);
   assert.match(ex.stdout, /receipt-green@head|\$ /); // shows the commands run
 });
+
+// ── receipts init: the loop-skill scaffold is opt-in ─────────────────────────
+// `gates` ships with the plugin and already drives the fix loop. Scaffolding a project twin
+// by default duplicated its trigger (both opened "Use when fixing a bug"), so every bug was
+// a coin flip between the two; `--yes` now writes no skill unless `--scaffold` asks for one.
+function initRepo(args) {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), "cli-init-"));
+  fs.writeFileSync(path.join(dir, "package.json"), JSON.stringify({ name: "x", scripts: { test: "jest" } }));
+  const r = run(["init", "--yes", "--dir", dir, ...args]);
+  assert.equal(r.code, 0, r.stderr);
+  return { dir, cfg: JSON.parse(fs.readFileSync(path.join(dir, "receipts.config.json"), "utf8")) };
+}
+
+test("init --yes writes NO loop skill by default; gates alone is registered", () => {
+  const { dir, cfg } = initRepo([]);
+  assert.ok(!fs.existsSync(path.join(dir, ".claude", "skills")), "no .claude/skills entry may appear unasked");
+  assert.deepEqual(cfg.agent.loop_skills, ["gates"]);
+});
+
+test("init --yes --scaffold writes .claude/skills/<repo>-fix-loop/SKILL.md and registers it", () => {
+  const { dir, cfg } = initRepo(["--scaffold"]);
+  const skill = path.join(dir, ".claude", "skills", "x-fix-loop", "SKILL.md");
+  assert.ok(fs.existsSync(skill), "the scaffold must land at .claude/skills/<repo>-fix-loop/SKILL.md");
+  assert.deepEqual(cfg.agent.loop_skills, ["gates", "x-fix-loop"]);
+  const md = fs.readFileSync(skill, "utf8");
+  assert.doesNotMatch(md, /\{\{/, "every template placeholder must be filled");
+  // The description COMPLEMENTS `gates` (the memory touchpoints + this repo's facts) instead
+  // of repeating its trigger.
+  const desc = md.match(/^description: >-\n([\s\S]*?)\n---/m)[1];
+  assert.doesNotMatch(desc, /^\s*Use when fixing a bug/);
+  for (const own of [/query_trajectory/, /append_trajectory/, /`gates`/]) assert.match(desc, own);
+});
+
+test("--no-scaffold is still accepted and wins over --scaffold", () => {
+  const { dir, cfg } = initRepo(["--scaffold", "--no-scaffold"]);
+  assert.ok(!fs.existsSync(path.join(dir, ".claude", "skills")));
+  assert.deepEqual(cfg.agent.loop_skills, ["gates"]);
+});
