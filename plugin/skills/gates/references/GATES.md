@@ -22,8 +22,8 @@ re-check), `agent-judgment` (carried by the agent adapter, no PR-side artifact),
 
 ## Enforcement scorecard
 
-Of the 20 gates: **8 executable** (G6, G7, G8, G9, G10, G11, G13, G14), **5 hybrid** (G0, G1,
-G3, G12, G17), **7 agent-judgment** (G2, G4, G5, G15, G16, G18, G19). The roadmap's durability metric is moving gates
+Of the 20 gates: **8 executable** (G6, G7, G8, G9, G10, G11, G13, G14), **4 hybrid** (G0, G1,
+G3, G12), **8 agent-judgment** (G2, G4, G5, G15, G16, G17, G18, G19). The roadmap's durability metric is moving gates
 RIGHTWARD - from judgment to executable - because an executable gate a machine re-runs does
 not depend on which agent, or how careful an agent, produced the work; the wholly-judgment
 gates are the model-dependent surface, and shrinking that surface is how the standard stops
@@ -673,7 +673,7 @@ and was being absorbed downstream by human testers.
 threshold, a named capability gap.
 
 *Kind: process - the first gate that spans items rather than judging a single change.*
-*Enforcement: executable where a trajectory store is present (it already records an outcome per surface, so the detector is wiring rather than new instrumentation); otherwise agent-side tallying within the run. Threshold via `gates.G17.downgrade_threshold` (default 3).*
+*Enforcement: agent-judgment - the tally by (reason x surface-class) is the agent's, within the run. Nothing executable reads `gates.G17.downgrade_threshold` yet; the key is reserved for the store-backed detector, the natural next executable assist, since the trajectory store already records an outcome per surface (one machine's store held 302 `unverified-reasoned` entries against 0 counted).*
 
 
 ## G18 - A transform is proven on the DESTINATION, never by the source (the migration gate)

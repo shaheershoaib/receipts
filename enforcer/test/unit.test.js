@@ -232,3 +232,20 @@ test("every documented receipt-cmd example parses clean and passes the exit-mask
     if (parsed.expect !== null) new RegExp(parsed.expect, "m"); // must compile
   }
 });
+
+test("KNOWN_KEYS is the schema: every nested block is validated and a schema-valid key is never flagged (#75)", () => {
+  // The hand-maintained map flagged gates.G17 (in the schema) as unknown, and never descended into
+  // agent.tripwires, so a typo there meant "default behavior" silently - the exact failure this
+  // check exists to catch. The map is now derived from receipts.config.schema.json at load.
+  assert.deepEqual(unknownConfigKeys({ version: 1, gates: { G17: { downgrade_threshold: 3 } } }), [],
+    "gates.G17.downgrade_threshold is in the shipped schema and must not be flagged");
+  assert.deepEqual(unknownConfigKeys({ version: 1, agent: { tripwires: { commit_unverfied: "deny", g11_live: "ask" } } }),
+    ["agent.tripwires.commit_unverfied"], "a typo inside agent.tripwires is named");
+  // Every object block the schema declares is walked: a config built from every schema key is
+  // silent, so no block can fall out of the validated set again.
+  const fs = require("fs");
+  const path = require("path");
+  const schema = JSON.parse(fs.readFileSync(path.join(__dirname, "..", "..", "receipts.config.schema.json"), "utf8"));
+  const fill = (node) => { const o = {}; for (const [k, s] of Object.entries(node.properties || {})) o[k] = s.properties ? fill(s) : "x"; return o; };
+  assert.deepEqual(unknownConfigKeys(fill(schema)), [], "a config built from every schema key is silent");
+});
