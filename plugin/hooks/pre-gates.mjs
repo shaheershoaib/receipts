@@ -80,7 +80,31 @@ const DEFAULT_TEST_CMD_SRC = [
   "\\bgo\\s+test\\b", "\\bcargo\\s+test\\b", "\\bmvn\\b[^\\n]*\\btest\\b", "\\bgradle\\b[^\\n]*\\btest\\b",
   "\\brspec\\b", "\\bmix\\s+test\\b", "\\bphpunit\\b", "\\bdotnet\\s+test\\b", "\\bctest\\b", "\\bbats\\b",
   "\\breceipts\\s+(?:observe|verify)\\b", "receipts-cli\\s+(?:observe|verify)\\b",
+  // The wrappers and runtimes the first list missed - each was a false deny on a project whose
+  // runner `init` itself detects (`make test`) or that is the everyday form of a listed one
+  // (`./gradlew test`, where `\bgradle\b` cannot match "gradlew"). A wrapper script is preceded
+  // by `./` or a path, so those anchor on a separator rather than a word boundary.
+  "\\bmake\\s+(?:test|check)\\b", "(?:^|[\\s;&|/])gradlew\\b[^\\n]*\\btest\\b", "(?:^|[\\s;&|/])mvnw\\b[^\\n]*\\btest\\b",
+  "\\bbun\\s+test\\b", "\\bdeno\\s+test\\b", "\\brails\\s+test\\b", "\\brake\\s+(?:test|spec)\\b",
+  "\\bpython3?\\s+-m\\s+(?:unittest|pytest)\\b", "\\bswift\\s+test\\b", "\\bflutter\\s+test\\b", "\\bdart\\s+test\\b",
+  "\\bnx\\s+(?:run\\s+\\S+:)?test\\b", "\\bturbo\\s+(?:run\\s+)?test\\b", "\\bsbt\\b[^\\n]*\\btest\\b",
+  "\\bzig\\s+(?:build\\s+)?test\\b", "\\bcabal\\s+test\\b", "\\bstack\\s+test\\b", "\\blein\\s+test\\b", "\\belm-test\\b",
+  "\\bava\\b", "\\bkarma\\s+(?:start|run)\\b", "\\bcypress\\s+run\\b", "\\bbehave\\b", "\\brobot\\b",
 ];
+
+// The project's OWN runner, straight from receipts.config.json: verify.test_command and
+// suite_command, each cut at its first placeholder ({test} / {test_dirs} / {test_classes}) and
+// matched at a command boundary. A project whose runner the default list never heard of is
+// recognized the moment it has a config - the config already says how THIS project runs its
+// tests, so there is no second place to declare it. The init placeholder (REPLACE_ME...) is
+// prose, never a runner.
+function configuredRunnerPatterns(cfg) {
+  const v = cfg.verify && typeof cfg.verify === "object" && !Array.isArray(cfg.verify) ? cfg.verify : {};
+  return [v.test_command, v.suite_command]
+    .map((c) => String(c || "").split(/\{test(?:_dirs|_classes)?\}/)[0].trim())
+    .filter((seg) => seg && !/REPLACE_ME/.test(seg))
+    .map((seg) => "(?:^|[\\s;&|(])" + escapeRe(seg));
+}
 
 // --- render-receipt tripwire matchers (opt-in; see renderTripwire) --------------------------
 // A command that EXERCISES a render: a real browser / component-render runner, or a receipts
@@ -155,7 +179,7 @@ const defaultMode = () => (process.env.CI ? "deny" : "ask");
 function testCmdMatcher(cfg) {
   const t = ((cfg.agent || {}).tripwires) || {};
   const extra = (t.test_command_patterns || []).filter((p) => String(p || "").trim());
-  const parts = [...DEFAULT_TEST_CMD_SRC, ...extra];
+  const parts = [...DEFAULT_TEST_CMD_SRC, ...configuredRunnerPatterns(cfg), ...extra];
   return new RegExp(`(?:${parts.join("|")})`, "i");
 }
 
@@ -181,7 +205,7 @@ function renderSourceMatcher(cfg) {
 function renderExercisedMatcher(cfg) {
   const extra = (((cfg.agent || {}).tripwires || {}).test_command_patterns || [])
     .filter((p) => String(p || "").trim());
-  return new RegExp(`(?:${[...TEST_RUNNER_CMD_SRC, ...RENDER_OBSERVE_CMD_SRC, ...extra].join("|")})`, "i");
+  return new RegExp(`(?:${[...TEST_RUNNER_CMD_SRC, ...RENDER_OBSERVE_CMD_SRC, ...configuredRunnerPatterns(cfg), ...extra].join("|")})`, "i");
 }
 function dataOnlyMatcher() {
   return new RegExp(`(?:${DATA_ONLY_CMD_SRC.join("|")})`, "i");

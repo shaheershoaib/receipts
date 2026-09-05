@@ -242,6 +242,46 @@ test("a project-configured test_command_pattern counts as running the code (allo
     { projectConfig: { version: 1, agent: { tripwires: { test_command_patterns: ["run-checks\\.sh"] } } } });
 });
 
+// ============================================================ what counts as "the tests ran"
+
+test("the project's OWN verify.test_command counts as running the code, with no second declaration", () => {
+  // `receipts init` wrote `make test` as the suite command and the tripwire then denied every
+  // commit that followed a `make test`, because the default runner list had never heard of it.
+  // The config already says how THIS project runs its tests; the tripwire reads it.
+  allows("Bash", { command: "git commit -m fix" },
+    [PROD_EDIT, useEntry("Bash", { command: "./scripts/check src/pay.test.js" })],
+    { projectConfig: { version: 1, verify: { test_command: "./scripts/check {test}" } } });
+});
+
+test("verify.suite_command counts too, and a placeholder mid-command matches its invoked form", () => {
+  allows("Bash", { command: "git commit -m fix" },
+    [PROD_EDIT, useEntry("Bash", { command: "./scripts/suite --all" })],
+    { projectConfig: { version: 1, verify: { test_command: "pytest {test}", suite_command: "./scripts/suite" } } });
+  allows("Bash", { command: "git commit -m fix" },
+    [PROD_EDIT, useEntry("Bash", { command: "mvn -Dtest=PayTest test" })],
+    { projectConfig: { version: 1, verify: { test_command: "mvn -Dtest={test_classes} test" } } });
+});
+
+test("a REPLACE_ME placeholder command is not a runner (never a false allow)", () => {
+  denies("Bash", { command: "git commit -m fix" },
+    [PROD_EDIT, useEntry("Bash", { command: "REPLACE_ME: no test runner detected" })],
+    { projectConfig: { version: 1, verify: { test_command: "REPLACE_ME: no test runner detected" } } });
+});
+
+test("the default runner list covers the common wrappers and runtimes", () => {
+  // Each of these was a false DENY: `init` detects several of them, and none was in the list.
+  for (const cmd of [
+    "make test", "make check", "./gradlew test", "./mvnw test", "bun test", "deno test",
+    "bin/rails test", "bundle exec rake test", "python -m unittest", "python3 -m pytest",
+    "swift test", "flutter test", "dart test", "nx test app", "npx nx run app:test",
+    "turbo run test", "sbt test", "zig build test", "cabal test", "stack test", "lein test",
+    "elm-test", "npx ava", "karma start", "npx cypress run", "behave", "robot tests/",
+  ]) {
+    assert.equal(runPre("Bash", { command: "git commit -m fix" }, [PROD_EDIT, useEntry("Bash", { command: cmd })]), null,
+      `expected "${cmd}" to count as running the tests`);
+  }
+});
+
 test("only the LAST production edit matters: a test then a LATER unverified edit re-arms the tripwire", () => {
   const reason = denies("Bash", { command: "git commit -m fix" }, [
     useEntry("Edit", { file_path: "src/a.js", new_string: "1" }),
