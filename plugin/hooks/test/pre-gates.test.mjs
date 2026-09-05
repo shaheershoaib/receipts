@@ -533,3 +533,108 @@ test("hooks.json registers BOTH hooks with node + ${CLAUDE_PLUGIN_ROOT}", () => 
   const preCmd = pre.hooks?.[0]?.command || "";
   assert.match(preCmd, /node .*\$\{CLAUDE_PLUGIN_ROOT\}\/hooks\/pre-gates\.mjs/, "pre-gates registered with node + plugin root");
 });
+
+// ================================= #73: commit forms, Bash writes and failed runs the tripwire missed
+
+const idUse = (e, id) => ({ ...e, message: { ...e.message, content: [{ ...e.message.content[0], id }] } });
+const idResult = (id, text, isError = false) => ({ type: "user", message: { role: "user",
+  content: [{ type: "tool_result", tool_use_id: id, ...(isError ? { is_error: true } : {}), content: [{ type: "text", text }] }] } });
+const COMMIT = ["Bash", { command: "git commit -m x" }];
+
+// GIT_COMMIT read `git\s+commit`. On one machine 701 of 933 real commits carried a global option
+// between the two words (520 the `git -c user.name=… commit` form a git-commit skill prescribes),
+// so three commits in four never reached the tripwire at all.
+test("#73: git global options between `git` and `commit` are still a commit (deny)", () => {
+  for (const cmd of [
+    "git -C /repo commit -m x",
+    'git -C "$WT" commit -m x',
+    "git -c user.name=\"A B\" -c user.email=a@b.c commit --author='A B <a@b.c>' -m x",
+    "git --no-pager commit -m x",
+    "git --git-dir=/r/.git --work-tree=/r commit -m x",
+    "cd /repo && git add -A && git -c commit.gpgsign=false commit -q -m x",
+  ]) {
+    const d = runPre("Bash", { command: cmd }, [PROD_EDIT]);
+    assert.equal(d && d.hookSpecificOutput.permissionDecision, "deny", `expected "${cmd}" to be seen as a commit`);
+  }
+});
+
+test("#73: a commit inside `sh -c '…'` is EXECUTED, not data (deny)", () => {
+  // Unlike printf/heredoc text, the string a shell's -c receives runs.
+  denies("Bash", { command: "sh -c 'git commit -m x'" }, [PROD_EDIT]);
+  denies("Bash", { command: 'bash -c "cd /r && git commit -m x"' }, [PROD_EDIT]);
+});
+
+test("#73: a git command that only mentions commit later is not a commit (allow)", () => {
+  allows("Bash", { command: "git -C /repo log --oneline -5 -- commit-msgs.txt" }, [PROD_EDIT]);
+  allows("Bash", { command: "git -c core.pager=cat show HEAD --stat" }, [PROD_EDIT]);
+});
+
+// Claude Code steers edits through Bash in bypass-permissions mode (sed -i, heredocs, redirects)
+// and only Edit/Write/MultiEdit tool_uses counted as edits: 1812 heredoc writes in one machine's
+// transcripts were invisible, so the tripwire was off exactly where the agent had most latitude.
+test("#73: a production file written through Bash is an edit: sed -i, redirect, heredoc, tee (deny)", () => {
+  for (const cmd of [
+    "sed -i '' 's/a/b/' src/pay.js",
+    "sed -i 's/a/b/' src/pay.js",
+    "echo 'module.exports = 1' > src/pay.js",
+    "cat > src/pay.js <<'EOF'\nmodule.exports = 1;\nEOF",
+    "cat <<'EOF' > src/pay.js\nmodule.exports = 1;\nEOF",
+    "cat > \"$WT/src/pay.js\" <<'EOF'\nx\nEOF",
+    "printf 'x' | tee src/pay.js",
+    "node -e 'console.log(1)' >> src/pay.js",
+  ]) {
+    const d = runPre(...COMMIT, [useEntry("Bash", { command: cmd })]);
+    assert.equal(d && d.hookSpecificOutput.permissionDecision, "deny", `expected "${cmd.split("\n")[0]}" to count as a production edit`);
+    assert.match(d.hookSpecificOutput.permissionDecisionReason, /src\/pay\.js/, "names the written file");
+  }
+});
+
+test("#73: a Bash write to a test, doc, scratch or device path is not a production edit (allow)", () => {
+  for (const cmd of [
+    "cat > src/pay.test.js <<'EOF'\nx\nEOF",
+    "echo notes >> README.md",
+    "cat > /tmp/probe.sh <<'EOF'\nx\nEOF",
+    "cat > \"$TMPDIR/x.js\" <<'EOF'\nx\nEOF",
+    "cat > ~/.claude/hooks/x.py <<'EOF'\nx\nEOF",
+    "ls src 2>&1 > /dev/null",
+    "grep -r foo src 2>/dev/null",
+    "echo done >&2",
+  ]) assert.equal(runPre(...COMMIT, [useEntry("Bash", { command: cmd })]), null, `expected "${cmd.split("\n")[0]}" not to count as a production edit`);
+});
+
+test("#73: a heredoc BODY that contains a redirect is data, not a write (allow)", () => {
+  allows(...COMMIT, [useEntry("Bash", { command: "cat > notes.md <<'EOF'\nrun: echo x > src/pay.js\nEOF" })]);
+});
+
+test("#73: a Bash write followed by the tests in the SAME command is a tested edit (allow)", () => {
+  allows(...COMMIT, [useEntry("Bash", { command: "sed -i 's/a/b/' src/pay.js && npm test" })]);
+});
+
+test("#73: edits through an MCP file tool or NotebookEdit are edits (deny)", () => {
+  denies(...COMMIT, [useEntry("mcp__filesystem__edit_file", { path: "src/pay.js", edits: [{ oldText: "a", newText: "b" }] })]);
+  denies(...COMMIT, [useEntry("mcp__filesystem__write_file", { path: "src/pay.js", content: "x" })]);
+  denies(...COMMIT, [useEntry("NotebookEdit", { notebook_path: "src/model.ipynb", new_source: "x" })]);
+});
+
+// "Ran the tests" is not "the tests passed": the tripwire matched the runner's COMMAND and never
+// read its result, so an agent could watch the suite fail and commit anyway. A non-zero exit
+// reaches the transcript as is_error on the runner's tool_result; a run whose exit the shell
+// masked (`| tail`) still prints its failure line.
+test("#73: a test run that FAILED does not clear the commit tripwire (deny)", () => {
+  const reason = denies(...COMMIT, [PROD_EDIT, idUse(RUN, "r1"), idResult("r1", "Exit code 1\n  1 failing", true)]);
+  assert.match(reason, /FAILED/, "the reason says the run failed, not that no run happened");
+  denies(...COMMIT, [PROD_EDIT, useEntry("Bash", { command: "npm test 2>&1 | tail -20" }), resultEntry("FAIL src/pay.test.js\nTests: 1 failed, 4 passed")]);
+  denies(...COMMIT, [PROD_EDIT, RUN, resultEntry("ℹ tests 5\nℹ pass 4\nℹ fail 1")]);
+  denies(...COMMIT, [PROD_EDIT, RUN, resultEntry("not ok 3 - pay adds\n# tests 3\n# fail 1")]);
+});
+
+test("#73: a passing run clears it, and a green re-run after a red one clears it (allow)", () => {
+  allows(...COMMIT, [PROD_EDIT, RUN, resultEntry("ℹ tests 5\nℹ pass 5\nℹ fail 0")]);
+  allows(...COMMIT, [PROD_EDIT, RUN, resultEntry("✔ handles the FAIL path (2ms)\n5 passing")]);
+  allows(...COMMIT, [PROD_EDIT, idUse(RUN, "r1"), idResult("r1", "1 failing", true), idUse(RUN, "r2"), idResult("r2", "5 passing")]);
+});
+
+test("#73: an error from a NON-runner command after the edit does not un-verify (allow)", () => {
+  allows(...COMMIT, [PROD_EDIT, idUse(RUN, "r1"), idResult("r1", "5 passing"),
+    idUse(useEntry("Bash", { command: "cat missing.txt" }), "c1"), idResult("c1", "cat: missing.txt: No such file", true)]);
+});
