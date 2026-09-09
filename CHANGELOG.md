@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+## 0.9.0 - 2026-09-09
+
 ### Added
 - **Medium detection for the rest of the observation contract's rows.** Smart contracts (Foundry,
   Hardhat, Truffle, Anchor, Move, `.sol`), browser extensions (a `manifest.json` with
