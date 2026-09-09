@@ -3,6 +3,12 @@
 ## Unreleased
 
 ### Fixed
+- **`receipts init` with no terminal says what it needs instead of exiting 0 with nothing.** An agent's
+  stdin is never a TTY, so readline had nobody to ask: init printed the first prompt, hit end of input and
+  exited green having written no config. It now exits 2, prints the four reachability questions and the
+  relay command (`--yes --drive-auth ... --drive-bypass ... --drive-data ... --drive-browser-surfaces ...`),
+  and `doctor`'s hint shows the same relay form instead of telling an agent to "enter them".
+  `--yes --print` still previews. (#80)
 - **The commit tripwire sees the commits agents actually make.** `git -C <dir> commit`, `git -c k=v
   commit`, `git --no-pager commit` and a commit inside `sh -c '...'` were not commits to its regex (on
   one machine 701 of 933 real commits took those forms); an edit made through Bash (`sed -i`, a `>` /
