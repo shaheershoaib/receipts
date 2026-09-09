@@ -13,7 +13,10 @@
   to `drive`; `--drive-*` still relay into `observe.reach` for one release, with a deprecation note.
   A CLI tool is now asked how it is invoked and whether any behavior is TTY-only, a data pipeline
   where its outputs land, a Terraform repo where it can plan safely - never about a signed-in state
-  it does not have.
+  it does not have. A repo with no test runner and no deploy platform but a DETECTED medium (a
+  Terraform repo, a pipeline, a CLI) is now a project, not the agent home: it keeps build/verify/gates
+  and the observe block, and answers G0 with a `receipt-cmd:`; only a directory where nothing is
+  detectable is agent-home shaped.
 
 ### Added
 - **`receipts init --agent`** (the mode INIT.md promised): prints detection, the medium's contract

@@ -282,7 +282,7 @@ function buildConfig(d, a) {
   };
   // Agent-home (skills + cwd, no tests and no deploy): keep only version/claim/agent;
   // the enforcer config (build/verify/gates) belongs in the code repos.
-  if (!(a.test_command || d.test_command) && d.platform === "none") {
+  if (!(a.test_command || d.test_command) && d.platform === "none" && (a.medium || d.medium || "unknown") === "unknown") {
     delete cfg.build; delete cfg.verify; delete cfg.degrade; delete cfg.gates;
     delete cfg.agent.repo_name; // no single repo at the agent home; each append names its repo
     delete cfg.agent.observe;   // no software here to observe; the code repos carry the contract
@@ -392,7 +392,11 @@ async function init(opts) {
   const d = detect(dir);
   // Agent-home = skills + session cwd with no tests and no deploy (e.g. a skills
   // project separate from the code repos): write an agent-only config (no build/verify).
-  const agentHome = !d.test_command && d.platform === "none";
+  // The agent home (~/.claude: skills and a cwd, no software) is the directory where NOTHING is
+  // detectable. A repo with no test runner and no deploy platform but a recognised medium (a
+  // Terraform repo, a data pipeline, a CLI) is a project: it keeps build/verify/gates and the
+  // observe block, and answers G0 with a receipt-cmd rather than a test runner.
+  const agentHome = !d.test_command && d.platform === "none" && d.medium === "unknown";
   // Monorepo hint: workspaces mean per-package runners - init each package; the
   // enforcer discovers nested receipts.config.json files automatically.
   const ws = readJson(path.join(dir, "package.json"));

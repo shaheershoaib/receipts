@@ -49,6 +49,18 @@ test("init --agent prints detection, the medium's contract drafts and its residu
   assert.equal(fs.existsSync(path.join(td, "receipts.config.json")), false);
 });
 
+test("a runner-less repo with a DETECTED medium is a project, not the agent home: the draft keeps observe and gates", () => {
+  // Before: any directory with no test runner and no deploy platform was treated as the
+  // agent home and lost build/verify/gates - and with them the observe block - which is
+  // exactly wrong for a Terraform repo, a data pipeline, or a CLI without a runner.
+  const j = JSON.parse(run(["init", "--agent"], fixture("infra")).out);
+  assert.equal(j.medium, "infra");
+  assert.ok(j.draft.agent.observe, "the observe block must be drafted for a detected medium");
+  assert.equal(j.draft.agent.observe.surface, media.media.infra.row.surface);
+  assert.equal(j.draft.gates.medium, "infra", "gates.medium must survive for a runner-less project");
+  assert.ok(j.draft.verify, "verify stays (with the receipt-cmd placeholder) so doctor can ask for it");
+});
+
 test("init --agent on a web project asks the web residue", () => {
   const j = JSON.parse(run(["init", "--agent"], fixture("web")).out);
   assert.equal(j.medium, "web");
