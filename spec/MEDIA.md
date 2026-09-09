@@ -125,6 +125,9 @@ universal part; the rows are just worked examples of it.
 
 ## How the config drives this
 
+- `agent.observe` is this contract answered for the project: `receipts init` drafts it from the
+  medium's row (`spec/media.json`, this file as data, kept in lockstep by a test), the agent
+  sharpens it against the repo, and a human confirms the residue (`observe.reach.*`).
 - `gates.medium` selects the row (a hint; the agent confirms it against the real stack).
 - `gates.enabled` / `gates.disabled` turn off the gates that genuinely do not apply (e.g.
   G4/G5 for a pure library, G10 for a single unit with no independent consumer).

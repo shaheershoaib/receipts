@@ -46,7 +46,7 @@ project.
 | `claim.downgrade_tags` | - | default `unverified-reasoned`, `speculative`, `reverted` |
 | `agent.loop_skills` | `.claude/skills/*/SKILL.md` whose name/body reads like a fix/build loop (loop / fix / retest / feedback / build / parity / ...) | the shipped `gates`; `--scaffold` (or a yes at the interactive offer) adds a `<repo>-fix-loop` from the template |
 | `agent.staging_query_patterns` / `agent.closeout_fixed_statuses` | - | generic defaults (DB-proxy / query tools; `Pending Retest` / `Verified`) |
-| `agent.drive.*` | **nothing - always asked.** Auth route to a signed-in state, any dev-mode shortcut (fixed OTP, seeded login, flag), whether the environment carries realistic data, and surfaces that only exist rendered in a browser | empty, which is honest: it records that nobody has said, so a gate can cite the gap rather than treat "auth-walled" as a fact of nature |
+| `agent.observe` | the medium's worked row (`spec/media.json`) drafts the observation contract; the agent sharpens it against the repo (README, CI, env examples, deploy config, tests) | ask: the RESIDUE - `reach.access` / `.shortcut` / `.fixtures` / `.special_surfaces`, phrased for the medium (a CLI tool: how it is invoked; a pipeline: where outputs land; a web app: a signed-in state) - and confirm the drafts |
 | `agent.repo_name` | `package.json` name, else the directory name | directory name |
 
 **Placeholder semantics** (`verify.test_command`): `{test}` substitutes the changed test
@@ -129,7 +129,10 @@ gates G0-G19 in `.receipts/gates.md`, overwritten on every run. `--no-agents` sk
 - `receipts init --yes` - accept all detected values (CI / scripted setup).
 - `receipts init --scaffold` - also scaffold a `<repo>-fix-loop` skill when the project
   has no loop skill of its own (`--no-scaffold` suppresses the interactive offer too).
-- `receipts init --agent` - hand the detection + drafting to an agent, surface only
-  the residue for human confirmation.
+- `receipts init --agent` - hand the detection + drafting to an agent: prints detection, the
+  medium's contract drafts and the residue as JSON, writes nothing. The agent sharpens the drafts
+  against the repo, asks the human only the residue, and relays both with
+  `receipts init --yes --answers <file>` (a partial config laid over detection; an `agent.observe`
+  block in it marks `observe.confirmed`). Built in 0.8.0.
 - `receipts doctor` - re-detect and diff against the current config (drift check;
   prompts a re-init when the world has moved).

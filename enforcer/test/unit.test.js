@@ -57,20 +57,20 @@ test("KNOWN_KEYS mirrors the JSON schema for verify.browser_receipt (no drift)",
   assert.deepEqual(unknownConfigKeys({ verify: { test_command: "t", browser_receipt: { command: "x" } } }), []);
 });
 
-test("KNOWN_KEYS mirrors the JSON schema for agent.drive (no drift)", () => {
+test("KNOWN_KEYS mirrors the JSON schema for agent.observe (no drift)", () => {
   // agent.drive shipped in the schema-less state once already: init wrote it, the schema
   // did not declare it, and the enforcer warned "unknown key: agent.drive" on every run.
   // Same parity assertion as browser_receipt so it cannot silently drift again.
   const fs = require("fs");
   const path = require("path");
   const schema = JSON.parse(fs.readFileSync(path.join(__dirname, "..", "..", "receipts.config.schema.json"), "utf8"));
-  const schemaKeys = Object.keys(schema.properties.agent.properties.drive.properties).sort();
+  const schemaKeys = Object.keys(schema.properties.agent.properties.observe.properties).sort();
   const allKnown = {};
   for (const k of schemaKeys) allKnown[k] = "x";
   assert.deepEqual(
-    unknownConfigKeys({ agent: { drive: allKnown } }), [],
-    "every schema key for agent.drive must be in the enforcer's KNOWN_KEYS - they drifted");
-  assert.deepEqual(unknownConfigKeys({ agent: { drive: { auth: "x" } } }), []);
+    unknownConfigKeys({ agent: { observe: allKnown } }), [],
+    "every schema key for agent.observe must be in the enforcer's KNOWN_KEYS - they drifted");
+  assert.deepEqual(unknownConfigKeys({ agent: { observe: { reach: { access: "x" } } } }), []);
 });
 
 test("expandTestPlaceholders: {test} / {test_dirs} / {test_classes} select correctly per runner", () => {

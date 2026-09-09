@@ -116,3 +116,16 @@ test("SessionStart stays silent for a confirmed-empty block and for no config", 
   assert.equal(runSession({ version: 1, agent: { receipts_version: PLUGIN_VERSION, drive: { confirmed: true, auth: "", bypass: "" } } }), null);
   assert.equal(runSession(null), null);
 });
+
+// 0.8.0: the block generalised to agent.observe (the observation contract); drive stays readable.
+test("a recorded observe.reach.access makes 'auth-walled' unavailable, same as drive.auth did", () => {
+  const d = runHook(CLOSEOUT, { version: 1, agent: { observe: { confirmed: true, reach: { access: "npx mytool, no credentials", shortcut: "", fixtures: "", special_surfaces: [] } } } });
+  assert.ok(d && d.decision === "block");
+  assert.match(d.reason, /recorded way in/);
+  assert.match(d.reason, /npx mytool/);
+});
+test("an unconfirmed observe block is an open question, like an unconfirmed drive block", () => {
+  const d = runHook(CLOSEOUT, { version: 1, agent: { observe: { confirmed: false, reach: { access: "", shortcut: "", fixtures: "", special_surfaces: [] } } } });
+  assert.ok(d && d.decision === "block");
+  assert.match(d.reason, /nobody has recorded/);
+});

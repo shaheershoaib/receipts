@@ -42,12 +42,10 @@ const denies = (cmd, opts) => {
 };
 const allows = (cmd, opts) => assert.equal(runPre(cmd, opts), null, `expected allow for: ${cmd}`);
 
-test("receipts init --yes is DENIED and the reason carries the four questions", () => {
+test("receipts init --yes is DENIED and the reason points at the agent path", () => {
   const r = denies("receipts init --yes");
-  assert.match(r, /REACH a signed-in state/);
-  assert.match(r, /dev-mode shortcut/);
-  assert.match(r, /realistic data/);
-  assert.match(r, /BROWSER rather than by API/);
+  assert.match(r, /receipts init --agent/);
+  assert.match(r, /--answers/);
   assert.match(r, /ASK THE HUMAN/);
 });
 
@@ -102,4 +100,10 @@ test("relayed answers are the SUPPORTED path, not a skip", () => {
   allows("receipts init --yes --drive-auth 'none needed' --drive-data realistic");
   // but a bare --yes alongside unrelated flags is still a skip
   denies("receipts init --yes --no-scaffold");
+});
+
+// 0.8.0: --answers is the agent's relay of a conversation it had - the interview happened.
+test("--answers is the supported relay, not a skip", () => {
+  allows("receipts init --yes --dir /Users/x/app --answers /tmp/answers.json");
+  allows("npx receipts-cli init --yes --answers answers.json");
 });

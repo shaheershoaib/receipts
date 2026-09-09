@@ -123,7 +123,7 @@ to opt in everywhere). A repo that never ran `receipts init` gets no behaviour c
   transcript, so a long session costs nothing to check.
 - the **memory push** (`session-memory.mjs`, a SessionStart hook) injects up to five prior
   attempts for THIS repo (failures first, one per surface) plus the recorded way in
-  (`agent.drive`), capped at about 1,500 characters, and announces a plugin upgrade the config
+  (`agent.observe.reach`), capped at about 1,500 characters, and announces a plugin upgrade the config
   predates. `agent.memory_inject: "off"` disables the memories.
 - the **`trajectory-kb` MCP server** - the verification memory the skill queries and appends
   (`append_trajectory`, `query_trajectory`, `recent_outcomes`, `reopen_rate`, `list_repos`).

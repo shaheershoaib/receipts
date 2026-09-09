@@ -67,55 +67,53 @@ re-install - go straight to the interview.
 
 ## 3. Interview, then write the config
 
-First look at the project so your questions are grounded: `receipts init --print --yes --dir <dir>`
-prints the DETECTED config to stdout without writing anything. Read it, and tell the user what
-was detected (test command, deploy platform, medium) so they can correct it.
+The interview is the **observation contract** (`spec/MEDIA.md`): where the behavior manifests, what
+value is asserted and by which tool, what commits the effect, what "the build that carries your
+commit" means, twins, dependents, the receipt form, and where producer and consumer update
+independently. Most of it can be DRAFTED from the project; only the residue needs a human. Which
+questions those are depends on the medium: a CLI tool is asked how it is invoked and whether any
+behavior is TTY-only, a data pipeline where its outputs land, a web app about a signed-in state.
 
-Then **ask these four in conversation.** Ask them together, in your own words, with the project's
-own nouns - not as a form to fill in:
+1. **Get the brief.** `receipts init --agent --dir <dir>` prints JSON and writes nothing:
+   `detected` (stack, test command, platform, medium), `contract` (the nine questions), `draft`
+   (a full config with `agent.observe` prefilled from the medium's worked row), and `residue`
+   (the questions only a human can answer, phrased for that medium; plus `environment` when a
+   deploy platform was found).
+2. **Sharpen the draft against the repo.** Read what an engineer would: README, CI workflows,
+   `.env.example`, deploy config, test layout, the entry points. Correct `gates.medium` if
+   detection guessed wrong. Fill `observe.twin`, `observe.dependent`, `observe.compat_boundary`
+   and tighten `surface` / `value` / `observe_by` / `terminal_action` / `build_artifact` /
+   `receipt` in the project's own nouns. Where the repo already answers a residue question
+   (an `OTP_DEV_MODE` flag, a `--dry-run` mode, a fixtures directory), record it as a draft.
+3. **Ask the human ONLY what remains.** Put the unanswered residue to the user together, in your
+   own words with the project's nouns, and show them the drafts you filled so they can correct
+   them. "None needed" is a real answer and must be recorded as one - it is different from silence.
+4. **Write it.** Compose `answers.json` as a PARTIAL config (only what you are setting), e.g.
 
-1. How does an agent reach a **signed-in state** on the verify environment? (test account / dev
-   bypass / none needed)
-2. Any **dev-mode shortcut** that makes it reachable? (fixed OTP, seeded login, magic link, flag)
-3. Does that environment carry **realistic data**, or must a surface be seeded before it shows
-   anything?
-4. Any surfaces that must be driven in a **browser** rather than by API? (rendered PDFs, print
-   views)
+   ```json
+   { "gates": { "medium": "cli" },
+     "agent": { "observe": { "twin": "none", "dependent": "the release workflow",
+                             "reach": { "access": "npx mytool from any directory, no credentials",
+                                        "shortcut": "--yes", "fixtures": "any directory",
+                                        "special_surfaces": ["interactive prompts"] } } } }
+   ```
 
-"None needed" is a real answer and must be recorded as one - it is different from silence.
+   then `receipts init --yes --dir <dir> --answers answers.json`. An `agent.observe` block in the
+   answers marks `observe.confirmed: true` - the interview happened, in conversation. Add
+   `--env <name> --env-url <url>` when there is a deployed environment; add `--force` to overwrite
+   an existing config (warn the user first, and carry hand-tuned values across).
 
-Then write it:
-
-```
-receipts init --yes --dir <dir> \
-  --drive-auth "<answer 1>" \
-  --drive-bypass "<answer 2>" \
-  --drive-data "<answer 3>" \
-  --drive-browser-surfaces "<answer 4, comma-separated>"
-```
-
-Add `--env <name> --env-url <url>` when the project has a deployed environment to verify against.
-Add `--force` to overwrite an existing config; warn the user first that it overwrites, and copy
-any hand-tuned values across. Add `--scaffold` only if the project wants its own
-`<repo>-fix-loop` skill for the trajectory touchpoints; by default `init` writes none, because
-the bundled `gates` skill already drives the loop. `init` also writes a short receipts block into
-`AGENTS.md` and the full gates into `.receipts/gates.md` for non-Claude agents (`--no-agents`
-skips both).
+The 0.7 flags `--drive-auth / --drive-bypass / --drive-data / --drive-browser-surfaces` still relay
+into `observe.reach` and are deprecated. `init` also writes a short receipts block into `AGENTS.md`
+and the full gates into `.receipts/gates.md` for non-Claude agents (`--no-agents` skips both).
 
 Writing the config is also what turns enforcement ON for this repo: the in-session tripwires and
 the Stop gate stand down wherever no `receipts.config.json` (project or `~/.claude`) exists, so
 tell the user that from now on an unverified commit prompts them (`ask`) rather than passing.
 
-**Never run `init --yes` without the `--drive-*` flags to get past the prompts.** That records
-`drive.confirmed: false` - answering on the user's behalf with "unknown" - and a PreToolUse
-tripwire denies it outside CI.
-
-### Monorepos / split layouts
-
-The config is found by walking UP from the session's cwd, so it must sit where you will be
-working, not only next to the code. A repo whose code is in a subdirectory (`app/`, `packages/*`)
-wants `init` run in each code package - and a root config too, so the hooks resolve from the repo
-root. Root gets the policy (loop skills, statuses); each package gets its own test command.
+**Never run `init --yes` without `--answers` (or the deprecated `--drive-*`) to get past the
+prompts.** That records `observe.confirmed: false` - answering on the user's behalf with
+"unknown" - and a PreToolUse tripwire denies it outside CI.
 
 ## 4. Update
 
@@ -137,7 +135,7 @@ groups findings:
 - **MISSING** - never bound (no test command, no `agent` block, loop skills on disk that nothing
   watches, gates this version ships that a pinned `gates.enabled` list is not running).
 - **NEEDS YOUR ANSWER** - only a human knows these. doctor prints the four questions verbatim.
-  **Put them to the user** and re-write the config with the `--drive-*` flags from §3. Do not
+  **Put them to the user** and re-write the config with `--answers` from §3. Do not
   treat this section as informational.
 
 An agent-home config (a skills/session directory with no code) has no `build`/`verify` block by

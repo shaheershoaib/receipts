@@ -24,32 +24,30 @@ function initPrint(args, files) {
   return { cfg: JSON.parse(r.stdout), stderr: r.stderr };
 }
 
-test("relayed answers land in agent.drive and mark it confirmed", () => {
+test("relayed answers land in agent.observe.reach and mark it confirmed", () => {
   const { cfg } = initPrint([
     "--drive-auth", "seeded test account qa@acme.test",
     "--drive-bypass", "fixed OTP 000000",
     "--drive-data", "realistic",
     "--drive-browser-surfaces", "invoice PDF, print view",
   ]);
-  assert.deepEqual(cfg.agent.drive, {
-    confirmed: true,
-    auth: "seeded test account qa@acme.test",
-    bypass: "fixed OTP 000000",
-    data: "realistic",
-    browser_surfaces: ["invoice PDF", "print view"],
+  assert.equal(cfg.agent.observe.confirmed, true);
+  assert.deepEqual(cfg.agent.observe.reach, {
+    access: "seeded test account qa@acme.test", shortcut: "fixed OTP 000000", fixtures: "realistic",
+    special_surfaces: ["invoice PDF", "print view"],
   });
 });
 
 test("a partial relay still counts as asked (a human said 'none needed')", () => {
   const { cfg } = initPrint(["--drive-auth", "none needed"]);
-  assert.equal(cfg.agent.drive.confirmed, true);
-  assert.equal(cfg.agent.drive.auth, "none needed");
-  assert.equal(cfg.agent.drive.bypass, "");
+  assert.equal(cfg.agent.observe.confirmed, true);
+  assert.equal(cfg.agent.observe.reach.access, "none needed");
+  assert.equal(cfg.agent.observe.reach.shortcut, "");
 });
 
 test("bare --yes stays unconfirmed and warns", () => {
   const { cfg, stderr } = initPrint([], { "package.json": JSON.stringify({ name: "x", scripts: { test: "jest" } }), "vercel.json": "{}" });
-  assert.equal(cfg.agent.drive.confirmed, false);
+  assert.equal(cfg.agent.observe.confirmed, false);
   assert.match(stderr, /SKIPPED the reachability interview/);
 });
 

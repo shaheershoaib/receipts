@@ -286,13 +286,23 @@ const OBSERVE_HOWTO =
 // ("I could not observe it") could be taken on auth grounds even when the config recorded
 // exactly how to get in. This renders them into the gate message so the hatch has to argue
 // against what the project already wrote down.
+// 0.8.0: the reach facts live in agent.observe.reach (the observation contract, per medium);
+// agent.drive is the web-shaped predecessor, still read until doctor migrates it.
+function reachFacts(cfg) {
+  const agent = cfg.agent || {};
+  if (agent.observe) {
+    const r = agent.observe.reach || {};
+    return { confirmed: agent.observe.confirmed, auth: r.access, bypass: r.shortcut, data: r.fixtures, browser_surfaces: r.special_surfaces || [] };
+  }
+  return agent.drive || {};
+}
 function driveClause(cfg) {
-  const drv = (cfg.agent || {}).drive || {};
+  const drv = reachFacts(cfg);
   const known = [
     drv.auth && `auth route: ${drv.auth}`,
     drv.bypass && `dev shortcut: ${drv.bypass}`,
     drv.data && `data: ${drv.data}`,
-    (drv.browser_surfaces || []).length && `browser-only surfaces: ${drv.browser_surfaces.join(", ")}`,
+    (drv.browser_surfaces || []).length && `special surfaces: ${drv.browser_surfaces.join(", ")}`,
   ].filter(Boolean);
   if (known.length)
     return " NOTE - this project HAS a recorded way in (" + known.join("; ") + "), so " +
@@ -300,8 +310,8 @@ function driveClause(cfg) {
       "and observe the value.";
   if (drv.confirmed === false)
     return " NOTE - nobody has recorded how to reach a signed-in state here " +
-      "(receipts init ran with --yes and skipped the reachability interview), so an EMPTY " +
-      "drive block is an open question, not evidence the surface is unreachable. Do not " +
+      "(receipts init ran with --yes and skipped the interview), so an EMPTY " +
+      "observe block is an open question, not evidence the surface is unreachable. Do not " +
       "claim (d) on reachability grounds off a config nobody confirmed - ask the human for " +
       "the auth route, or re-run `receipts init --force`.";
   return "";

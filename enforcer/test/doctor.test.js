@@ -30,13 +30,13 @@ function runDoctor(files, config) {
 }
 
 const PKG_WITH_TEST = JSON.stringify({ name: "x", scripts: { test: "jest" } });
-const CONFIRMED = { confirmed: true, auth: "", bypass: "", data: "", browser_surfaces: [] };
+const CONFIRMED = { confirmed: true, reach: { access: "", shortcut: "", fixtures: "", special_surfaces: [] } };
 // doctor now reports a version mismatch outright; these cases are about config HEALTH,
 // so they carry the current stamp and let the dedicated tests cover staleness.
 const OWN = require(path.join(__dirname, "..", "..", "package.json")).version;
 
 test("an agent-home config is NOT reported as drift (it has no build/verify by design)", () => {
-  const r = runDoctor({}, { version: 1, claim: {}, agent: { loop_skills: ["gates"], drive: CONFIRMED, receipts_version: OWN } });
+  const r = runDoctor({}, { version: 1, claim: {}, agent: { loop_skills: ["gates"], observe: CONFIRMED, receipts_version: OWN } });
   assert.equal(r.code, 0, `agent-home must pass clean, got:\n${r.out}`);
   assert.match(r.out, /looks current/);
   assert.match(r.out, /agent-home/);
@@ -48,7 +48,7 @@ test("a healthy code-repo config passes clean", () => {
     version: 1,
     build: { sha_source: "none", platform: "none" },
     verify: { test_command: "npm test -- {test}" },
-    agent: { loop_skills: ["gates"], drive: CONFIRMED, receipts_version: OWN },
+    agent: { loop_skills: ["gates"], observe: CONFIRMED, receipts_version: OWN },
     gates: { enabled: "all", disabled: [] },
   });
   assert.equal(r.code, 0, r.out);
@@ -59,7 +59,7 @@ test("a VANISHED test runner is caught (INIT.md promises this)", () => {
     version: 1,
     build: { sha_source: "none", platform: "none" },
     verify: { test_command: "npm test -- {test}" },
-    agent: { drive: CONFIRMED, receipts_version: OWN },
+    agent: { observe: CONFIRMED, receipts_version: OWN },
   });
   assert.equal(r.code, 2);
   assert.match(r.out, /STALE/);
@@ -71,13 +71,13 @@ test("a VANISHED deploy platform is caught", () => {
     version: 1,
     build: { sha_source: "git", platform: "vercel" },   // no vercel.json on disk
     verify: { test_command: "npm test -- {test}" },
-    agent: { drive: CONFIRMED, receipts_version: OWN },
+    agent: { observe: CONFIRMED, receipts_version: OWN },
   });
   assert.equal(r.code, 2);
   assert.match(r.out, /no deploy config for it is detectable/);
 });
 
-test("an upgraded config with no drive block is ASKED the four questions", () => {
+test("an upgraded config with no observe block is ASKED this medium's residue", () => {
   const r = runDoctor({ "package.json": PKG_WITH_TEST }, {
     version: 1,
     build: { sha_source: "none", platform: "none" },
@@ -86,11 +86,11 @@ test("an upgraded config with no drive block is ASKED the four questions", () =>
   });
   assert.equal(r.code, 2);
   assert.match(r.out, /NEEDS YOUR ANSWER/);
-  assert.match(r.out, /predates the reachability interview/);
-  assert.match(r.out, /REACH a signed-in state/);
-  assert.match(r.out, /dev-mode shortcut/);
-  assert.match(r.out, /realistic data/);
-  assert.match(r.out, /BROWSER rather than by API/);
+  assert.match(r.out, /predates the interview/);
+  for (const key of ["access", "shortcut", "fixtures", "special_surfaces"])
+    assert.match(r.out, new RegExp("\\[" + key + "\\]"), `the ${key} residue must be asked, in this medium's terms`);
+  assert.match(r.out, /init --agent/);
+  assert.match(r.out, /--answers/);
 });
 
 test("drive.confirmed=false is reported as an open question, not a confirmed 'none'", () => {
@@ -98,7 +98,7 @@ test("drive.confirmed=false is reported as an open question, not a confirmed 'no
     version: 1,
     build: { sha_source: "none", platform: "none" },
     verify: { test_command: "npm test -- {test}" },
-    agent: { drive: { confirmed: false, auth: "", bypass: "", data: "", browser_surfaces: [] } },
+    agent: { observe: { confirmed: false, reach: { access: "", shortcut: "", fixtures: "", special_surfaces: [] } } },
   });
   assert.equal(r.code, 2);
   assert.match(r.out, /skipped the reachability interview/i);
@@ -110,7 +110,7 @@ test("a drive block from a version without `confirmed` is re-confirmed", () => {
     version: 1,
     build: { sha_source: "none", platform: "none" },
     verify: { test_command: "npm test -- {test}" },
-    agent: { drive: { auth: "test acct", bypass: "", data: "", browser_surfaces: [] } },
+    agent: { observe: { reach: { access: "test acct", shortcut: "", fixtures: "", special_surfaces: [] } } },
   });
   assert.equal(r.code, 2);
   assert.match(r.out, /confirmed` is absent/);
@@ -121,7 +121,7 @@ test("a PINNED gate list is told which shipped gates are not running", () => {
     version: 1,
     build: { sha_source: "none", platform: "none" },
     verify: { test_command: "npm test -- {test}" },
-    agent: { drive: CONFIRMED, receipts_version: OWN },
+    agent: { observe: CONFIRMED, receipts_version: OWN },
     gates: { enabled: ["G0", "G1", "G3"], disabled: [] },
   });
   assert.equal(r.code, 2);
@@ -135,7 +135,7 @@ test('gates.enabled "all" is self-updating and never reported', () => {
     version: 1,
     build: { sha_source: "none", platform: "none" },
     verify: { test_command: "npm test -- {test}" },
-    agent: { drive: CONFIRMED, receipts_version: OWN },
+    agent: { observe: CONFIRMED, receipts_version: OWN },
     gates: { enabled: "all", disabled: ["G10"] },
   });
   assert.equal(r.code, 0, r.out);
@@ -154,6 +154,6 @@ test("SHIPPED_GATES has not drifted from the gate headings in GATES.md", () => {
 test("the drive remediation hint shows the relay form, because an agent cannot type into init's prompts", () => {
   const r = runDoctor({ "package.json": PKG_WITH_TEST }, { version: 1, claim: {}, build: {}, verify: { test_command: "jest {test}" }, agent: { loop_skills: ["gates"], receipts_version: OWN } });
   assert.equal(r.code, 2);
-  assert.match(r.out, /agent\.drive` is absent/);
-  assert.match(r.out, /--drive-auth/, "the hint must show how to relay the answers, not only `receipts init --force`");
+  assert.match(r.out, /agent\.observe` is absent/);
+  assert.match(r.out, /--answers/, "the hint must show how to relay the answers, not only `receipts init --force`");
 });
