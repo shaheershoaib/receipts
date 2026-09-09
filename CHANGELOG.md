@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+## 0.8.0 - 2026-09-09
+
 ### Changed
 - **BREAKING: the init interview is the observation contract, reasoned by the agent.** `agent.drive`
   (auth / bypass / data / browser_surfaces - the web row of `spec/MEDIA.md`, hardcoded) becomes
