@@ -382,6 +382,15 @@ async function init(opts) {
   console.error("");
 
   const a = {};
+  if (!opts.yes && !process.stdin.isTTY) {
+    // No terminal: readline has nobody to ask. Exiting 0 with nothing written was the
+    // silence this tool exists to remove, so name the questions and the relay flags.
+    console.error("receipts init: stdin is not a terminal, so the reachability interview cannot run here.");
+    console.error("Ask the human these, then relay the answers - that IS the interview (`--yes` alone records them as never asked):");
+    DRIVE_QUESTIONS.forEach((q, i) => console.error(`  ${i + 1}. ${q}`));
+    console.error("\n" + relayForm(dir, !!opts.force) + "\n");
+    process.exit(2);
+  }
   if (!opts.yes) {
     // A human is here answering. The drive questions below are asked only where they
     // APPLY (a deployed platform); either way the block is confirmed, so an empty one
@@ -516,6 +525,14 @@ const DRIVE_QUESTIONS = [
   "Any surfaces that must be driven in a BROWSER rather than by API? (rendered PDFs, print views)",
 ];
 
+// The interview, relayed. An agent cannot type into init's readline, so it asks the human in
+// conversation and passes the answers as flags; init (no terminal) and doctor (drive
+// unconfirmed) both print this so they point at the same command.
+function relayForm(dir, force) {
+  return `receipts init --yes${force ? " --force" : ""} --dir ${dir} \\\n` +
+    `  --drive-auth "<1>" --drive-bypass "<2>" --drive-data "<3>" --drive-browser-surfaces "<4, comma-separated>"`;
+}
+
 function doctor(opts) {
   const dir = path.resolve(opts.dir || process.cwd());
   const cfg = readJson(path.join(dir, "receipts.config.json"));
@@ -590,9 +607,9 @@ function doctor(opts) {
     section("MISSING - never bound:", missing) +
     section("NEEDS YOUR ANSWER - only a human knows these:", ask));
   if (ask.length) {
-    console.error("Answer these four, then run `receipts init --force` and enter them:");
+    console.error("Answer these four. At a terminal, `receipts init --force` asks them; with no terminal (an agent), ask the human and relay the answers:");
     DRIVE_QUESTIONS.forEach((q, i) => console.error(`  ${i + 1}. ${q}`));
-    console.error("");
+    console.error("\n" + relayForm(dir, true) + "\n");
   }
   console.error("`receipts init --force` re-detects and re-asks; it OVERWRITES the file, so copy any hand-tuned values first.");
   process.exit(2);

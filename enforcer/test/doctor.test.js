@@ -150,3 +150,10 @@ test("SHIPPED_GATES has not drifted from the gate headings in GATES.md", () => {
   assert.deepEqual(listed, documented,
     "bin/receipts.js SHIPPED_GATES must match the gates documented in GATES.md - a new gate was added without updating doctor");
 });
+
+test("the drive remediation hint shows the relay form, because an agent cannot type into init's prompts", () => {
+  const r = runDoctor({ "package.json": PKG_WITH_TEST }, { version: 1, claim: {}, build: {}, verify: { test_command: "jest {test}" }, agent: { loop_skills: ["gates"], receipts_version: OWN } });
+  assert.equal(r.code, 2);
+  assert.match(r.out, /agent\.drive` is absent/);
+  assert.match(r.out, /--drive-auth/, "the hint must show how to relay the answers, not only `receipts init --force`");
+});
