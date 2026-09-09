@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+## 0.7.0 - 2026-09-09
+
 ### Fixed
 - **`receipts init` with no terminal says what it needs instead of exiting 0 with nothing.** An agent's
   stdin is never a TTY, so readline had nobody to ask: init printed the first prompt, hit end of input and
