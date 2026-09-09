@@ -19,6 +19,35 @@ const fs = require("fs");
 const os = require("os");
 const path = require("path");
 const readline = require("readline");
+// The observation contract as data (spec/MEDIA.md -> spec/media.json): what every medium must
+// answer, each medium's worked row (drafts), and the residue only a human can answer, phrased
+// for that medium. The interview IS this contract, applied to the detected medium.
+const MEDIA = require("../spec/media.json");
+function mediumRow(id) { return MEDIA.media[id] || MEDIA.media[MEDIA.aliases[id]] || MEDIA.media.unknown; }
+function residueFor(id, d) {
+  const row = mediumRow(id);
+  const qs = MEDIA.reach.map((r) => ({ key: r.key, question: row.residue[r.key] }));
+  if (d && d.platform !== "none") qs.unshift({ key: "environment", question: "Which environment should receipts re-verify on, and what is its URL?" });
+  return qs;
+}
+// Objects merge, everything else (arrays included) is replaced: an agent's answers.json is a
+// PARTIAL config laid over detection.
+function deepMerge(base, over) {
+  if (!over || typeof over !== "object" || Array.isArray(over)) return over === undefined ? base : over;
+  const out = Object.assign({}, base || {});
+  for (const [k, v] of Object.entries(over)) out[k] = (v && typeof v === "object" && !Array.isArray(v)) ? deepMerge(out[k], v) : v;
+  return out;
+}
+function observeBlock(a, d) {
+  const row = mediumRow(a.medium || d.medium).row;
+  return {
+    confirmed: a._interviewed === true,
+    surface: row.surface, value: row.value, observe_by: row.observe_by, terminal_action: row.terminal_action,
+    build_artifact: row.build_artifact, twin: "", dependent: "", receipt: row.receipt, compat_boundary: "",
+    reach: { access: a.reach_access || "", shortcut: a.reach_shortcut || "", fixtures: a.reach_fixtures || "",
+             special_surfaces: a.reach_special_surfaces || [] },
+  };
+}
 const { spawnSync } = require("child_process");
 
 const HELP = `receipts - verification gates for AI-written code
@@ -65,6 +94,8 @@ Usage:
 Options:
   --dir <path>   Target repo (default: current directory)
   --yes, -y      Accept detected values, skip prompts (CI / scripted)
+  --agent        Print detection + this medium's contract drafts + the residue as JSON; write nothing (init)
+  --answers <f>  Merge an agent-composed partial config over detection; marks observe.confirmed (init)
   --print        Print the config to stdout, do not write a file (init)
   --force        Overwrite an existing receipts.config.json (init)
   --scaffold     Scaffold a <repo>-fix-loop skill when the project has no loop skill of
@@ -227,13 +258,7 @@ function buildConfig(d, a) {
       // (--yes / scripted), so an empty block is an OPEN QUESTION, not a human saying
       // "nothing needed". Without this the two are byte-identical and the gate cannot
       // tell a confirmed "no auth" from a never-asked one.
-      drive: {
-        confirmed: a._interviewed === true,
-        auth: a.drive_auth || "",
-        bypass: a.drive_bypass || "",
-        data: a.drive_data || "",
-        browser_surfaces: a.drive_browser_surfaces || [],
-      },
+      observe: observeBlock(a, d),
       closeout_fixed_statuses: a.closeout_fixed_statuses || ["Pending Retest", "Verified"],
       repo_name: a.repo_name || d.repo_name,
       // Which version of the tool wrote this file. Read back at session start and by doctor,
@@ -260,6 +285,7 @@ function buildConfig(d, a) {
   if (!(a.test_command || d.test_command) && d.platform === "none") {
     delete cfg.build; delete cfg.verify; delete cfg.degrade; delete cfg.gates;
     delete cfg.agent.repo_name; // no single repo at the agent home; each append names its repo
+    delete cfg.agent.observe;   // no software here to observe; the code repos carry the contract
   }
   return cfg;
 }
@@ -355,9 +381,10 @@ const list = (s) => (s || "").split(",").map((x) => x.trim()).filter(Boolean);
 
 async function init(opts) {
   const dir = path.resolve(opts.dir || process.cwd());
+  if (opts.answers) opts.yes = true;   // relayed answers ARE the interview; nothing left to prompt
   if (!exists(dir)) { console.error(`No such directory: ${dir}`); process.exit(1); }
   const outPath = path.join(dir, "receipts.config.json");
-  if (exists(outPath) && !opts.force && !opts.print) {
+  if (exists(outPath) && !opts.force && !opts.agent && !opts.print && !opts.print) {
     console.error("receipts.config.json already exists. Re-run with --force to overwrite, --print to preview, or `receipts doctor` to check drift.");
     process.exit(1);
   }
@@ -382,12 +409,14 @@ async function init(opts) {
   console.error("");
 
   const a = {};
+  if (opts.agent) { printAgentBrief(d, dir, opts); return; }
   if (!opts.yes && !process.stdin.isTTY) {
     // No terminal: readline has nobody to ask. Exiting 0 with nothing written was the
-    // silence this tool exists to remove, so name the questions and the relay flags.
-    console.error("receipts init: stdin is not a terminal, so the reachability interview cannot run here.");
-    console.error("Ask the human these, then relay the answers - that IS the interview (`--yes` alone records them as never asked):");
-    DRIVE_QUESTIONS.forEach((q, i) => console.error(`  ${i + 1}. ${q}`));
+    // silence this tool exists to remove, so name the residue - in THIS medium's terms - and
+    // the relay form.
+    console.error("receipts init: stdin is not a terminal, so the interview cannot run here.");
+    console.error(`Detected medium: ${d.medium}. Ask the human these, then relay the answers - that IS the interview (\`--yes\` alone records them as never asked):`);
+    residueFor(d.medium, d).forEach((q, i) => console.error(`  ${i + 1}. [${q.key}] ${q.question}`));
     console.error("\n" + relayForm(dir, !!opts.force) + "\n");
     process.exit(2);
   }
@@ -427,19 +456,22 @@ async function init(opts) {
       // without it a gate that demands an observed value gets waved through as
       // "auth-walled, could not verify" - which is how an unverified fix ships wearing an
       // honest-looking downgrade. Asked once; stable per project, never per bug.
-      if (d.platform !== "none" && !agentHome) {
-        const auth = await ask(rl, "How does an agent REACH a signed-in state there? (test account / dev bypass / none needed)", "");
-        if (auth) a.drive_auth = auth;
-        const bypass = await ask(rl, "Any dev-mode shortcut that makes it reachable? (fixed OTP, seeded login, magic link, flag - blank if none)", "");
-        if (bypass) a.drive_bypass = bypass;
-        const seeded = await ask(rl, "Does that environment carry realistic data, or must a surface be seeded before it shows anything?", "realistic");
-        if (seeded) a.drive_data = seeded;
-        const browser = list(await ask(rl, "Surfaces that must be driven in a BROWSER rather than by API (rendered PDFs, print views)? (comma-sep, blank to skip)", ""));
-        if (browser.length) a.drive_browser_surfaces = browser;
+      if (!agentHome) {
+        // The residue, in the detected medium's terms (spec/media.json): a CLI tool is asked how
+        // it is invoked, a pipeline where its outputs land - never a signed-in state it lacks.
+        a.medium = await ask(rl, "Project type / medium? (web/api/library/cli/data/infra/mobile/desktop/...)", d.medium);
+        const res = mediumRow(a.medium).residue;
+        const access = await ask(rl, res.access, "");
+        if (access) a.reach_access = access;
+        const shortcut = await ask(rl, res.shortcut, "");
+        if (shortcut) a.reach_shortcut = shortcut;
+        const fixtures = await ask(rl, res.fixtures, "");
+        if (fixtures) a.reach_fixtures = fixtures;
+        const special = list(await ask(rl, res.special_surfaces, ""));
+        if (special.length) a.reach_special_surfaces = special;
       }
       // Gate applicability (G0-G17): default all-on; disable what does not fit this project.
       if (!agentHome) {
-        a.medium = await ask(rl, "Project type / medium? (web/api/library/cli/data/infra/mobile/desktop/...)", d.medium);
         a.integration_branch = await ask(rl, "Integration branch for fresh-base checks (G8)?", d.default_branch || "main");
         const dis = list(await ask(rl, "Gates to disable here? (comma-sep IDs, e.g. G10 if no separate repo consumes it, G4/G5 for a pure library)", ""));
         if (dis.length) a.gates_disabled = dis;
@@ -458,14 +490,28 @@ async function init(opts) {
     const relayed = ["drive_auth", "drive_bypass", "drive_data", "drive_browser_surfaces"]
       .filter((k) => opts[k] !== undefined);
     if (relayed.length) {
+      // The 0.7 flags, kept one release: they relay into observe.reach.
+      console.error("  note: --drive-* is deprecated since 0.8.0 - relay the interview with --answers <file> instead.");
       a._interviewed = true;
-      if (opts.drive_auth !== undefined) a.drive_auth = opts.drive_auth;
-      if (opts.drive_bypass !== undefined) a.drive_bypass = opts.drive_bypass;
-      if (opts.drive_data !== undefined) a.drive_data = opts.drive_data;
-      if (opts.drive_browser_surfaces !== undefined) a.drive_browser_surfaces = list(opts.drive_browser_surfaces);
+      if (opts.drive_auth !== undefined) a.reach_access = opts.drive_auth;
+      if (opts.drive_bypass !== undefined) a.reach_shortcut = opts.drive_bypass;
+      if (opts.drive_data !== undefined) a.reach_fixtures = opts.drive_data;
+      if (opts.drive_browser_surfaces !== undefined) a.reach_special_surfaces = list(opts.drive_browser_surfaces);
+    }
+    if (opts.answers) {
+      // The agent-composed answers: a PARTIAL config laid over detection (see --agent). An
+      // agent.observe block in it means the interview happened, in conversation.
+      const ans = readJson(path.resolve(opts.answers));
+      if (!ans) { console.error(`receipts init: cannot read --answers ${opts.answers}`); process.exit(1); }
+      a._answers = ans;
+      if (ans.agent && ans.agent.observe) {
+        a._interviewed = true;
+        if (ans.agent.observe.confirmed === undefined) ans.agent.observe.confirmed = true;
+      }
+      if (ans.gates && ans.gates.medium) a.medium = ans.gates.medium;
     }
     if (opts.env) { a.verify_against = opts.env; if (opts.env_url) a.environments = { [opts.env]: opts.env_url }; }
-    if (!relayed.length && d.platform !== "none" && !agentHome)
+    if (!relayed.length && !opts.answers && d.platform !== "none" && !agentHome)
       console.error("  warning: --yes SKIPPED the reachability interview (auth route, dev bypass,\n           data realism, browser-only surfaces). Writing drive.confirmed=false;\n           re-run `receipts init --force` interactively to record them.\n");
     a.loop_skills = dedupe(["gates", ...d.loop_skills]);
     if (opts.scaffold && !d.loop_skills.length && !opts["no-scaffold"]) a._scaffold = true;
@@ -489,7 +535,9 @@ async function init(opts) {
     }
   }
 
-  const json = JSON.stringify(buildConfig(d, a), null, 2) + "\n";
+  let built = buildConfig(d, a);
+  if (a._answers) built = deepMerge(built, a._answers);
+  const json = JSON.stringify(built, null, 2) + "\n";
   if (opts.print) { process.stdout.write(json); return; }
   fs.writeFileSync(outPath, json);
   // The same discipline, in the files a non-Claude agent reads. Opt out with --no-agents.
@@ -516,21 +564,33 @@ async function init(opts) {
 const SHIPPED_GATES = ["G0","G1","G2","G3","G4","G5","G6","G7","G8","G9",
                        "G10","G11","G12","G13","G14","G15","G16","G17","G18","G19"];
 
-// The four questions only a human can answer. Printed verbatim by doctor so an upgrading
-// user is asked them rather than told "something is missing".
-const DRIVE_QUESTIONS = [
-  "How does an agent REACH a signed-in state on the verify environment? (test account / dev bypass / none needed)",
-  "Any dev-mode shortcut that makes it reachable? (fixed OTP, seeded login, magic link, flag)",
-  "Does that environment carry realistic data, or must a surface be seeded first?",
-  "Any surfaces that must be driven in a BROWSER rather than by API? (rendered PDFs, print views)",
-];
-
 // The interview, relayed. An agent cannot type into init's readline, so it asks the human in
-// conversation and passes the answers as flags; init (no terminal) and doctor (drive
-// unconfirmed) both print this so they point at the same command.
+// conversation and passes the answers back; init (no terminal) and doctor (block unconfirmed)
+// both print this so they point at the same two commands.
 function relayForm(dir, force) {
-  return `receipts init --yes${force ? " --force" : ""} --dir ${dir} \\\n` +
-    `  --drive-auth "<1>" --drive-bypass "<2>" --drive-data "<3>" --drive-browser-surfaces "<4, comma-separated>"`;
+  return `receipts init --agent --dir ${dir}\n` +
+    `    -> detection, this medium's contract drafts and the residue, as JSON (writes nothing)\n` +
+    `receipts init --yes${force ? " --force" : ""} --dir ${dir} --answers <answers.json>\n` +
+    `    -> the agent-composed answers, a partial config laid over detection\n` +
+    `  (the 0.7 flags --drive-auth/--drive-bypass/--drive-data/--drive-browser-surfaces still relay into observe.reach)`;
+}
+
+// `init --agent`: INIT.md's mode, built. Hand detection and drafting to an agent: what was
+// detected, the contract drafted from the medium's row, and the residue only a human can
+// answer - as JSON, nothing written. The agent sharpens the drafts against the repo, asks
+// the human only the residue, and relays both with --answers.
+function printAgentBrief(d, dir, opts) {
+  const medium = d.medium;
+  const brief = {
+    detected: { stack: d.stack, test_command: d.test_command, platform: d.platform, medium, loop_skills: d.loop_skills, repo_name: d.repo_name },
+    medium, label: mediumRow(medium).label,
+    contract: MEDIA.contract,
+    residue: residueFor(medium, d),
+    draft: buildConfig(d, { medium }),
+    write: `receipts init --yes${opts.force ? " --force" : ""} --dir ${dir} --answers <answers.json>`,
+    note: "Sharpen draft.agent.observe against the repo (README, CI, env examples, deploy config, test layout) and correct gates.medium if detection guessed wrong; ask the human ONLY the residue the repo cannot answer; write both into answers.json as a partial config.",
+  };
+  process.stdout.write(JSON.stringify(brief, null, 2) + "\n");
 }
 
 function doctor(opts) {
@@ -538,6 +598,25 @@ function doctor(opts) {
   const cfg = readJson(path.join(dir, "receipts.config.json"));
   if (!cfg) { console.error("No receipts.config.json here - run `receipts init`."); process.exit(1); }
   const d = detect(dir);
+
+  // 0.8.0: agent.drive (web-shaped) became agent.observe (the observation contract). Migrate in
+  // place, backup first, and say so - nothing new reads a block that still says `drive`.
+  if (cfg.agent && cfg.agent.drive && !cfg.agent.observe) {
+    const drv = cfg.agent.drive;
+    const row = mediumRow((cfg.gates || {}).medium || "web").row;
+    cfg.agent.observe = {
+      confirmed: drv.confirmed === true,
+      surface: row.surface, value: row.value, observe_by: row.observe_by, terminal_action: row.terminal_action,
+      build_artifact: row.build_artifact, twin: "", dependent: "", receipt: row.receipt, compat_boundary: "",
+      reach: { access: drv.auth || "", shortcut: drv.bypass || "", fixtures: drv.data || "", special_surfaces: drv.browser_surfaces || [] },
+    };
+    delete cfg.agent.drive;
+    const cfgPath = path.join(dir, "receipts.config.json");
+    const stamp = new Date().toISOString().slice(11, 19).replace(/:/g, "");
+    fs.copyFileSync(cfgPath, `${cfgPath}.bak-doctor-${stamp}`);
+    fs.writeFileSync(cfgPath, JSON.stringify(cfg, null, 2) + "\n");
+    console.error(`receipts doctor: MIGRATED agent.drive -> agent.observe (backup: receipts.config.json.bak-doctor-${stamp}).`);
+  }
 
   // An AGENT-HOME config (skills + session cwd, no code) is written WITHOUT build/verify/gates
   // on purpose - init deletes them. Auditing it for a test command reported the shape init had
@@ -573,14 +652,15 @@ function doctor(opts) {
     stale.push(`this config was written by receipts ${agent.receipts_version}; you are running ${OWN_VERSION} - re-run \`receipts init --force\` so it picks up anything added since`);
   else if (OWN_VERSION && !agent.receipts_version)
     stale.push(`this config does not record which version wrote it (pre-${OWN_VERSION}) - re-running \`receipts init --force\` stamps it, so future upgrades can tell you directly`);
-  const drive = agent.drive;
+  const drive = agent.observe;
   if (!drive)
-    ask.push("`agent.drive` is absent - this config predates the reachability interview. Nothing records how an agent reaches an observable state, so a gate cannot tell 'genuinely unreachable' from 'nobody asked'.");
+    ask.push("`agent.observe` is absent - this config predates the interview (the observation contract). Nothing records how an agent reaches an observable state, so a gate cannot tell 'genuinely unreachable' from 'nobody asked'.");
   else if (drive.confirmed !== true) {
-    const blank = !drive.auth && !drive.bypass && !drive.data && !(drive.browser_surfaces || []).length;
+    const r = drive.reach || {};
+    const blank = !r.access && !r.shortcut && !r.fixtures && !(r.special_surfaces || []).length;
     ask.push(drive.confirmed === false
-      ? "`agent.drive.confirmed` is false - `receipts init` ran with --yes and SKIPPED the reachability interview." + (blank ? " The block is empty, which is an OPEN QUESTION, not a confirmed 'nothing needed'." : "")
-      : "`agent.drive.confirmed` is absent - written by a version that did not record whether a human answered. Re-confirm so an empty field is not read as a confirmed 'none'.");
+      ? "`agent.observe.confirmed` is false - `receipts init` ran with --yes and SKIPPED the reachability interview." + (blank ? " The block is empty, which is an OPEN QUESTION, not a confirmed 'nothing needed'." : "")
+      : "`agent.observe.confirmed` is absent - written by a version that did not record whether a human answered. Re-confirm so an empty field is not read as a confirmed 'none'.");
   }
 
   if (!cfg.agent) missing.push("no `agent` block - the Stop hooks fall back to generic defaults (re-init to bind project loops / hosts / statuses)");
@@ -607,8 +687,9 @@ function doctor(opts) {
     section("MISSING - never bound:", missing) +
     section("NEEDS YOUR ANSWER - only a human knows these:", ask));
   if (ask.length) {
-    console.error("Answer these four. At a terminal, `receipts init --force` asks them; with no terminal (an agent), ask the human and relay the answers:");
-    DRIVE_QUESTIONS.forEach((q, i) => console.error(`  ${i + 1}. ${q}`));
+    const medium = (cfg.gates || {}).medium || d.medium;
+    console.error(`Answer these for a ${medium} project. At a terminal, \`receipts init --force\` asks them; with no terminal (an agent), \`init --agent\` drafts the contract and the agent asks the human only these:`);
+    residueFor(medium, d).forEach((q, i) => console.error(`  ${i + 1}. [${q.key}] ${q.question}`));
     console.error("\n" + relayForm(dir, true) + "\n");
   }
   console.error("`receipts init --force` re-detects and re-asks; it OVERWRITES the file, so copy any hand-tuned values first.");
@@ -1082,6 +1163,8 @@ function parseArgs(argv) {
     else if (x === "--drive-bypass") o.drive_bypass = argv[++i];
     else if (x === "--drive-data") o.drive_data = argv[++i];
     else if (x === "--drive-browser-surfaces") o.drive_browser_surfaces = argv[++i];
+    else if (x === "--agent") o.agent = true;
+    else if (x === "--answers") o.answers = argv[++i];
     else if (x === "--env") o.env = argv[++i];
     else if (x === "--env-url") o.env_url = argv[++i];
     else if (x === "--yes" || x === "-y") o.yes = true;

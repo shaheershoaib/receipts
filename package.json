@@ -39,6 +39,7 @@
     "enforcer/browser.js",
     "enforcer/render.js",
     "plugin/templates",
+    "spec/media.json",
     "receipts.config.schema.json",
     "receipts.config.example.json",
     "README.md",

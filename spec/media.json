@@ -1,0 +1,345 @@
+{
+  "_": "The observation contract from spec/MEDIA.md as data: `contract` is what every medium must answer; each medium's `row` is the worked example (drafts for the agent to sharpen against the repo); `residue` is what only a human can answer, phrased for that medium. A test keeps this in lockstep with MEDIA.md.",
+  "contract": [
+    {
+      "key": "surface",
+      "gate": "G4",
+      "question": "Where does the behavior manifest to whoever consumes it?"
+    },
+    {
+      "key": "value",
+      "gate": "G1",
+      "question": "What is the concrete observable you assert, never mere presence?"
+    },
+    {
+      "key": "observe_by",
+      "gate": "G1",
+      "question": "What tool reads that value?"
+    },
+    {
+      "key": "terminal_action",
+      "gate": "G5",
+      "question": "What operation commits the effect, at the end of the flow?"
+    },
+    {
+      "key": "build_artifact",
+      "gate": "G3",
+      "question": "What does 'the build that carries your commit' mean here?"
+    },
+    {
+      "key": "twin",
+      "gate": "G6",
+      "question": "Where is the same pattern re-implemented?"
+    },
+    {
+      "key": "dependent",
+      "gate": "G7",
+      "question": "What consumes what you changed?"
+    },
+    {
+      "key": "receipt",
+      "gate": "G0",
+      "question": "What automated test or re-runnable command re-proves it, red-before / green-after?"
+    },
+    {
+      "key": "compat_boundary",
+      "gate": "G10",
+      "question": "Where do producer and consumer update independently?"
+    }
+  ],
+  "reach": [
+    {
+      "key": "access",
+      "question": "How does an agent reach the place where the behavior is observable, and what access does that need?"
+    },
+    {
+      "key": "shortcut",
+      "question": "Any shortcut that makes it reachable or reproducible without production access?"
+    },
+    {
+      "key": "fixtures",
+      "question": "Does the verify environment hold realistic data or inputs, or must something be seeded first?"
+    },
+    {
+      "key": "special_surfaces",
+      "question": "Any behavior not observable through the primary tool named in observe-by? (comma-separated)"
+    }
+  ],
+  "aliases": {
+    "service": "api"
+  },
+  "media": {
+    "web": {
+      "label": "Web frontend",
+      "row": {
+        "surface": "the page/route the user opens",
+        "value": "DOM text / input.value / aria state / rendered row count; for a 'not showing' symptom the RENDERED output, never the API/DB that feeds it, and count parity for a rendered collection",
+        "observe_by": "a browser (Playwright, headless, preview)",
+        "terminal_action": "submit/save in the UI",
+        "build_artifact": "the deployed bundle (deploy sha)",
+        "receipt": "component/e2e test (jest+RTL, Playwright, Cypress)"
+      },
+      "residue": {
+        "access": "How does an agent reach a signed-in state on the verify environment? (test account / dev bypass / none needed)",
+        "shortcut": "Any dev-mode shortcut that makes it reachable? (fixed OTP, seeded login, magic link, flag)",
+        "fixtures": "Does that environment carry realistic data, or must a surface be seeded first?",
+        "special_surfaces": "Any surfaces that must be driven in a BROWSER rather than by API? (rendered PDFs, print views)"
+      }
+    },
+    "api": {
+      "label": "API / service (REST/GraphQL/gRPC)",
+      "row": {
+        "surface": "the endpoint + its response contract",
+        "value": "response status/body/field",
+        "observe_by": "an HTTP/gRPC client",
+        "terminal_action": "the write request that persists (POST/PUT/mutation)",
+        "build_artifact": "the deployed service (sha via /health or the deployments API)",
+        "receipt": "a request/integration test, or receipt-cmd: one curl asserting status/body (-f fails on non-2xx, expect:/.../ on the body; one command, no pipes)"
+      },
+      "residue": {
+        "access": "How does an agent authenticate to the verify environment's API? (bearer or service token, test client credentials, none needed)",
+        "shortcut": "Any dev-mode shortcut? (static token, auth-off flag, seeded API client)",
+        "fixtures": "Does the environment hold realistic records, or must rows be seeded before an endpoint returns anything?",
+        "special_surfaces": "Any endpoints not observable with a plain HTTP client? (websocket, gRPC stream, webhook receiver, queue consumer)"
+      }
+    },
+    "library": {
+      "label": "Library / package / SDK",
+      "row": {
+        "surface": "the public API (exported fns/types)",
+        "value": "return value / thrown error / mutated state",
+        "observe_by": "calling it",
+        "terminal_action": "the call that performs the operation",
+        "build_artifact": "the built/published package (version + artifact)",
+        "receipt": "a unit test against the public API"
+      },
+      "residue": {
+        "access": "How does a consumer obtain the built package to verify against? (local pack, private registry, path or workspace dependency)",
+        "shortcut": "Any way to exercise the public API without publishing? (examples dir, workspace link, playground)",
+        "fixtures": "Is there a sample consumer or fixture project the package must work inside?",
+        "special_surfaces": "Any behavior that only shows in a consumer's environment? (type-only exports, bundler plugin, peer-dependency interplay)"
+      }
+    },
+    "cli": {
+      "label": "CLI tool",
+      "row": {
+        "surface": "the command + stdout/stderr/exit/files",
+        "value": "stdout, exit code, files written",
+        "observe_by": "running it",
+        "terminal_action": "the subcommand that performs the effect",
+        "build_artifact": "the built binary (--version)",
+        "receipt": "run-and-assert: a unit test, or receipt-cmd: the invocation itself (mytool ... expect:/<expected stdout>/)"
+      },
+      "residue": {
+        "access": "How is the tool installed and invoked where it is verified? (npx, built binary, container) and which credentials or env vars does a run need?",
+        "shortcut": "Any flag or env var that makes a run reproducible or unattended? (--yes, fixed seed, sandbox or dry-run mode)",
+        "fixtures": "Is there a fixture project or input set the command must run against, or does any directory do?",
+        "special_surfaces": "Any behavior that only shows with a terminal attached? (interactive prompts, TTY-only output, colors, progress bars)"
+      }
+    },
+    "mobile": {
+      "label": "Mobile app (iOS/Android)",
+      "row": {
+        "surface": "the screen",
+        "value": "the on-screen element's value",
+        "observe_by": "XCUITest / Espresso / a simulator",
+        "terminal_action": "the tap that commits",
+        "build_artifact": "the installed build (build number)",
+        "receipt": "a UI / instrumentation test"
+      },
+      "residue": {
+        "access": "How does an agent reach a signed-in state on the test build? (test account, simulator or device, dev bypass)",
+        "shortcut": "Any dev-mode shortcut? (debug menu, fixed OTP, mock backend)",
+        "fixtures": "Does the test backend carry realistic data, or must it be seeded first?",
+        "special_surfaces": "Any screens that need a real device rather than a simulator? (camera, push, biometrics, payments)"
+      }
+    },
+    "desktop": {
+      "label": "Desktop GUI (Electron/native)",
+      "row": {
+        "surface": "the window/view",
+        "value": "the control's state",
+        "observe_by": "UI automation",
+        "terminal_action": "the action control",
+        "build_artifact": "the packaged app version",
+        "receipt": "a UI test"
+      },
+      "residue": {
+        "access": "How is the packaged app installed and launched where it is verified, and does it need an account?",
+        "shortcut": "Any dev-mode shortcut? (dev flag, mock services, seeded profile)",
+        "fixtures": "Is there a fixture profile or workspace the app must open, or does a clean install do?",
+        "special_surfaces": "Any behavior that needs the real OS rather than automation? (native dialogs, file associations, tray)"
+      }
+    },
+    "data": {
+      "label": "Data / ETL pipeline",
+      "row": {
+        "surface": "the output dataset/table/metric",
+        "value": "row counts, column values, aggregates, schema",
+        "observe_by": "querying the output",
+        "terminal_action": "the job run that writes the output",
+        "build_artifact": "the deployed DAG / job version",
+        "receipt": "a data test (dbt test, Great Expectations), or receipt-cmd: an assertion query (select count(*) ... where <invariant violated> expect:/^0$/)"
+      },
+      "residue": {
+        "access": "How does an agent read the destination store where outputs land? (connection or proxy, read-only role, which environment)",
+        "shortcut": "Any way to run the job against a small or sandboxed slice? (env flag, sample partition, dry-run)",
+        "fixtures": "Is there a known-good baseline or seed dataset to reconcile against, or is the source the only truth?",
+        "special_surfaces": "Any outputs only observable downstream? (dashboards, exported files, a consuming service)"
+      }
+    },
+    "ml": {
+      "label": "ML model / pipeline",
+      "row": {
+        "surface": "the prediction/metric on a pinned eval",
+        "value": "a metric (accuracy/F1/loss) on a fixed eval set, or a specific prediction",
+        "observe_by": "the eval / scoring step",
+        "terminal_action": "the eval / scoring step",
+        "build_artifact": "the model artifact version + serving deploy",
+        "receipt": "an eval test on a pinned dataset (regression = red)"
+      },
+      "residue": {
+        "access": "How does an agent run the eval and read its metrics? (eval command, pinned dataset location, credentials)",
+        "shortcut": "Any smaller pinned eval that runs fast?",
+        "fixtures": "Where is the pinned eval set and the baseline metric it must not regress?",
+        "special_surfaces": "Any behavior only observable in serving? (latency, live traffic, A/B)"
+      }
+    },
+    "infra": {
+      "label": "Infra as Code (Terraform/k8s/Helm)",
+      "row": {
+        "surface": "the provisioned resource's actual state",
+        "value": "the resource attribute (a rule, a replica count)",
+        "observe_by": "a plan diff / cloud read-back",
+        "terminal_action": "apply (convergence)",
+        "build_artifact": "the applied state (state version / manifest)",
+        "receipt": "a plan/policy test (conftest/OPA), or receipt-cmd: the plan-diff itself (terraform plan -detailed-exitcode; exit 0 = converged)"
+      },
+      "residue": {
+        "access": "Where can an agent plan and read back resource state safely? (sandbox account or workspace, read-only role, state backend)",
+        "shortcut": "Any way to converge a small scope? (target or workspace flag, local cluster, plan-only)",
+        "fixtures": "Is there a reference environment whose state is the baseline to compare against?",
+        "special_surfaces": "Any resources only observable from inside the network or via a console? (private endpoints, IAM effects, DNS propagation)"
+      }
+    },
+    "migration": {
+      "label": "Database / migration",
+      "row": {
+        "surface": "the schema + data after migrating",
+        "value": "column type/existence, row values incl. legacy rows",
+        "observe_by": "querying",
+        "terminal_action": "the migration apply (and rollback)",
+        "build_artifact": "the migrated DB at the deployed sha",
+        "receipt": "a migration test on a fixture, or receipt-cmd: a query asserting the migrated schema/rows (incl. legacy) via expect:/.../"
+      },
+      "residue": {
+        "access": "How does an agent query the migrated database where it is verified? (connection or proxy, read-only role, which environment)",
+        "shortcut": "Any way to run the migration on a copy or fixture first? (snapshot restore, sandbox DB)",
+        "fixtures": "Is there a legacy-row fixture that must survive the migration, or a source of truth to reconcile against by value?",
+        "special_surfaces": "Any effects only observable through the application rather than SQL? (serializer output, cached views)"
+      }
+    },
+    "contract": {
+      "label": "Smart contract",
+      "row": {
+        "surface": "on-chain state after a tx",
+        "value": "balances / storage",
+        "observe_by": "view calls",
+        "terminal_action": "the state-changing tx",
+        "build_artifact": "the deployed contract (address/bytecode)",
+        "receipt": "a contract test (Foundry/Hardhat), red->green"
+      },
+      "residue": {
+        "access": "Which network or fork does an agent deploy and call against, with which funded account?",
+        "shortcut": "Any local chain or fork that reproduces mainnet state?",
+        "fixtures": "Is there a pinned block or state fixture the tests run against?",
+        "special_surfaces": "Any behavior only observable on-chain over time? (block timing, oracle inputs)"
+      }
+    },
+    "extension": {
+      "label": "Browser extension",
+      "row": {
+        "surface": "the injected UI / the modified page",
+        "value": "the injected DOM/behavior",
+        "observe_by": "a browser with the extension loaded",
+        "terminal_action": "the action it triggers",
+        "build_artifact": "the packaged extension version",
+        "receipt": "an e2e with the extension loaded"
+      },
+      "residue": {
+        "access": "How is the extension loaded into a browser where it is verified, and does the target site need a signed-in state?",
+        "shortcut": "Any dev shortcut? (unpacked load, mock page, test host)",
+        "fixtures": "Is there a fixture page the extension must act on?",
+        "special_surfaces": "Any behavior only observable in the real store build? (permission prompts, MV3 service-worker lifecycle)"
+      }
+    },
+    "embedded": {
+      "label": "Embedded / firmware",
+      "row": {
+        "surface": "device behavior (a pin/signal/serial line)",
+        "value": "the signal / register / output",
+        "observe_by": "hardware-in-the-loop or an emulator",
+        "terminal_action": "the command that actuates",
+        "build_artifact": "the flashed image version",
+        "receipt": "an on-target / emulator test"
+      },
+      "residue": {
+        "access": "How does an agent flash and observe the target? (device or emulator, serial or debug interface, credentials)",
+        "shortcut": "Any emulator or HIL rig that stands in for hardware?",
+        "fixtures": "Which signals or registers are the baseline to assert against?",
+        "special_surfaces": "Any behavior only observable on real hardware? (timing, power, peripherals)"
+      }
+    },
+    "game": {
+      "label": "Game",
+      "row": {
+        "surface": "the game state / rendered frame",
+        "value": "entity state / score / physics",
+        "observe_by": "a state-reading harness or a deterministic sim",
+        "terminal_action": "the action that commits",
+        "build_artifact": "the built version",
+        "receipt": "a sim / state test"
+      },
+      "residue": {
+        "access": "How does an agent launch a build and read game state? (state-reading harness, deterministic sim, save file)",
+        "shortcut": "Any deterministic seed or headless mode?",
+        "fixtures": "Is there a pinned scenario or save that reproduces the reported state?",
+        "special_surfaces": "Any behavior only observable rendered or with input devices? (frame timing, controller)"
+      }
+    },
+    "message": {
+      "label": "Outbound message / notification (email/SMS/push/webhook/generated doc)",
+      "row": {
+        "surface": "the recipient's inbox/device + the rendered message",
+        "value": "the recipient-facing content: the embedded URL's host and that it resolves (2xx, right page), the token/attachment works; NOT the provider's accepted/sent count",
+        "observe_by": "opening the delivered message as the recipient",
+        "terminal_action": "the recipient acting on it (the link opens and works)",
+        "build_artifact": "the SENDING environment's config (base URL, from-address, signing keys) at your sha; jobs/workers do not inherit the app's env",
+        "receipt": "a canary send to a controlled address, opened end to end, or receipt-cmd: capturing the emitted URL and asserting expect:/^https:\\/\\/<prod-host>\\// plus a curl -fsS that it resolves"
+      },
+      "residue": {
+        "access": "Where does a canary send land that an agent can open? (controlled inbox or device, capture endpoint)",
+        "shortcut": "Any capture mode that intercepts sends without delivering? (sandbox provider, log-only flag)",
+        "fixtures": "Is there a fixture recipient and a known-good message to compare against?",
+        "special_surfaces": "Any part only observable in the recipient's client? (rendering, link tracking, attachments)"
+      }
+    },
+    "unknown": {
+      "label": "Unknown (answer the contract yourself)",
+      "row": {
+        "surface": "",
+        "value": "",
+        "observe_by": "",
+        "terminal_action": "",
+        "build_artifact": "",
+        "receipt": ""
+      },
+      "residue": {
+        "access": "How does an agent reach the place where the behavior is observable, and what access does that need?",
+        "shortcut": "Any shortcut that makes it reachable or reproducible without production access?",
+        "fixtures": "Does the verify environment hold realistic data or inputs, or must something be seeded first?",
+        "special_surfaces": "Any behavior not observable through the primary tool named in observe-by? (comma-separated)"
+      }
+    }
+  }
+}

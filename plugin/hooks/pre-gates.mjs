@@ -463,19 +463,17 @@ function editCarriesAck(inp) {
   return ACK_TAG.test(bag) || /test-removal\s*:/i.test(bag);
 }
 
-// The interview is four questions only a human can answer. Relaying them is the agent's job.
+// The interview is the observation contract's residue - what only a human can answer. Relaying it is the agent's job.
 function initUnattendedReason() {
   return (
-    "`receipts init --yes` SKIPS the reachability interview, and detection cannot find any of " +
-    "what it asks. Those four answers are the ONLY thing that lets a gate refuse an " +
+    "`receipts init --yes` SKIPS the interview, and detection cannot find any of " +
+    "what it asks. Those answers are the ONLY thing that lets a gate refuse an " +
     "'auth-walled, could not verify' downgrade later - skipping them writes " +
     "drive.confirmed=false and answers on the human's behalf with 'unknown'.\n\n" +
-    "ASK THE HUMAN these four, then run `receipts init` (no --yes) and enter their answers:\n" +
-    "  1. How does an agent REACH a signed-in state on the verify environment? " +
-    "(test account / dev bypass / none needed)\n" +
-    "  2. Any dev-mode shortcut that makes it reachable? (fixed OTP, seeded login, magic link, flag)\n" +
-    "  3. Does that environment carry realistic data, or must a surface be seeded first?\n" +
-    "  4. Any surfaces that must be driven in a BROWSER rather than by API? (rendered PDFs, print views)\n\n" +
+    "Run `receipts init --agent` instead: it prints what was detected, the observation contract " +
+    "drafted for THIS medium and the residue only a human can answer. Sharpen the drafts against the " +
+    "repo, ASK THE HUMAN the residue in the project's own nouns, then relay with " +
+    "`receipts init --yes --answers <answers.json>` (the 0.7 --drive-* flags still relay).\n\n" +
     "Genuinely unattended (CI / a scripted provision)? Set CI=1 and this allows the --yes. " +
     "Or carry an explicit RECEIPTS_ACK=<why nobody can be asked> in the command."
   );
@@ -521,7 +519,7 @@ async function main() {
     // Bash command through. CI is the one legitimate caller of --yes; there, nobody can be asked.
     // --drive-* means the questions WERE put to a human and the answers are being relayed
     // (an agent cannot drive init's readline, so this is the supported path) - not a skip.
-    const relayedAnswers = /--drive-(?:auth|bypass|data|browser-surfaces)\b/.test(command);
+    const relayedAnswers = /--drive-(?:auth|bypass|data|browser-surfaces)\b|--answers\b/.test(command);
     // --print writes nothing (detection to stdout, so the interview can be grounded in what was
     // found - the setup skill's own first step), so it cannot record "unknown" on anyone's behalf.
     const previewOnly = /(?:^|\s)--print\b/.test(command);

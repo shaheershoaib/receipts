@@ -4,11 +4,18 @@
   "title": "receipts project config",
   "description": "Project-specific plumbing for the receipts gates. Produced by `receipts init` (detect -> confirm -> write); rarely hand-authored. The gate LOGIC ships generic; this file only tells receipts how to build/test/reach THIS project and what marks a fix-claim.",
   "type": "object",
-  "required": ["version"],
+  "required": [
+    "version"
+  ],
   "additionalProperties": false,
   "properties": {
-    "$schema": { "type": "string" },
-    "version": { "const": 1, "description": "Config schema version." },
+    "$schema": {
+      "type": "string"
+    },
+    "version": {
+      "const": 1,
+      "description": "Config schema version."
+    },
     "claim": {
       "type": "object",
       "description": "How a PR claims to fix an issue, and how it honestly downgrades.",
@@ -20,15 +27,24 @@
           "default": "closes #(\\d+)"
         },
         "require_receipt_for": {
-          "enum": ["issue-link", "any-source-change"],
+          "enum": [
+            "issue-link",
+            "any-source-change"
+          ],
           "description": "When the enforcer requires a receipt. 'issue-link' (default): only a fix-claim (a PR matching issue_link) must carry one - a PR with no issue link and no work-type passes untouched. 'any-source-change' (strict): a PR that changes production source (excluding docs / tests / CI / config) must ALSO carry a receipt, an honest downgrade tag, or an explicit work-type - closing the 'omit the issue link => silent green' bypass.",
           "default": "issue-link"
         },
         "downgrade_tags": {
           "type": "array",
-          "items": { "type": "string" },
+          "items": {
+            "type": "string"
+          },
           "description": "Tags that mark a PR as NOT claiming a clean fix (the honesty ladder); these pass the gate but are tracked, not treated as 'fixed'.",
-          "default": ["unverified-reasoned", "speculative", "reverted"]
+          "default": [
+            "unverified-reasoned",
+            "speculative",
+            "reverted"
+          ]
         },
         "require_receipt_lock": {
           "type": "boolean",
@@ -43,7 +59,12 @@
       "additionalProperties": false,
       "properties": {
         "sha_source": {
-          "enum": ["github-deployments", "github-status", "ci-artifact", "none"],
+          "enum": [
+            "github-deployments",
+            "github-status",
+            "ci-artifact",
+            "none"
+          ],
           "description": "How to confirm which commit the build/deploy carries (G3). 'none' = no deploy; verify against the built artifact + test run. STATUS: read by the agent-side Stop hook ('none' / 'ci-artifact' stands the deployed-build backstop down for a repo with no URL deploy), AND by the CI enforcer's report step, which queries the deployments API for the head sha and reports whether a deployment carrying it has succeeded (enforcer/report.js `deployLine`).",
           "default": "github-deployments"
         },
@@ -53,12 +74,17 @@
         },
         "deploy_host_patterns": {
           "type": "array",
-          "items": { "type": "string" },
+          "items": {
+            "type": "string"
+          },
           "description": "Host globs that count as 'pointed at the deployed build' (for optional live-drive)."
         },
         "environments": {
           "type": "object",
-          "additionalProperties": { "type": "string", "format": "uri" },
+          "additionalProperties": {
+            "type": "string",
+            "format": "uri"
+          },
           "description": "Named environment URLs, e.g. {\"staging\": \"https://...\", \"production\": \"https://...\"}."
         },
         "verify_against": {
@@ -71,25 +97,39 @@
     "verify": {
       "type": "object",
       "description": "How to run the receipt: the carried red->green acceptance test. The PRIMARY verification; uses the project's own test framework + CI auth. Required for the ENFORCER (it errors without test_command); an agent-home config (skills + session cwd, no code repo) may omit this whole block - that is why `verify` is not a top-level required field.",
-      "required": ["test_command"],
+      "required": [
+        "test_command"
+      ],
       "additionalProperties": false,
       "properties": {
         "test_command": {
           "type": "string",
           "description": "Run the carried acceptance test(s). Placeholders, because runners SELECT differently: `{test}` = the changed test FILE path(s), quoted (jest / pytest / rspec / mix take paths); `{test_dirs}` = the unique './dir's of those files (`go test` selects by package, not file); `{test_classes}` = the basenames sans extension, comma-joined (Maven surefire's -Dtest=). A file path fed to a name-selector (-run / -Dtest= / --filter) matches nothing and exits 0 - a red phase that ran no test.",
-          "examples": ["npm test -- {test}", "pytest {test}", "go test {test_dirs}", "mvn -Dtest={test_classes} test"]
+          "examples": [
+            "npm test -- {test}",
+            "pytest {test}",
+            "go test {test_dirs}",
+            "mvn -Dtest={test_classes} test"
+          ]
         },
         "suite_command": {
           "type": "string",
           "description": "Run the full suite (G9 full-scope green: the enforcer runs this on head after the narrow receipt, so a regression in code the changed test never exercises is caught, not just the changed test)."
         },
         "require_fresh_base": {
-          "enum": ["warn", "block", "off"],
+          "enum": [
+            "warn",
+            "block",
+            "off"
+          ],
           "description": "G8 fresh base: whether the enforcer flags a branch that is behind its base (a green earned on a stale base is green on code that won't ship). 'warn' (default) surfaces it without failing the check; 'block' fails it; 'off' disables.",
           "default": "warn"
         },
         "on_load_error_red": {
-          "enum": ["warn", "block"],
+          "enum": [
+            "warn",
+            "block"
+          ],
           "description": "What to do when the receipt's RED on base is a load/collection error (import / syntax / no-tests), not an assertion failure - a red that may not prove the symptom (the test may just import code that only exists on head). 'warn' (default): surface it, still allow. 'block': fail it, EXCEPT when the PR is `work-type: feature` (a feature's test is legitimately red until the feature exists).",
           "default": "warn"
         },
@@ -106,23 +146,36 @@
           "default": 1
         },
         "live_drive": {
-          "type": ["string", "null"],
+          "type": [
+            "string",
+            "null"
+          ],
           "description": "OPTIONAL advanced: a command/script that drives the deployed app for symptoms a unit/e2e test can't cover. null = not used (the carried test is enough). RESERVED: declared for the roadmap; the enforcer does not execute it yet.",
           "default": null
         },
         "browser_receipt": {
           "type": "object",
           "description": "OPTIONAL web-medium adapter: run a browser/e2e script (Playwright, Cypress, etc.) against the PR's PREVIEW DEPLOYMENT as a HEAD-ONLY acceptance check. IMPORTANT - this is NOT a red->green receipt: a preview deploys only the HEAD build, so there is no base preview to run it red against. It is a G1/G3/G5-shaped acceptance check (does the fixed behavior actually work on the live deploy) that runs IN ADDITION to the carried red->green receipt and NEVER substitutes for it. Playwright is NOT a dependency of receipts: the consuming repo brings its own e2e stack; receipts only resolves the preview URL, exports it as RECEIPTS_PREVIEW_URL, runs `command`, and folds the exit code into the verdict. Runs isolated after the main dance - a thrown error / unreachable preview degrades to a WARN, never a crash and (unless mode:block) never a hard fail.",
-          "required": ["command"],
+          "required": [
+            "command"
+          ],
           "additionalProperties": false,
           "properties": {
             "command": {
               "type": "string",
               "description": "How to run the browser/e2e script against the preview. It reads the preview URL from the RECEIPTS_PREVIEW_URL env var receipts exports (e.g. a playwright.config baseURL, or `page.goto(process.env.RECEIPTS_PREVIEW_URL)`). Must be a single command whose own exit is the result (exit-masking `;`/`||`/pipe/`&` is rejected - a green from a masked exit cannot be trusted, G9); wrap complex flows in a script.",
-              "examples": ["npx playwright test e2e/receipt.spec.ts", "node e2e/smoke.mjs", "npx cypress run --spec cypress/e2e/receipt.cy.ts"]
+              "examples": [
+                "npx playwright test e2e/receipt.spec.ts",
+                "node e2e/smoke.mjs",
+                "npx cypress run --spec cypress/e2e/receipt.cy.ts"
+              ]
             },
             "url_source": {
-              "enum": ["env", "github-deployment", "command"],
+              "enum": [
+                "env",
+                "github-deployment",
+                "command"
+              ],
               "default": "env",
               "description": "How to resolve the preview URL. 'env' (default): read it from an env var (url_env). 'github-deployment': query the GitHub deployments API for the PR head sha's environment_url (uses GITHUB_TOKEN + GITHUB_REPOSITORY, both provided inside the Action; works for Vercel and other platforms that post deployments). 'command': run url_cmd and read the first http(s) URL it prints. Every path degrades HONESTLY when the URL can't be resolved - a distinct 'could not resolve preview URL' WARN, never a silent pass."
             },
@@ -134,10 +187,16 @@
             "url_cmd": {
               "type": "string",
               "description": "For url_source: 'command' - a command that PRINTS the preview URL (the first http(s) line of its stdout is used). E.g. a Vercel/Netlify CLI call, or a `gh` query. Exit-masking is rejected (G9). Used only when url_source is 'command'.",
-              "examples": ["vercel inspect --token \"$VERCEL_TOKEN\" | grep -o 'https://[^ ]*.vercel.app'", "cat preview-url.txt"]
+              "examples": [
+                "vercel inspect --token \"$VERCEL_TOKEN\" | grep -o 'https://[^ ]*.vercel.app'",
+                "cat preview-url.txt"
+              ]
             },
             "mode": {
-              "enum": ["warn", "block"],
+              "enum": [
+                "warn",
+                "block"
+              ],
               "default": "warn",
               "description": "'warn' (default): a failing browser receipt (or a preview-is-not-the-head-build sha mismatch) surfaces as a WARN without failing the check - the preview being flaky/unreachable is often infra, not the PR's fault, and the red->green receipt is the primary gate. 'block': a definitive failure (the command ran and exited non-zero against a resolved preview) fails the check. Honest-degradation cases (URL unresolved, adapter error) are ALWAYS a WARN regardless of mode - you cannot block on a check that could not run."
             },
@@ -156,12 +215,20 @@
       "additionalProperties": false,
       "properties": {
         "on_no_receipt": {
-          "enum": ["require-downgrade-tag", "warn", "block"],
+          "enum": [
+            "require-downgrade-tag",
+            "warn",
+            "block"
+          ],
           "description": "What to do when a fix-claim carries no re-runnable acceptance test.",
           "default": "require-downgrade-tag"
         },
         "on_unreachable_build": {
-          "enum": ["sha-bind-only", "warn", "block"],
+          "enum": [
+            "sha-bind-only",
+            "warn",
+            "block"
+          ],
           "description": "What to do when the deployed build can't be reached for re-verification. RESERVED: declared for the live-drive design in enforcer/GENERALIZATION.md; not read by the enforcer yet.",
           "default": "sha-bind-only"
         }
@@ -184,13 +251,24 @@
           "description": "Which gates run here: \"all\" (default, self-updating as new gates ship), or an explicit array of gate IDs (G0-G19). A pinned list does NOT pick up gates added later - `receipts doctor` reports the ones you are missing.",
           "default": "all",
           "oneOf": [
-            { "const": "all" },
-            { "type": "array", "items": { "type": "string", "pattern": "^G(1[0-9]|[0-9])$" } }
+            {
+              "const": "all"
+            },
+            {
+              "type": "array",
+              "items": {
+                "type": "string",
+                "pattern": "^G(1[0-9]|[0-9])$"
+              }
+            }
           ]
         },
         "disabled": {
           "type": "array",
-          "items": { "type": "string", "pattern": "^G(1[0-9]|[0-9])$" },
+          "items": {
+            "type": "string",
+            "pattern": "^G(1[0-9]|[0-9])$"
+          },
           "description": "Gate IDs to turn off even if `enabled` includes them; takes precedence over `enabled`.",
           "default": []
         },
@@ -200,7 +278,10 @@
           "description": "Surface coverage - the 'sweep the twins' assist. Catches a pattern applied to SOME sibling surfaces but not all (an 'app-wide' change that is actually partial). Two mechanisms: declared `surfaces` (a glob + a required marker substring, any language) and a built-in JS/TS heuristic - any AFFORDANCE (a component, hook, attribute, prop, call, or import - any identifier that is not a ubiquitous plumbing word) rolled out to >=2 same-named siblings flags the twins that missed it. Runs on every PR with a diff.",
           "properties": {
             "mode": {
-              "enum": ["warn", "block"],
+              "enum": [
+                "warn",
+                "block"
+              ],
               "description": "What an incomplete rollout does: warn (default) or block.",
               "default": "warn"
             },
@@ -215,12 +296,28 @@
               "items": {
                 "type": "object",
                 "additionalProperties": false,
-                "required": ["glob", "marker"],
+                "required": [
+                  "glob",
+                  "marker"
+                ],
                 "properties": {
-                  "name": { "type": "string", "description": "Human label, e.g. 'table pagination'." },
-                  "glob": { "type": "string", "description": "Files in the family, e.g. 'src/**/*Table.tsx'. Supports * and **." },
-                  "marker": { "type": "string", "description": "Substring every family member must contain, e.g. 'Pagination' or 'usePagination' or 'LIMIT'." },
-                  "always": { "type": "boolean", "description": "Check coverage on every PR (a standing invariant), not only when a PR touches the marker. Default false.", "default": false }
+                  "name": {
+                    "type": "string",
+                    "description": "Human label, e.g. 'table pagination'."
+                  },
+                  "glob": {
+                    "type": "string",
+                    "description": "Files in the family, e.g. 'src/**/*Table.tsx'. Supports * and **."
+                  },
+                  "marker": {
+                    "type": "string",
+                    "description": "Substring every family member must contain, e.g. 'Pagination' or 'usePagination' or 'LIMIT'."
+                  },
+                  "always": {
+                    "type": "boolean",
+                    "description": "Check coverage on every PR (a standing invariant), not only when a PR touches the marker. Default false.",
+                    "default": false
+                  }
                 }
               }
             },
@@ -230,10 +327,21 @@
               "items": {
                 "type": "object",
                 "additionalProperties": false,
-                "required": ["surfaces"],
+                "required": [
+                  "surfaces"
+                ],
                 "properties": {
-                  "name": { "type": "string", "description": "Human label for the entity, e.g. 'invoice' or 'report row'." },
-                  "surfaces": { "type": "array", "items": { "type": "string" }, "description": "Two or more file globs, one per render surface of the entity (supports * and **)." }
+                  "name": {
+                    "type": "string",
+                    "description": "Human label for the entity, e.g. 'invoice' or 'report row'."
+                  },
+                  "surfaces": {
+                    "type": "array",
+                    "items": {
+                      "type": "string"
+                    },
+                    "description": "Two or more file globs, one per render surface of the entity (supports * and **)."
+                  }
                 }
               }
             }
@@ -245,7 +353,10 @@
           "description": "Dependent-test-selection. The enforcer computes the NEW dependents of the changed source (a freshly-added consumer file, or a freshly-added import edge) and re-runs their co-located tests on head, catching an integration regression the carried receipt never exercises. Built-in support: a JS/TS import scan; for any stack, point `graph` at a consumer graph.",
           "properties": {
             "mode": {
-              "enum": ["warn", "block"],
+              "enum": [
+                "warn",
+                "block"
+              ],
               "description": "What a failing NEW-dependent test does: warn (default - the reverse-dependency set is heuristic) or block.",
               "default": "warn"
             },
@@ -278,11 +389,16 @@
           "properties": {
             "contract_paths": {
               "type": "array",
-              "items": { "type": "string" },
+              "items": {
+                "type": "string"
+              },
               "description": "Extra globs of contract artifacts to back-compat-check, on top of the built-in detection (e.g. \"api/schema.json\", \"**/*.proto\", \"proto/**\")."
             },
             "mode": {
-              "enum": ["warn", "block"],
+              "enum": [
+                "warn",
+                "block"
+              ],
               "description": "What a detected breaking contract change does: warn (default) or block.",
               "default": "warn"
             },
@@ -293,8 +409,12 @@
                 "type": "object",
                 "additionalProperties": false,
                 "properties": {
-                  "producer": { "type": "string" },
-                  "consumer": { "type": "string" }
+                  "producer": {
+                    "type": "string"
+                  },
+                  "consumer": {
+                    "type": "string"
+                  }
                 }
               }
             }
@@ -306,7 +426,10 @@
           "description": "Referee integrity - the 'don't shoot the referee' gate. Flags a PR that DELETES test files, adds skip/focus markers (.skip / xit / @pytest.mark.skip / t.Skip / @Disabled / .only), or rewrites snapshot artifacts: a green earned by shrinking the suite's assertion power proves nothing. An honest `test-removal: <why>` line in the PR body acknowledges intentional removals (tracked, never blocked). Runs statically on every PR.",
           "properties": {
             "mode": {
-              "enum": ["warn", "block"],
+              "enum": [
+                "warn",
+                "block"
+              ],
               "description": "What an unacknowledged test deletion / added skip does: warn (default) or block. Snapshot churn always warns only.",
               "default": "warn"
             }
@@ -318,7 +441,10 @@
           "description": "Fix the cause, not the alarm - the silencing assist. On a fix-claim, flags a diff that REMOVES throw/raise statements or ADDS empty/swallowing catches: the symptom may be gone because its DETECTOR is (a permission check deleted to cure a 403, an exception swallowed to cure an error toast). Heuristic - some fixes legitimately remove an over-strict check - so it asks; the judgment is agent-side (the skill).",
           "properties": {
             "mode": {
-              "enum": ["warn", "block"],
+              "enum": [
+                "warn",
+                "block"
+              ],
               "description": "What a silencing-shaped diff does: warn (default - the heuristic asks a question) or block.",
               "default": "warn"
             }
@@ -339,7 +465,10 @@
               "default": "coverage/lcov.info"
             },
             "mode": {
-              "enum": ["warn", "block"],
+              "enum": [
+                "warn",
+                "block"
+              ],
               "description": "What uncovered changed lines do: warn (default) or block.",
               "default": "warn"
             }
@@ -351,7 +480,10 @@
           "description": "Receipt strength - the mutation referee. Red->green proves the receipt notices THE fix, not that it would notice a WRONG one (a receipt asserting 'not the old value' goes green for any change). G14 deliberately breaks each changed line (a small operator set: flipped comparisons, &&/||, true/false, numbers nudged) and requires the receipt to go red; a SURVIVOR is a changed line the receipt cannot tell from broken. Runs whenever a receipt exists; capped and diff-scoped, so it costs a handful of receipt re-runs.",
           "properties": {
             "mode": {
-              "enum": ["warn", "block"],
+              "enum": [
+                "warn",
+                "block"
+              ],
               "description": "What a surviving mutant does: warn (default - a survivor can be an equivalent mutant) or block (the untrusted-agent posture).",
               "default": "warn"
             },
@@ -363,7 +495,9 @@
             },
             "exclude": {
               "type": "array",
-              "items": { "type": "string" },
+              "items": {
+                "type": "string"
+              },
               "description": "Glob list of files G14 must NOT mutate. G14 already skips any file without a known CODE extension, because a mutation in generated JSON/HTML/SVG is noise by construction: no test asserts on it, so it always 'survives' - slandering the receipt while consuming the budget that should have gone to the changed code. Use this for generated files that DO carry a code extension (a compiled bundle, a generated API client)."
             }
           }
@@ -390,29 +524,46 @@
       "properties": {
         "loop_skills": {
           "type": "array",
-          "items": { "type": "string" },
+          "items": {
+            "type": "string"
+          },
           "description": "Skill names that are fix/build loops: the trajectory-reminder watches these (append-on-exit) and they carry the kb query/append touchpoints. The shipped 'gates' plus any project loop skills.",
-          "default": ["gates"]
+          "default": [
+            "gates"
+          ]
         },
         "staging_query_patterns": {
           "type": "array",
-          "items": { "type": "string" },
+          "items": {
+            "type": "string"
+          },
           "description": "Extra substrings / MCP-tool names that count as a by-value query against the deployed build (e.g. a DB proxy host, a query tool), on top of the generic defaults."
         },
         "drive": {
           "type": "object",
-          "description": "How an agent REACHES an observable state in the verify environment - the auth wall, any dev-mode shortcut, whether data is realistic, and which surfaces only exist rendered. Detection cannot find any of this, so `receipts init` always asks a human. Read by the Stop gate to refuse an 'auth-walled, could not verify' downgrade when a route IS on record.",
+          "description": "DEPRECATED since 0.8.0 - the web-shaped predecessor of `agent.observe`. `receipts doctor` migrates it (auth->reach.access, bypass->reach.shortcut, data->reach.fixtures, browser_surfaces->reach.special_surfaces); the hooks still read it until then. How an agent REACHES an observable state in the verify environment - the auth wall, any dev-mode shortcut, whether data is realistic, and which surfaces only exist rendered. Detection cannot find any of this, so `receipts init` always asks a human. Read by the Stop gate to refuse an 'auth-walled, could not verify' downgrade when a route IS on record.",
           "properties": {
             "confirmed": {
               "type": "boolean",
               "description": "Did a human actually answer the reachability questions? false = init ran with --yes and SKIPPED them, so an EMPTY block is an open question, not a confirmed 'nothing needed'. The gate treats the two differently."
             },
-            "auth": { "type": "string", "description": "How an agent reaches a signed-in state (test account / dev bypass / none needed)." },
-            "bypass": { "type": "string", "description": "Dev-mode shortcut that makes the app reachable (fixed OTP, seeded login, magic link, flag)." },
-            "data": { "type": "string", "description": "Does the environment carry realistic data, or must a surface be seeded before it shows anything?" },
+            "auth": {
+              "type": "string",
+              "description": "How an agent reaches a signed-in state (test account / dev bypass / none needed)."
+            },
+            "bypass": {
+              "type": "string",
+              "description": "Dev-mode shortcut that makes the app reachable (fixed OTP, seeded login, magic link, flag)."
+            },
+            "data": {
+              "type": "string",
+              "description": "Does the environment carry realistic data, or must a surface be seeded before it shows anything?"
+            },
             "browser_surfaces": {
               "type": "array",
-              "items": { "type": "string" },
+              "items": {
+                "type": "string"
+              },
               "description": "Surfaces that must be driven in a BROWSER rather than by API (rendered PDFs, print views)."
             }
           },
@@ -420,16 +571,24 @@
         },
         "closeout_fixed_statuses": {
           "type": "array",
-          "items": { "type": "string" },
+          "items": {
+            "type": "string"
+          },
           "description": "Tracker status strings that mean 'claimed fixed' (e.g. 'Fixed - Pending Retest', 'Verified', 'Closed'); the verification gate treats a status update to one of these as a fix close-out.",
-          "default": ["Pending Retest", "Verified"]
+          "default": [
+            "Pending Retest",
+            "Verified"
+          ]
         },
         "repo_name": {
           "type": "string",
           "description": "Default repo tag for trajectory-kb appends (the agent may override per append)."
         },
         "evidence": {
-          "enum": ["heuristic", "live-receipt"],
+          "enum": [
+            "heuristic",
+            "live-receipt"
+          ],
           "description": "What kind of deployed-build evidence the Stop hook's verification gate accepts at a fix close-out. 'heuristic' (default, key absent): the pattern-matched signals count - a navigate to a deploy host + a screenshot / DOM read / by-value query. 'live-receipt' (opt-in strict): ONLY a valid `receipts/live-receipt@1` (produced by `receipts observe`) with met:true AND a build binding (artifact.kind != 'none') satisfies the gate - a machine-validated probe of the live build, not 'a screenshot happened'. The block message then tells the agent the exact `receipts observe ...` command to run. See spec/LIVE-RECEIPT.md.",
           "default": "heuristic"
         },
@@ -437,10 +596,17 @@
           "type": "string",
           "description": "Where the trajectory memory lives - this decides WHO it serves. 'home' (default): ~/.claude/mcp-servers/trajectory-kb/data/trajectories.jsonl - private, per-machine, aggregates across your repos. 'repo': <repo>/.receipts/trajectories.jsonl - COMMIT it and the whole team inherits every recorded trap and dead end (append-only JSONL merges trivially). Any other value: an explicit path, resolved against this config's directory.",
           "default": "home",
-          "examples": ["home", "repo", ".receipts/trajectories.jsonl"]
+          "examples": [
+            "home",
+            "repo",
+            ".receipts/trajectories.jsonl"
+          ]
         },
         "memory_inject": {
-          "enum": ["on", "off"],
+          "enum": [
+            "on",
+            "off"
+          ],
           "description": "Whether the SessionStart hook (session-memory.mjs) PUSHES prior trajectory scars into a new session's context WITHOUT the agent having to query the kb - so a weak agent that never asks still arrives warned. 'on' (default when a receipts.config.json is present): at session start it reads the trajectory store, picks up to ~5 most-relevant entries for THIS repo (failures first, one per surface_key), and injects a compact (~1500-char-capped) summary as additionalContext. 'off': disables the injection. A repo with NO receipts config at all gets zero injection regardless (never opted in). Read only by the agent-side hook, not the CI enforcer.",
           "default": "on"
         },
@@ -450,34 +616,131 @@
           "additionalProperties": false,
           "properties": {
             "commit_unverified": {
-              "enum": ["deny", "ask", "warn", "off"],
+              "enum": [
+                "deny",
+                "ask",
+                "warn",
+                "off"
+              ],
               "description": "The commit-without-verification tripwire (Bash `git commit`): a commit that lands right after a production-source edit with NO test / receipt command run in between is stopped - a commit is a claim it works (G0/G9). The project's own verify.test_command / suite_command and a broad default runner list count as 'ran the code'. 'ask' (default outside CI): the human is prompted with the reason and may approve. 'deny' (default under CI): block with the escape instructions - the untrusted-agent posture. 'warn': allow, and tell the agent what it skipped. 'off': disable.",
               "default": "ask"
             },
             "g11_live": {
-              "enum": ["deny", "ask", "warn", "off"],
+              "enum": [
+                "deny",
+                "ask",
+                "warn",
+                "off"
+              ],
               "description": "The G11-live referee tripwire (Edit/Write/MultiEdit on a TEST file): editing a test that a test RUN just showed FAILING, with no green run since, is the 'shoot the referee' move - fix the code, not the test (G11). Only runner output (a tool_result of a test command) arms it, never prose; a later green run clears it. 'ask' (default outside CI) / 'deny' (default under CI) / 'warn' / 'off' as for commit_unverified. An edit whose NEW content carries a `test-removal: <why>` note or a `RECEIPTS_ACK` is the honest, reviewed way through.",
               "default": "ask"
             },
             "test_command_patterns": {
               "type": "array",
-              "items": { "type": "string" },
+              "items": {
+                "type": "string"
+              },
               "description": "Extra regex patterns (matched against the Bash command string) that count as 'ran the code / produced a receipt' for the commit tripwire, on top of the generic defaults (npm/pnpm/yarn test, node --test, vitest/jest/mocha/playwright, pytest/tox/nox, go/cargo/mvn/gradle test, rspec, mix test, phpunit, dotnet test, receipts observe/verify, ...). Add a bespoke runner here, e.g. \"run-checks\\\\.sh\"."
             },
             "init_unattended": {
-              "enum": ["deny", "ask", "warn", "off"],
-              "description": "The unattended-setup tripwire (Bash `receipts init --yes`): --yes skips the reachability interview, whose four answers (auth route, dev bypass, data realism, browser-only surfaces) have no other source - detection cannot find them. An agent taking --yes answers them 'unknown' on the human's behalf, producing a config-shaped hole the gates exist to close. 'deny' (default): blocked unless CI is set, the command relays the answers (--drive-*), or it carries a RECEIPTS_ACK. This one runs even with no config present - it fires during the very setup that writes the config. 'ask' / 'warn' / 'off' as for commit_unverified.",
+              "enum": [
+                "deny",
+                "ask",
+                "warn",
+                "off"
+              ],
+              "description": "The unattended-setup tripwire (Bash `receipts init --yes`): --yes skips the reachability interview, whose four answers (auth route, dev bypass, data realism, browser-only surfaces) have no other source - detection cannot find them. An agent taking --yes answers them 'unknown' on the human's behalf, producing a config-shaped hole the gates exist to close. 'deny' (default): blocked unless CI is set, the command relays the answers (--answers / --drive-*), or it carries a RECEIPTS_ACK. This one runs even with no config present - it fires during the very setup that writes the config. 'ask' / 'warn' / 'off' as for commit_unverified.",
               "default": "deny"
             },
             "render_unverified": {
-              "enum": ["deny", "ask", "warn", "off"],
+              "enum": [
+                "deny",
+                "ask",
+                "warn",
+                "off"
+              ],
               "description": "The producer-without-render-receipt tripwire (Bash `git commit`): after editing a render-feeding source, a commit whose only verification was a DATA read (a query / curl / data-form `receipts observe`) - never the RENDERED surface - is stopped, because a value can exist in the data and be dropped by the render layer (G1 render-count parity, G4, G6). OPT-IN: inert unless render surfaces are declared (via gates.G6.render_twins[].surfaces or render_source_globs). 'off' (default): disabled. 'deny' / 'ask' / 'warn' as for commit_unverified.",
               "default": "off"
             },
             "render_source_globs": {
               "type": "array",
-              "items": { "type": "string" },
+              "items": {
+                "type": "string"
+              },
               "description": "Extra file globs treated as render-feeding sources by the render_unverified tripwire, on top of the surfaces declared in gates.G6.render_twins. Supports * and **."
+            }
+          }
+        },
+        "observe": {
+          "type": "object",
+          "additionalProperties": false,
+          "description": "The observation contract (spec/MEDIA.md) answered for THIS project: how an agent reaches an observable state and what it observes, in the detected medium's terms. Drafted by `receipts init` from the medium row, sharpened by the agent against the repo, confirmed by a human for the residue. Read by the Stop gate and the SessionStart memory so 'could not reach it' is not available as a reason when a way in is on record.",
+          "properties": {
+            "confirmed": {
+              "type": "boolean",
+              "description": "Did a human answer the residue (or relay it via --answers / --drive-*)? false = init ran with --yes and SKIPPED it, so an EMPTY block is an open question, not a confirmed 'nothing needed'."
+            },
+            "surface": {
+              "type": "string",
+              "description": "Where the behavior manifests to whoever consumes it (G4)."
+            },
+            "value": {
+              "type": "string",
+              "description": "The concrete observable asserted, never mere presence (G1)."
+            },
+            "observe_by": {
+              "type": "string",
+              "description": "The tool that reads that value (G1)."
+            },
+            "terminal_action": {
+              "type": "string",
+              "description": "The operation that commits the effect at the end of the flow (G5)."
+            },
+            "build_artifact": {
+              "type": "string",
+              "description": "What 'the build that carries your commit' means here (G3)."
+            },
+            "twin": {
+              "type": "string",
+              "description": "Where the same pattern is re-implemented (G6); 'none' is a real answer."
+            },
+            "dependent": {
+              "type": "string",
+              "description": "What consumes what was changed (G7); 'none' is a real answer."
+            },
+            "receipt": {
+              "type": "string",
+              "description": "The automated test or re-runnable command that re-proves it red-before / green-after (G0)."
+            },
+            "compat_boundary": {
+              "type": "string",
+              "description": "Where producer and consumer update independently (G10); 'none' is a real answer."
+            },
+            "reach": {
+              "type": "object",
+              "additionalProperties": false,
+              "description": "The residue only a human can answer, phrased per medium by spec/media.json.",
+              "properties": {
+                "access": {
+                  "type": "string",
+                  "description": "How an agent reaches the place where the behavior is observable, and what access that needs (web: a signed-in state; cli: how the tool is invoked; data: read access to the destination store)."
+                },
+                "shortcut": {
+                  "type": "string",
+                  "description": "A shortcut that makes it reachable or reproducible without production access (fixed OTP, dry-run flag, sandbox account)."
+                },
+                "fixtures": {
+                  "type": "string",
+                  "description": "Whether the verify environment holds realistic data/inputs, or what must be seeded first."
+                },
+                "special_surfaces": {
+                  "type": "array",
+                  "items": {
+                    "type": "string"
+                  },
+                  "description": "Behavior not observable through the primary observe-by tool (rendered PDFs, TTY-only prompts, device-only screens)."
+                }
+              }
             }
           }
         }

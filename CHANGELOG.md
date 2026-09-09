@@ -2,6 +2,26 @@
 
 ## Unreleased
 
+### Changed
+- **BREAKING: the init interview is the observation contract, reasoned by the agent.** `agent.drive`
+  (auth / bypass / data / browser_surfaces - the web row of `spec/MEDIA.md`, hardcoded) becomes
+  `agent.observe`: the nine contract answers (surface, value, observe-by, terminal action, build
+  artifact, twin, dependent, receipt, compatibility boundary) plus `reach` (access, shortcut,
+  fixtures, special_surfaces) in the DETECTED medium's terms. `spec/media.json` is MEDIA.md as data
+  (fifteen media, kept in lockstep by a test). `receipts doctor` migrates an existing `drive` block
+  in place (backup first); the Stop gate and the SessionStart memory read `observe` and fall back
+  to `drive`; `--drive-*` still relay into `observe.reach` for one release, with a deprecation note.
+  A CLI tool is now asked how it is invoked and whether any behavior is TTY-only, a data pipeline
+  where its outputs land, a Terraform repo where it can plan safely - never about a signed-in state
+  it does not have.
+
+### Added
+- **`receipts init --agent`** (the mode INIT.md promised): prints detection, the medium's contract
+  drafts and the residue only a human can answer, as JSON, and writes nothing. **`--answers <file>`**
+  relays the agent-composed answers as a partial config laid over detection; an `agent.observe`
+  block in it marks `observe.confirmed`. The no-terminal guard, doctor's hint and the unattended-init
+  tripwire all speak this form. The setup skill now drafts from the repo and asks only the residue.
+
 ## 0.7.0 - 2026-09-09
 
 ### Fixed

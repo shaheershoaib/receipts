@@ -48,7 +48,7 @@ test("init stamps the version that wrote the config", () => {
 test("SessionStart announces a version mismatch and names doctor", () => {
   const d = project();
   fs.writeFileSync(path.join(d, "receipts.config.json"),
-    JSON.stringify({ version: 1, agent: { receipts_version: "0.0.1", drive: { confirmed: true } } }));
+    JSON.stringify({ version: 1, agent: { receipts_version: "0.0.1", observe: { confirmed: true } } }));
   const ctx = runSession(d);
   assert.ok(ctx, "a stale config must not pass silently");
   assert.match(ctx, /written by version 0\.0\.1/);
@@ -60,14 +60,14 @@ test("SessionStart is silent when the versions match", () => {
   const d = project();
   const running = JSON.parse(fs.readFileSync(path.join(ROOT, "plugin", ".claude-plugin", "plugin.json"), "utf8")).version;
   fs.writeFileSync(path.join(d, "receipts.config.json"),
-    JSON.stringify({ version: 1, agent: { receipts_version: running, drive: { confirmed: true } } }));
+    JSON.stringify({ version: 1, agent: { receipts_version: running, observe: { confirmed: true } } }));
   assert.equal(runSession(d), null, "a current project must not pay for the upgrade check");
 });
 
 test("SessionStart flags a config that records no version at all", () => {
   const d = project();
   fs.writeFileSync(path.join(d, "receipts.config.json"),
-    JSON.stringify({ version: 1, agent: { drive: { confirmed: true } } }));
+    JSON.stringify({ version: 1, agent: { observe: { confirmed: true } } }));
   assert.match(runSession(d), /does not record which version wrote it/);
 });
 
@@ -76,7 +76,7 @@ test("doctor reports the mismatch directly, not by guessing at fields", () => {
   fs.writeFileSync(path.join(d, "receipts.config.json"), JSON.stringify({
     version: 1, build: { sha_source: "none", platform: "none" },
     verify: { test_command: "npm test -- {test}" },
-    agent: { receipts_version: "0.0.1", drive: { confirmed: true, auth: "", bypass: "", data: "", browser_surfaces: [] } },
+    agent: { receipts_version: "0.0.1", observe: { confirmed: true, reach: { access: "", shortcut: "", fixtures: "", special_surfaces: [] } } },
   }));
   const r = runDoctor(d);
   assert.equal(r.status, 2);

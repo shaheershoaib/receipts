@@ -27,7 +27,7 @@ the Gates before a PR is ever opened. This is the agent-side half of `receipts`
   showed failing (G11-live), `receipts init --yes` skipping the interview, and the
   opt-in render tripwire.
 - **`hooks/session-memory.mjs`** - memory that pushes: injects the repo's prior scars and
-  its recorded way in (`agent.drive`) at session start, and announces a plugin upgrade
+  its recorded way in (`agent.observe.reach`) at session start, and announces a plugin upgrade
   the config predates.
 - Pairs with the **`../mcp/trajectory-kb`** server (the verification memory).
 

@@ -18,7 +18,7 @@ const CLI = path.join(__dirname, "..", "..", "bin", "receipts.js");
 
 function freshProject() {
   const td = fs.mkdtempSync(path.join(os.tmpdir(), "receipts-init-notty-"));
-  fs.writeFileSync(path.join(td, "package.json"), JSON.stringify({ name: "x", scripts: { test: "jest" } }));
+  fs.writeFileSync(path.join(td, "package.json"), JSON.stringify({ name: "x", dependencies: { react: "18" }, scripts: { test: "jest" } }));
   return td;
 }
 
@@ -35,7 +35,7 @@ test("bare init with no terminal refuses loudly: exit 2, nothing written, the fo
   assert.equal(fs.existsSync(path.join(td, "receipts.config.json")), false, "must not write a config nobody answered");
   assert.match(r.err, /signed-in state/, "question 1 must be printed");
   assert.match(r.err, /browser/i, "question 4 must be printed");
-  assert.match(r.err, /--drive-auth/, "the relay form must be printed so the caller can pass the answers back");
+  assert.match(r.err, /--answers/, "the relay form must be printed so the caller can pass the answers back");
   assert.match(r.err, /--yes/, "the relay form includes --yes");
 });
 

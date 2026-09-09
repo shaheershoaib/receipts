@@ -47,7 +47,7 @@ test("the setup skill's description covers the phrases a user actually says", ()
 
 test("the setup skill documents the relayed-answer flags, not a readline it cannot drive", () => {
   const body = fs.readFileSync(path.join(SKILLS_DIR, "setup", "SKILL.md"), "utf8");
-  for (const flag of ["--drive-auth", "--drive-bypass", "--drive-data", "--drive-browser-surfaces"])
+  for (const flag of ["--agent", "--answers"])
     assert.ok(body.includes(flag), `setup skill must document ${flag}`);
   // and the flags it names must actually exist in the CLI
   const cli = fs.readFileSync(path.join(__dirname, "..", "..", "bin", "receipts.js"), "utf8");
