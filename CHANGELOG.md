@@ -2,6 +2,20 @@
 
 ## Unreleased
 
+### Added
+- **Medium detection for the rest of the observation contract's rows.** Smart contracts (Foundry,
+  Hardhat, Truffle, Anchor, Move, `.sol`), browser extensions (a `manifest.json` with
+  `manifest_version`), embedded (PlatformIO, Zephyr, ESP-IDF, mbed, STM32 `.ioc`, Rust
+  `embedded-hal`/`cortex-m`, `arm-none-eabi` CMake), games (Godot, Unity, Unreal, LOVE, Bevy, Phaser
+  and friends, pygame), ML (DVC, MLproject, torch / tensorflow / scikit-learn / xgboost / transformers /
+  jax), pipelines beyond dbt (Airflow `dags/`, Prefect, Dagster, Luigi, Kedro), outbound messaging
+  (react-email, mjml, nodemailer, SendGrid, Postmark, Mailgun, Resend, Twilio) and database-migration
+  repos (Flyway, Liquibase, Sqitch, Alembic without a framework). Python tools are recognised as CLIs
+  (`[project.scripts]`, `console_scripts`, a package `__main__`, or a top-level script that parses
+  argv), Python packages as libraries, and Python web frameworks as APIs. Framework apps keep their
+  medium: a Django app with a migrations directory is an API, a React app that sends mail is a web app.
+  A wrong guess costs the agent a correction; a missing one cost the whole draft.
+
 ## 0.8.0 - 2026-09-09
 
 ### Changed

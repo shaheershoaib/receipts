@@ -47,6 +47,7 @@ project.
 | `agent.loop_skills` | `.claude/skills/*/SKILL.md` whose name/body reads like a fix/build loop (loop / fix / retest / feedback / build / parity / ...) | the shipped `gates`; `--scaffold` (or a yes at the interactive offer) adds a `<repo>-fix-loop` from the template |
 | `agent.staging_query_patterns` / `agent.closeout_fixed_statuses` | - | generic defaults (DB-proxy / query tools; `Pending Retest` / `Verified`) |
 | `agent.observe` | the medium's worked row (`spec/media.json`) drafts the observation contract; the agent sharpens it against the repo (README, CI, env examples, deploy config, tests) | ask: the RESIDUE - `reach.access` / `.shortcut` / `.fixtures` / `.special_surfaces`, phrased for the medium (a CLI tool: how it is invoked; a pipeline: where outputs land; a web app: a signed-in state) - and confirm the drafts |
+| `gates.medium` | artefact tells first (Terraform, `foundry.toml`, an extension manifest, PlatformIO/Zephyr, Godot/Unity), then framework tells (React/Next -> web; Express/FastAPI/Django -> api), then runner-less media (DVC/torch -> ml, `dags/`/Dagster -> data, react-email/SendGrid -> message, Flyway/Alembic -> migration), then `bin` / `[project.scripts]` / `__main__` -> cli, a package manifest -> library. Every id has a row in `spec/media.json` | the agent confirms; `--answers` may correct it |
 | `agent.repo_name` | `package.json` name, else the directory name | directory name |
 
 **Placeholder semantics** (`verify.test_command`): `{test}` substitutes the changed test

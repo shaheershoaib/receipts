@@ -205,16 +205,54 @@ function detect(dir) {
   //     gate in this medium's terms via references/MEDIA.md). Honest: a guess. ---
   const deps = pkg ? Object.assign({}, pkg.dependencies, pkg.devDependencies, pkg.peerDependencies) : {};
   const anyDep = (...ns) => ns.some((n) => Object.prototype.hasOwnProperty.call(deps, n));
+  // Python has no deps object: read its manifests as text and match names at word boundaries.
+  const pyText = ["requirements.txt", "requirements-dev.txt", "requirements/base.txt", "pyproject.toml", "setup.py", "setup.cfg", "Pipfile", "environment.yml"]
+    .map((f) => readText(at(f)) || "").join("\n").toLowerCase();
+  const anyPy = (...ns) => ns.some((n) => new RegExp("(^|[^a-z0-9_.-])" + n.replace(/[.*+?^${}()|[\]\\]/g, "\\$&") + "(?![a-z0-9_.-])", "m").test(pyText));
+  const cargoText = (readText(at("Cargo.toml")) || "").toLowerCase();
+  const anyCargo = (...ns) => ns.some((n) => new RegExp("(^|[\\s\"'\\[])" + n.replace(/-/g, "[-_]") + "\\s*=", "m").test(cargoText));
+  const ls = (d) => { try { return fs.readdirSync(at(d)); } catch { return []; } };
+  const dirHasExt = (d, ext) => ls(d).some((f) => f.endsWith(ext));
+  const manifestIsExtension = () => ["manifest.json", "public/manifest.json", "src/manifest.json", "extension/manifest.json"]
+    .some((f) => { const m = readJson(at(f)); return !!(m && m.manifest_version); });
+  // A Python tool: declared console scripts, a package __main__, or a top-level script that parses argv.
+  const pyScripts = /\[project\.scripts\]|\[tool\.poetry\.scripts\]|console_scripts|entry_points/.test(pyText);
+  const pyMain = () => ls(".").filter((f) => f.endsWith(".py")).slice(0, 40).some((f) => {
+    const t = readText(at(f)) || "";
+    return /__name__\s*==\s*["']__main__["']/.test(t) && /argparse|sys\.argv|\bclick\b|\btyper\b/.test(t);
+  }) || ls(".").some((d) => exists(at(path.join(d, "__main__.py"))));
+  const pyProject = has("pyproject.toml") && /\[project\]|\[tool\.poetry\]/.test(pyText);
+  const webFramework = anyDep("react", "next", "vue", "nuxt", "svelte", "@sveltejs/kit", "@angular/core", "solid-js", "astro", "gatsby") || has("index.html");
+  const apiFramework = anyDep("express", "fastify", "@nestjs/core", "koa", "@hapi/hapi") ||
+    anyPy("fastapi", "flask", "django", "starlette", "litestar", "tornado", "aiohttp") || has("manage.py") || stack === "django";
+  // Order: artefact-specific tells first (a Terraform repo, a contract, an extension, firmware, a
+  // game engine), then the framework tells (a web or API app is that even when it ships mail or
+  // trains a model), then the runner-less media (ML, pipelines, messaging, migrations), then the
+  // generic shapes (cli / library / service). Every id here has a row in spec/media.json.
   let medium = "unknown";
   if (has("main.tf") || hasExt(".tf") || has("Chart.yaml") || has("kustomization.yaml") || has("Pulumi.yaml")) medium = "infra";
+  else if (has("foundry.toml") || has("hardhat.config.js") || has("hardhat.config.ts") || has("truffle-config.js") || has("Anchor.toml") || has("Move.toml") || hasExt(".sol") || dirHasExt("contracts", ".sol") || dirHasExt("src", ".sol")) medium = "contract";
+  else if (manifestIsExtension()) medium = "extension";
+  else if (has("platformio.ini") || has("west.yml") || has("prj.conf") || has("sdkconfig") || has("sdkconfig.defaults") || has("mbed_app.json") || hasExt(".ioc") ||
+           anyCargo("embedded-hal", "cortex-m", "cortex-m-rt", "esp-hal", "embassy-executor", "riscv-rt") ||
+           /arm-none-eabi|zephyr|idf_component_register|pico_sdk_init/i.test(readText(at("CMakeLists.txt")) || "")) medium = "embedded";
+  else if (has("project.godot") || (has("Assets") && has("ProjectSettings")) || hasExt(".uproject") || (has("main.lua") && has("conf.lua")) ||
+           anyCargo("bevy") || anyDep("phaser", "excalibur", "@babylonjs/core", "pixi.js", "kaboom", "kaplay") || anyPy("pygame", "arcade")) medium = "game";
   else if (has("dbt_project.yml") || has("dbt_project.yaml")) medium = "data";
   else if (has("pubspec.yaml") || anyDep("react-native", "expo") || (has("android") && has("ios"))) medium = "mobile";
-  else if (anyDep("electron")) medium = "desktop";
-  else if (anyDep("react", "next", "vue", "nuxt", "svelte", "@sveltejs/kit", "@angular/core", "solid-js", "astro", "gatsby") || has("index.html")) medium = "web";
-  else if (anyDep("express", "fastify", "@nestjs/core", "koa", "@hapi/hapi", "fastapi", "flask", "django") || has("manage.py") || stack === "django") medium = "api";
+  else if (anyDep("electron", "@tauri-apps/api") || has("src-tauri")) medium = "desktop";
+  else if (webFramework) medium = "web";
+  else if (apiFramework) medium = "api";
+  else if (has("dvc.yaml") || has("MLproject") || anyPy("torch", "tensorflow", "scikit-learn", "sklearn", "xgboost", "lightgbm", "transformers", "keras", "jax", "pytorch-lightning")) medium = "ml";
+  else if (has("dags") || has("airflow.cfg") || anyPy("apache-airflow", "prefect", "dagster", "luigi", "kedro")) medium = "data";
+  else if (anyDep("react-email", "@react-email/components", "mjml", "nodemailer", "@sendgrid/mail", "postmark", "mailgun.js", "resend", "twilio") ||
+           anyPy("sendgrid", "twilio", "postmarker", "mailjet-rest") || dirHasExt("emails", ".mjml")) medium = "message";
+  else if (has("flyway.conf") || has("flyway.toml") || has("liquibase.properties") || has("sqitch.plan") || has("alembic.ini")) medium = "migration";
   else if (pkg && pkg.bin) medium = "cli";
-  else if (has("Cargo.toml")) medium = /\[\[bin\]\]/.test(readText(at("Cargo.toml")) || "") ? "cli" : "library";
+  else if (has("Cargo.toml")) medium = /\[\[bin\]\]/.test(cargoText) ? "cli" : "library";
   else if (has("go.mod")) { let cmd = false; try { cmd = has("main.go") || fs.readdirSync(dir).includes("cmd"); } catch { /* ignore */ } medium = cmd ? "cli" : "library"; }
+  else if (pyScripts || pyMain()) medium = "cli";
+  else if (pyProject) medium = "library";
   else if (pkg && (pkg.main || pkg.exports || pkg.module) && !pkg.private && platform === "none") medium = "library";
   else if (platform !== "none") medium = "service";
 
