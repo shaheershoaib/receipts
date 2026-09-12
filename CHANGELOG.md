@@ -2,6 +2,16 @@
 
 ## Unreleased
 
+## 0.9.1 - 2026-09-11
+
+### Fixed
+- **A scratch write reached through `cd` no longer re-arms the commit tripwire.** The agent's
+  probes are `cd <tmp dir> && cat > probe.sh <<'EOF'`, and the bare `probe.sh` read as a
+  production write because the temp/device exclusion only ever saw the literal (relative) token;
+  a probe run AFTER the tests then blocked a fully verified commit. A relative Bash write now
+  resolves against the command's own `cd` before it is classified, so `cd /tmp/x && cat > y.sh`
+  is scratch and `cd src && cat > pay.js` is still a production edit.
+
 ## 0.9.0 - 2026-09-09
 
 ### Added

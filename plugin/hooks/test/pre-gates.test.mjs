@@ -610,6 +610,29 @@ test("#73: a Bash write followed by the tests in the SAME command is a tested ed
   allows(...COMMIT, [useEntry("Bash", { command: "sed -i 's/a/b/' src/pay.js && npm test" })]);
 });
 
+// The agent's scratch probes are `cd <tmp dir> && cat > probe.sh <<'EOF'`: the temp-dir exclusion
+// only ever saw the literal token, so a bare `probe.sh` written after the tests re-armed the
+// tripwire and blocked a verified commit. A relative write resolves against the command's own cd.
+test("a relative Bash write under a leading cd into a temp dir is scratch, not a production edit (allow)", () => {
+  for (const cmd of [
+    "cd \"/private/tmp/claude-501/-Users-x-proj/abc/scratchpad\" && cat > probe.sh <<'EOF'\nexec az foo\nEOF\nchmod +x probe.sh; cat > sha.sh <<'EOF'\nexec az bar\nEOF",
+    "cd /tmp/work; echo x > out.js",
+    "cd \"$TMPDIR/probe\" && printf 'x' | tee run.sh",
+    "cd ~/.claude/hooks && sed -i 's/a/b/' gate.py",
+  ]) assert.equal(runPre(...COMMIT, [useEntry("Bash", { command: cmd })]), null, `expected "${cmd.split("\n")[0]}" not to count as a production edit`);
+});
+
+test("a relative Bash write under a leading cd into a source dir is still a production edit (deny)", () => {
+  const d = runPre(...COMMIT, [useEntry("Bash", { command: "cd src && cat > pay.js <<'EOF'\nx\nEOF" })]);
+  assert.equal(d && d.hookSpecificOutput.permissionDecision, "deny");
+  assert.match(d.hookSpecificOutput.permissionDecisionReason, /src\/pay\.js/, "names the resolved file");
+});
+
+test("a scratch write AFTER the tests does not re-arm the commit tripwire (allow)", () => {
+  allows(...COMMIT, [PROD_EDIT, RUN,
+    useEntry("Bash", { command: "cd /private/tmp/claude-501/s/scratchpad && cat > probe.sh <<'EOF'\nx\nEOF" })]);
+});
+
 test("#73: edits through an MCP file tool or NotebookEdit are edits (deny)", () => {
   denies(...COMMIT, [useEntry("mcp__filesystem__edit_file", { path: "src/pay.js", edits: [{ oldText: "a", newText: "b" }] })]);
   denies(...COMMIT, [useEntry("mcp__filesystem__write_file", { path: "src/pay.js", content: "x" })]);
