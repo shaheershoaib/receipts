@@ -272,24 +272,40 @@ const isEditTool = (name) => /(?:^|_)(?:edit|write|multiedit|create)(?:_?files?)
 
 const isProdSource = (p) => !!p && !TEST_PATH.test(p) && !DOC_OR_META.test(p);
 
+// A `cd <dir>` segment: the directory every RELATIVE write later in the same command lands in.
+const CD_SEGMENT = /^(?:\w+=\S+\s+)*cd\s+(?:(["'])([^"']*)\1|([^\s"';&|]+))\s*$/;
+// An absolute-ish path: rooted, home, a shell variable, or a Windows drive.
+const ROOTED_PATH = /^(?:[\/~$]|[A-Za-z]:)/;
+
 // The production path a Bash command WRITES, or "": the target of a redirect, of `sed -i`, or of
 // `tee`. Heredoc bodies are stripped first (a `>` inside one is data). Claude Code steers edits
 // through Bash in bypass-permissions mode, and none of these counted as an edit (#73).
+//
+// A relative target is resolved against the command's own `cd` first. The agent's scratch
+// probes are `cd <tmp dir> && cat > probe.sh <<'EOF'`, and the bare `probe.sh` read as a
+// production write because the temp/device exclusion only ever saw the literal token - which
+// re-armed the commit tripwire after a probe that ran AFTER the tests. The same resolution keeps
+// `cd src && cat > pay.js` a production write.
 function bashWrittenProdPath(cmd) {
   const text = withoutHeredocBodies(cmd);
-  const candidates = [];
-  let m;
-  REDIRECT_TARGET.lastIndex = 0;
-  while ((m = REDIRECT_TARGET.exec(text))) candidates.push(m[2]);
+  let cwd = "";
   for (const seg of text.split(/[;&|]|\n/)) {
     const s = seg.trim();
+    const cd = s.match(CD_SEGMENT);
+    if (cd) { cwd = cd[2] ?? cd[3]; if (cwd === "-") cwd = ""; continue; }
+    const candidates = [];
+    let m;
+    REDIRECT_TARGET.lastIndex = 0;
+    while ((m = REDIRECT_TARGET.exec(s))) candidates.push(m[2]);
     if (/^(?:\w+=\S+\s+)*sed\s+.*-i/.test(s)) candidates.push(s.split(/\s+/).pop());
     const t = s.match(/^(?:\w+=\S+\s+)*tee\s+(?:-a\s+)?(["']?)([^\s"']+)\1/);
     if (t) candidates.push(t[2]);
-  }
-  for (const raw of candidates) {
-    const p = String(raw || "").replace(/^["']|["']$/g, "");
-    if (p && !p.startsWith("-") && !NOT_SOURCE_PATH.test(p) && isProdSource(p)) return p;
+    for (const raw of candidates) {
+      let p = String(raw || "").replace(/^["']|["']$/g, "");
+      if (!p || p.startsWith("-")) continue;
+      if (cwd && !ROOTED_PATH.test(p)) p = cwd.replace(/\/+$/, "") + "/" + p;
+      if (!NOT_SOURCE_PATH.test(p) && isProdSource(p)) return p;
+    }
   }
   return "";
 }
