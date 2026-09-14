@@ -633,6 +633,38 @@ test("a scratch write AFTER the tests does not re-arm the commit tripwire (allow
     useEntry("Bash", { command: "cd /private/tmp/claude-501/s/scratchpad && cat > probe.sh <<'EOF'\nx\nEOF" })]);
 });
 
+// A `cd` whose target is a shell VARIABLE (`D="/tmp/x"; cd "$D"; printf ... > boot.py`) used to
+// leave cwd as the literal `$D`, so a scratch file resolved to `$D/boot.py` - rooted-looking,
+// outside every temp exclusion, and therefore a "production edit" that re-armed the tripwire
+// after the tests had run. Assignments made earlier in the same command are now expanded, and
+// a bare filename under a cd this command cannot name is unknowable, not production.
+test("a Bash write under a cd through a shell variable assigned in the same command resolves through the assignment (allow)", () => {
+  for (const cmd of [
+    "set -e; D=\"/private/tmp/claude-501/-Users-x/abc/scratchpad/hc475\"; cd \"$D\"; SA=rpm; printf 'x' \"$U\" > boot_diag2.py",
+    "export W=/tmp/w; cd $W && cat > probe.py <<'EOF'\nx\nEOF",
+    "D=/private/tmp/s; cd ${D}/sub; echo x > out.py",
+  ]) assert.equal(runPre(...COMMIT, [useEntry("Bash", { command: cmd })]), null, `expected "${cmd.split("\n")[0]}" not to count as a production edit`);
+});
+
+test("a bare filename written under a cd to an UNKNOWN shell variable is unknowable, not a production edit (allow)", () => {
+  for (const cmd of [
+    "cd \"$UNKNOWN_DIR\" && cat > probe.py <<'EOF'\nx\nEOF",
+    "cat > $D/boot.py <<'EOF'\nx\nEOF",
+  ]) assert.equal(runPre(...COMMIT, [useEntry("Bash", { command: cmd })]), null, `expected "${cmd.split("\n")[0]}" not to count as a production edit`);
+});
+
+test("a relative path with a directory part under an unknown cd variable keeps its own token (deny)", () => {
+  const d = runPre(...COMMIT, [useEntry("Bash", { command: "cd \"$REPO\" && sed -i 's/a/b/' src/pay.js" })]);
+  assert.equal(d && d.hookSpecificOutput.permissionDecision, "deny");
+  assert.match(d.hookSpecificOutput.permissionDecisionReason, /src\/pay\.js/);
+});
+
+test("a shell variable that expands to a source dir is still a production edit (deny)", () => {
+  const d = runPre(...COMMIT, [useEntry("Bash", { command: "S=\"/repo/src\"; cd \"$S\"; cat > pay.js <<'EOF'\nx\nEOF" })]);
+  assert.equal(d && d.hookSpecificOutput.permissionDecision, "deny");
+  assert.match(d.hookSpecificOutput.permissionDecisionReason, /\/repo\/src\/pay\.js/, "names the expanded file");
+});
+
 test("#73: edits through an MCP file tool or NotebookEdit are edits (deny)", () => {
   denies(...COMMIT, [useEntry("mcp__filesystem__edit_file", { path: "src/pay.js", edits: [{ oldText: "a", newText: "b" }] })]);
   denies(...COMMIT, [useEntry("mcp__filesystem__write_file", { path: "src/pay.js", content: "x" })]);
