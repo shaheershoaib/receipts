@@ -2,6 +2,23 @@
 
 ## Unreleased
 
+## 0.9.3 - 2026-09-14
+
+### Changed
+- **The tripwires deny, not ask, in autonomous permission modes.** `ask` is shown to the human, not
+  to Claude, so in a bypassPermissions / dontAsk / auto session a commit tripwire put a permission
+  prompt in front of a person who had told Claude Code not to prompt, and the run stalled until
+  they noticed. The hook now reads `permission_mode` from the PreToolUse payload and defaults to
+  `deny` there, the posture CI already had for the same reason (nobody can be asked): the reason
+  reaches the agent, which runs the tests or carries the ack and continues. Interactive sessions
+  (default / acceptEdits / plan) keep `ask`; an explicit `agent.tripwires.<guard>` still wins.
+  **BREAKING** for an autonomous session that relied on the prompt: pin `"ask"` or `"warn"`.
+
+### Fixed
+- **`pre-gates.mjs` is a text file again.** The glob converter's `**` sentinel was a raw NUL
+  character, so `grep` reported the hook as binary and every search of it came back empty; the
+  `\u0000` escape spells the same byte, and a test keeps the file NUL-free.
+
 ## 0.9.2 - 2026-09-13
 
 ### Fixed

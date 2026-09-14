@@ -46,7 +46,7 @@ const userTurn = (text = "please continue") => ({
 // The default MODE depends on whether a human can be prompted: `ask` outside CI, `deny` under it.
 // The driver pins CI=1 unless told otherwise, so the firing-condition tests below read as plain
 // denies whatever machine runs them; the mode tests pass `ci: null` to get the interactive default.
-function runPre(toolName, toolInput, transcriptEntries, { projectConfig = { version: 1 }, homeConfig, ci = "1" } = {}) {
+function runPre(toolName, toolInput, transcriptEntries, { projectConfig = { version: 1 }, homeConfig, ci = "1", permissionMode } = {}) {
   const td = fs.mkdtempSync(path.join(os.tmpdir(), "receipts-pre-"));
   const tp = path.join(td, "transcript.jsonl");
   fs.writeFileSync(tp, (transcriptEntries || []).map((e) => JSON.stringify(e)).join("\n") + "\n");
@@ -60,7 +60,8 @@ function runPre(toolName, toolInput, transcriptEntries, { projectConfig = { vers
   const env = { ...process.env, HOME: home, USERPROFILE: home };
   delete env.CI;
   if (ci) env.CI = ci;
-  const stdin = JSON.stringify({ tool_name: toolName, tool_input: toolInput, transcript_path: tp, cwd: td });
+  const stdin = JSON.stringify({ tool_name: toolName, tool_input: toolInput, transcript_path: tp, cwd: td,
+    ...(permissionMode ? { permission_mode: permissionMode } : {}) });
   const out = execFileSync("node", [PRE_HOOK], { input: stdin, encoding: "utf8", env }).trim();
   return out ? JSON.parse(out) : null;
 }
@@ -692,4 +693,42 @@ test("#73: a passing run clears it, and a green re-run after a red one clears it
 test("#73: an error from a NON-runner command after the edit does not un-verify (allow)", () => {
   allows(...COMMIT, [PROD_EDIT, idUse(RUN, "r1"), idResult("r1", "5 passing"),
     idUse(useEntry("Bash", { command: "cat missing.txt" }), "c1"), idResult("c1", "cat: missing.txt: No such file", true)]);
+});
+
+// ============================================ autonomous permission modes: deny, never ask
+
+// `ask` reaches the HUMAN (the reason is shown to them, not to Claude) and stalls the run until
+// they answer. In bypassPermissions / dontAsk / auto the human has said "do not prompt me", and an
+// autonomous session sat on a tripwire prompt nobody was watching. `deny` is agent-facing: the
+// reason reaches the model, which runs the tests or carries the ack and continues - the same
+// posture CI already had, for the same reason (nobody to ask).
+test("in bypassPermissions / dontAsk / auto the default is DENY, not a prompt", () => {
+  for (const mode of ["bypassPermissions", "dontAsk", "auto"]) {
+    const d = runPre("Bash", { command: "git commit -m fix" }, [PROD_EDIT], { ci: null, permissionMode: mode });
+    assert.equal(d && d.hookSpecificOutput.permissionDecision, "deny", `${mode}: the commit tripwire must deny, not ask`);
+    assert.match(d.hookSpecificOutput.permissionDecisionReason, /commit-without-verification/);
+    const g = runPre("Edit", { file_path: "src/pay.test.js", new_string: "x" },
+      [useEntry("Bash", { command: "npm test" }), resultEntry("FAIL src/pay.test.js")], { ci: null, permissionMode: mode });
+    assert.equal(g && g.hookSpecificOutput.permissionDecision, "deny", `${mode}: the G11-live tripwire must deny, not ask`);
+  }
+});
+
+test("in default / acceptEdits / plan the human is already approving actions, so the default stays ASK", () => {
+  for (const mode of ["default", "acceptEdits", "plan"]) {
+    const d = runPre("Bash", { command: "git commit -m fix" }, [PROD_EDIT], { ci: null, permissionMode: mode });
+    assert.equal(d && d.hookSpecificOutput.permissionDecision, "ask", `${mode}: interactive sessions keep the prompt`);
+  }
+});
+
+test("an explicit agent.tripwires mode wins over the permission-mode default", () => {
+  asks("Bash", { command: "git commit -m fix" }, [PROD_EDIT],
+    { ci: null, permissionMode: "bypassPermissions", projectConfig: { version: 1, agent: { tripwires: { commit_unverified: "ask" } } } });
+  warns("Bash", { command: "git commit -m fix" }, [PROD_EDIT],
+    { ci: null, permissionMode: "bypassPermissions", projectConfig: { version: 1, agent: { tripwires: { commit_unverified: "warn" } } } });
+});
+
+test("the hook source is plain text: no raw NUL byte (grep must not read it as binary)", () => {
+  // globToRe's `**` sentinel was a literal NUL character; grep then reported the whole hook as a
+  // binary file and every `grep -n` against it came back empty. The escape spells the same byte.
+  assert.ok(!fs.readFileSync(PRE_HOOK).includes(0), "pre-gates.mjs carries a raw NUL byte");
 });

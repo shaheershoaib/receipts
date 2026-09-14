@@ -111,7 +111,9 @@ to opt in everywhere). A repo that never ran `receipts init` gets no behaviour c
   run just showed FAILING with no green run since (G11-live), and `receipts init --yes`
   skipping the interview. Each guard's posture is `agent.tripwires.<name>`: `deny` blocks,
   `ask` raises the user's permission prompt with the reason, `warn` lets the action through and
-  tells the agent what it skipped, `off` disables. The default is `ask`, or `deny` under CI.
+  tells the agent what it skipped, `off` disables. The default is `ask`, or `deny` under CI and in
+  a bypassPermissions / dontAsk / auto session, where a prompt would reach nobody and a deny
+  reaches the agent.
   Every block carries an explicit, greppable escape (`RECEIPTS_ACK='<why>'`,
   `--no-verify-receipts`, a `test-removal: <why>` note in the content the edit writes).
 - the **Stop-hook backstop** (`stop-gates.mjs`) fires on every stop-cycle, regardless of the

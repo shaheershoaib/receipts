@@ -128,7 +128,8 @@ fix, and at EVERY exit - fixed, downgraded, reverted or blocked - record
 
 Three PreToolUse guards fire at the risky action, only where a config exists, in the posture the
 project chose under `agent.tripwires` (per guard: `deny` | `ask` | `warn` | `off`; the default is
-`ask` - the human is prompted with the reason - or `deny` under CI, where nobody can be asked):
+`ask` - the human is prompted with the reason - or `deny` under CI and in a bypassPermissions /
+dontAsk / auto session, where nobody can be asked and the reason reaches the agent instead):
 
 - **commit-without-verification** - a `git commit` after editing production source with no test
   or `receipts observe` run since. The project's own `verify.test_command` / `suite_command` and

@@ -24,9 +24,11 @@ material is bundled beside this file - read the piece the situation calls for:
 what turns the discipline on: the hooks below enforce only where one exists. Read it before
 verifying anything:
 
-- `agent.drive.auth` / `.bypass` / `.data` / `.browser_surfaces` - how an agent REACHES an
-  observable state. With a route on record, "auth-walled, could not verify" is not available as
-  a reason. `drive.confirmed: false` means nobody was asked: an open question, never evidence a
+- `agent.observe` - the observation contract answered for this project (surface, value, observe-by,
+  terminal action, build artifact, twin, dependent, receipt, compatibility boundary) and
+  `observe.reach.access` / `.shortcut` / `.fixtures` / `.special_surfaces` - how an agent REACHES an
+  observable state, in this medium's terms. With a route on record, "auth-walled, could not verify" is not available as
+  a reason. `observe.confirmed: false` means nobody was asked: an open question, never evidence a
   surface is unreachable - ask the human, or offer `receipts init --force`.
 - `verify.test_command` / `suite_command` - how this project runs one test and the suite. The
   receipt runs through these, never through a command you invent.
@@ -118,14 +120,15 @@ fix, and at EVERY exit - fixed, downgraded, reverted or blocked - record
 
 Three PreToolUse guards fire at the risky action, only where a config exists, in the posture the
 project chose under `agent.tripwires` (per guard: `deny` | `ask` | `warn` | `off`; the default is
-`ask` - the human is prompted with the reason - or `deny` under CI, where nobody can be asked):
+`ask` - the human is prompted with the reason - or `deny` under CI and in a bypassPermissions /
+dontAsk / auto session, where nobody can be asked and the reason reaches the agent instead):
 
 - **commit-without-verification** - a `git commit` after editing production source with no test
   or `receipts observe` run since. The project's own `verify.test_command` / `suite_command` and
   the common runners count as a run.
 - **G11-live referee** - editing a test that a test RUN just showed FAILING, with no green run
   since. Only runner output arms it; a green re-run of the file or of the suite clears it.
-- **init unattended** - `receipts init --yes` without the interview's `--drive-*` answers,
+- **init unattended** - `receipts init --yes` without the interview's `--answers` (or the deprecated `--drive-*`),
   outside CI. This one runs before any config exists.
 
 When a block genuinely does not apply, carry the ack IN the action, never a silent skip:

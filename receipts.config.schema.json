@@ -612,7 +612,7 @@
         },
         "tripwires": {
           "type": "object",
-          "description": "In-session PreToolUse guards (the `pre-gates.mjs` hook) that fire AT the risky action, between the Stop-hook backstop and the CI enforcer. Each raises the weak-agent floor without waiting for a stop-cycle or a PR. They run only where a receipts.config.json exists (project or agent-home) - enforcement is opt-in. Modes: 'deny' blocks; 'ask' raises the user's permission prompt with the reason (even in auto mode); 'warn' lets the action through and tells the agent what it skipped via additionalContext; 'off' disables. The agent-facing tripwires default to 'ask', or 'deny' when CI is set (nobody can be asked). Every block carries an EXPLICIT, greppable escape (an honesty tag in the command / edit - `RECEIPTS_ACK=<why>`, `RECEIPTS_TRIPWIRE=off`, `--no-verify-receipts`, or a `test-removal: <why>` note), never a silent skip. Ship generic; this only tunes THIS project.",
+          "description": "In-session PreToolUse guards (the `pre-gates.mjs` hook) that fire AT the risky action, between the Stop-hook backstop and the CI enforcer. Each raises the weak-agent floor without waiting for a stop-cycle or a PR. They run only where a receipts.config.json exists (project or agent-home) - enforcement is opt-in. Modes: 'deny' blocks; 'ask' raises the user's permission prompt with the reason (even in auto mode); 'warn' lets the action through and tells the agent what it skipped via additionalContext; 'off' disables. The agent-facing tripwires default to 'ask' in an interactive session (default / acceptEdits / plan), or 'deny' under CI and in a bypassPermissions / dontAsk / auto session (nobody can be asked; a deny reaches the agent). Every block carries an EXPLICIT, greppable escape (an honesty tag in the command / edit - `RECEIPTS_ACK=<why>`, `RECEIPTS_TRIPWIRE=off`, `--no-verify-receipts`, or a `test-removal: <why>` note), never a silent skip. Ship generic; this only tunes THIS project.",
           "additionalProperties": false,
           "properties": {
             "commit_unverified": {
@@ -622,7 +622,7 @@
                 "warn",
                 "off"
               ],
-              "description": "The commit-without-verification tripwire (Bash `git commit`): a commit that lands right after a production-source edit with NO test / receipt command run in between is stopped - a commit is a claim it works (G0/G9). The project's own verify.test_command / suite_command and a broad default runner list count as 'ran the code'. 'ask' (default outside CI): the human is prompted with the reason and may approve. 'deny' (default under CI): block with the escape instructions - the untrusted-agent posture. 'warn': allow, and tell the agent what it skipped. 'off': disable.",
+              "description": "The commit-without-verification tripwire (Bash `git commit`): a commit that lands right after a production-source edit with NO test / receipt command run in between is stopped - a commit is a claim it works (G0/G9). The project's own verify.test_command / suite_command and a broad default runner list count as 'ran the code'. 'ask' (default in an interactive session - default / acceptEdits / plan): the human is prompted with the reason and may approve. 'deny' (default under CI and in a bypassPermissions / dontAsk / auto session, where nobody can be asked and the reason reaches the agent): block with the escape instructions - the untrusted-agent posture. 'warn': allow, and tell the agent what it skipped. 'off': disable.",
               "default": "ask"
             },
             "g11_live": {
@@ -632,7 +632,7 @@
                 "warn",
                 "off"
               ],
-              "description": "The G11-live referee tripwire (Edit/Write/MultiEdit on a TEST file): editing a test that a test RUN just showed FAILING, with no green run since, is the 'shoot the referee' move - fix the code, not the test (G11). Only runner output (a tool_result of a test command) arms it, never prose; a later green run clears it. 'ask' (default outside CI) / 'deny' (default under CI) / 'warn' / 'off' as for commit_unverified. An edit whose NEW content carries a `test-removal: <why>` note or a `RECEIPTS_ACK` is the honest, reviewed way through.",
+              "description": "The G11-live referee tripwire (Edit/Write/MultiEdit on a TEST file): editing a test that a test RUN just showed FAILING, with no green run since, is the 'shoot the referee' move - fix the code, not the test (G11). Only runner output (a tool_result of a test command) arms it, never prose; a later green run clears it. 'ask' (default in an interactive session) / 'deny' (default under CI and in bypassPermissions / dontAsk / auto) / 'warn' / 'off' as for commit_unverified. An edit whose NEW content carries a `test-removal: <why>` note or a `RECEIPTS_ACK` is the honest, reviewed way through.",
               "default": "ask"
             },
             "test_command_patterns": {
