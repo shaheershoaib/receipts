@@ -168,11 +168,17 @@ function tripwireMode(cfg, key, dflt) {
   const v = String(t[key] || "").toLowerCase();
   return ["off", "warn", "ask", "deny"].includes(v) ? v : dflt;
 }
-// The default posture for the agent-facing tripwires: ASK when a human can be prompted (the hook's
-// `ask` decision raises the permission prompt even in auto mode, with the reason attached), DENY
-// where nobody can be asked - CI. A human approving a wip commit IS the honest note; a project
-// that wants the untrusted-agent posture everywhere pins `deny` explicitly.
-const defaultMode = () => (process.env.CI ? "deny" : "ask");
+// The default posture for the agent-facing tripwires. ASK where a human is approving actions
+// anyway (default / acceptEdits / plan): the hook's `ask` raises the permission prompt with the
+// reason attached, and a human approving a wip commit IS the honest note. DENY where nobody can be
+// asked: CI, and a session the human put in bypassPermissions / dontAsk / auto - they said "do not
+// prompt me", and an `ask` there is shown to the human, not to Claude, so an autonomous run stalls
+// on a prompt nobody is watching. A deny is agent-facing: the reason reaches the model, which runs
+// the tests or carries the ack and continues. A project that wants another posture pins
+// `agent.tripwires.<guard>` explicitly.
+const AUTONOMOUS_MODE = /^(?:bypassPermissions|dontAsk|auto)$/;
+const defaultMode = (permissionMode) =>
+  (process.env.CI || AUTONOMOUS_MODE.test(String(permissionMode || ""))) ? "deny" : "ask";
 function testCmdMatcher(cfg) {
   const t = ((cfg.agent || {}).tripwires) || {};
   const extra = (t.test_command_patterns || []).filter((p) => String(p || "").trim());
@@ -184,7 +190,7 @@ function testCmdMatcher(cfg) {
 // (a substring match against the path), matching how the enforcer treats surface globs.
 function globToRe(glob) {
   return String(glob).replace(/[.+^${}()|[\]\\]/g, "\\$&")
-    .replace(/\*\*/g, " ").replace(/\*/g, "[^/]*").replace(/ /g, ".*").replace(/\?/g, ".");
+    .replace(/\*\*/g, "\u0000").replace(/\*/g, "[^/]*").replace(/\u0000/g, ".*").replace(/\?/g, ".");
 }
 // The render-feeding source matcher: the UNION of declared render-twin surfaces
 // (gates.G6.render_twins[].surfaces) and agent.tripwires.render_source_globs. Returns null when
@@ -547,6 +553,7 @@ async function main() {
   const toolName = String(payload.tool_name || "");
   const toolInput = payload.tool_input ?? {};
   const tp = payload.transcript_path;
+  const permissionMode = payload.permission_mode;
 
   const { cfg, found } = loadReceiptsConfig(payload.cwd);
 
@@ -570,7 +577,7 @@ async function main() {
     }
     if (!found) return;                                // not opted in (no config anywhere) -> allow
     if (!GIT_COMMIT.test(withoutHeredocBodies(command))) return;             // not a commit -> allow
-    const commitMode = tripwireMode(cfg, "commit_unverified", defaultMode());
+    const commitMode = tripwireMode(cfg, "commit_unverified", defaultMode(permissionMode));
     const renderMode = tripwireMode(cfg, "render_unverified", "off");
     if (commitMode === "off" && renderMode === "off") return;   // nothing to enforce
     if (ACK_TAG.test(command)) return;                 // one explicit escape covers both -> allow
@@ -599,7 +606,7 @@ async function main() {
     if (!found) return;                                // not opted in (no config anywhere) -> allow
     const file = editedPath(toolInput);
     if (!file || !TEST_PATH.test(file)) return;        // only test-file edits are guarded
-    const mode = tripwireMode(cfg, "g11_live", defaultMode());
+    const mode = tripwireMode(cfg, "g11_live", defaultMode(permissionMode));
     if (mode === "off") return;
     if (editCarriesAck(toolInput)) return;             // explicit ack in the edit -> allow
     if (!tp) return;

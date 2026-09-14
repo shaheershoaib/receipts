@@ -67,7 +67,8 @@ these generic defaults:
   so the trajectory reminder watches the project's actual loops, not just the bundled
   one.
 - `hooks/pre-gates.mjs` reads its posture from `agent.tripwires` (per guard `deny` |
-  `ask` | `warn` | `off`; default `ask`, or `deny` under CI), and counts the project's own
+  `ask` | `warn` | `off`; default `ask`, or `deny` under CI and in a bypassPermissions / dontAsk /
+  auto session), and counts the project's own
   `verify.test_command` / `suite_command` as "the tests ran".
 - `skills/gates/` stays project-agnostic. For a project with its own loop,
   `receipts init` registers it in `agent.loop_skills`; `init --scaffold` adds one from
