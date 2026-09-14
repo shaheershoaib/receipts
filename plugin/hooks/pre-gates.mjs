@@ -276,6 +276,14 @@ const isProdSource = (p) => !!p && !TEST_PATH.test(p) && !DOC_OR_META.test(p);
 const CD_SEGMENT = /^(?:\w+=\S+\s+)*cd\s+(?:(["'])([^"']*)\1|([^\s"';&|]+))\s*$/;
 // An absolute-ish path: rooted, home, a shell variable, or a Windows drive.
 const ROOTED_PATH = /^(?:[\/~$]|[A-Za-z]:)/;
+// A plain shell assignment segment (`D="/tmp/x"`, `export W=/tmp/w`): its value is what a later
+// `$D` / `${D}` in the same command means. `KEY=$(...)` and other computed values are not captured.
+const ASSIGNMENT = /^(?:export\s+)?([A-Za-z_]\w*)=(?:(["'])([^"']*)\2|([^\s;&|]+))$/;
+const SHELL_VAR = /\$\{([A-Za-z_]\w*)\}|\$([A-Za-z_]\w*)/g;
+const expandVars = (p, vars) => String(p).replace(SHELL_VAR, (m, a, b) => {
+  const k = a || b; return Object.prototype.hasOwnProperty.call(vars, k) ? vars[k] : m;
+});
+const hasUnexpandedVar = (p) => { SHELL_VAR.lastIndex = 0; return SHELL_VAR.test(p); };
 
 // The production path a Bash command WRITES, or "": the target of a redirect, of `sed -i`, or of
 // `tee`. Heredoc bodies are stripped first (a `>` inside one is data). Claude Code steers edits
@@ -286,13 +294,21 @@ const ROOTED_PATH = /^(?:[\/~$]|[A-Za-z]:)/;
 // production write because the temp/device exclusion only ever saw the literal token - which
 // re-armed the commit tripwire after a probe that ran AFTER the tests. The same resolution keeps
 // `cd src && cat > pay.js` a production write.
+//
+// Shell variables assigned earlier in the same command are expanded first (`D="/tmp/x"; cd "$D";
+// printf ... > boot.py` is a temp write, not `$D/boot.py`). A target under a cd this command
+// cannot name (`cd "$UNKNOWN"`) is UNKNOWABLE: a bare filename there is not classified (scratch is
+// the common case), while a path with its own directory part keeps that token (`src/pay.js`).
 function bashWrittenProdPath(cmd) {
   const text = withoutHeredocBodies(cmd);
   let cwd = "";
+  const vars = {};
   for (const seg of text.split(/[;&|]|\n/)) {
     const s = seg.trim();
+    const asg = s.match(ASSIGNMENT);
+    if (asg) { vars[asg[1]] = expandVars(asg[3] ?? asg[4], vars); continue; }
     const cd = s.match(CD_SEGMENT);
-    if (cd) { cwd = cd[2] ?? cd[3]; if (cwd === "-") cwd = ""; continue; }
+    if (cd) { cwd = expandVars(cd[2] ?? cd[3], vars); if (cwd === "-") cwd = ""; continue; }
     const candidates = [];
     let m;
     REDIRECT_TARGET.lastIndex = 0;
@@ -301,9 +317,17 @@ function bashWrittenProdPath(cmd) {
     const t = s.match(/^(?:\w+=\S+\s+)*tee\s+(?:-a\s+)?(["']?)([^\s"']+)\1/);
     if (t) candidates.push(t[2]);
     for (const raw of candidates) {
-      let p = String(raw || "").replace(/^["']|["']$/g, "");
+      let p = expandVars(String(raw || "").replace(/^["']|["']$/g, ""), vars);
       if (!p || p.startsWith("-")) continue;
-      if (cwd && !ROOTED_PATH.test(p)) p = cwd.replace(/\/+$/, "") + "/" + p;
+      if (cwd && !ROOTED_PATH.test(p)) {
+        if (hasUnexpandedVar(cwd)) { if (!/[\\/]/.test(p)) continue; }
+        else p = cwd.replace(/\/+$/, "") + "/" + p;
+      } else if (hasUnexpandedVar(p) && !NOT_SOURCE_PATH.test(p)) {
+        // `$D/boot.py` with D unknown: only the part after the variable is knowable
+        const rest = p.replace(SHELL_VAR, "").replace(/^\/+/, "");
+        if (!/[\\/]/.test(rest)) continue;
+        p = rest;
+      }
       if (!NOT_SOURCE_PATH.test(p) && isProdSource(p)) return p;
     }
   }

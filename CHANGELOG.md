@@ -2,6 +2,17 @@
 
 ## Unreleased
 
+## 0.9.2 - 2026-09-13
+
+### Fixed
+- **A `cd` through a shell variable no longer turns a scratch write into a production edit.**
+  `D="/private/tmp/.../scratchpad"; cd "$D"; printf ... > boot.py` left cwd as the literal `$D`,
+  so the write resolved to `$D/boot.py` - rooted-looking, outside every temp exclusion - and
+  re-armed the commit tripwire after the tests had run (the 0.9.1 fix only resolved a literal
+  `cd`). Assignments made earlier in the same command (`X=...`, `export X=...`) are now expanded
+  into later `cd` and write targets; a bare filename under a `cd` the command cannot name is
+  unknowable rather than production, while `cd "$REPO" && sed -i ... src/pay.js` still counts.
+
 ## 0.9.1 - 2026-09-11
 
 ### Fixed
