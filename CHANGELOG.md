@@ -12,17 +12,25 @@
   posture (`agent.tripwires.g11_live`) and reason as an edit: redirects (`>`, `>>`, `>|`, `&>`, `2>`,
   here-strings and the heredoc opener), `tee [-a]`, `sed -i` / `perl -i`, `cp` / `mv` / `install`
   destinations, `truncate` and `dd of=`, resolved through the command's own `cd` and earlier variable
-  assignments, and into `sh -c '...'`. Heredoc bodies and quoted arguments are data, so a fixture or
-  commit message that mentions `> foo.test.ts` writes nothing. The firing rule is unchanged: only a
+  assignments, into `sh -c '...'`, and through a basename glob (`src/*.test.ts`). Heredoc bodies
+  (including `<<\EOF`) and quoted arguments are data, so a fixture or commit message that mentions
+  `> foo.test.ts` writes nothing. A target under a computed or unset variable (`T=$(mktemp -d)`,
+  `"$SCRATCH/"`), under `~`, or a relative path that climbs out of the session cwd (`../other-repo/`)
+  is not the project; an absolute path is guarded wherever it points, as an edit tool's is. A file's
+  basename now matches runner output only as a whole path token, which also stops an Edit or Write of
+  `user.test.ts` binding to a failing `create-user.test.ts`. The firing rule is unchanged: only a
   file runner output showed failing, with no green run since, and appending tests to a passing file
   is still allowed. The ack rides in the command (`RECEIPTS_ACK=...`, `RECEIPTS_TRIPWIRE=off`,
   `--no-verify-receipts`, or a `test-removal:` note in the written content). A write bundled with a
-  `git commit` is checked once the commit tripwires allow it; their behavior is unchanged.
+  `git commit` is checked once the commit tripwires allow it; their behavior is unchanged, except
+  that a `git commit` inside a `<<\EOF` body is data for them too (the heredoc matcher is shared).
   Known limits, deliberately not half-covered: interpreter one-liners (`python -c "open(...).write()"`,
   `node -e`), shell-driven editors (`ex`, `vim -c`), `awk -i inplace`, `patch` and `git apply`,
-  `find -exec` / `xargs` (the file comes from elsewhere), `eval`, and removing, renaming or restoring
-  the test (`rm`, `git rm`, `mv <test> elsewhere`, `git checkout -- <test>`). A removed test is still
-  caught at the PR by the enforcer's G11 as a deleted test file; a rename or a restore is not.
+  `find -exec` / `xargs` and a `for` loop over a glob (the file name comes from elsewhere), `eval`,
+  `ln -s`, `rsync`, `curl -o`, and removing, renaming or restoring the test (`rm`, `git rm`,
+  `mv <test> elsewhere`, `git checkout -- <test>`). Restoring through a redirect IS caught:
+  `git show HEAD:<test> > <test>` is blocked while `git checkout -- <test>` is not. A removed test is
+  still caught at the PR by the enforcer's G11 as a deleted test file; a rename or a restore is not.
 
 ## 0.9.3 - 2026-09-14
 

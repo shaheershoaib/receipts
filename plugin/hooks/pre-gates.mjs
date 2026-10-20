@@ -61,7 +61,7 @@ const GIT_COMMIT = new RegExp(`${CMD_START}${ENV_PREFIX}git${GIT_OPTS}\\s+commit
 // starts after a newline, so a `git commit` written INTO a file (release notes, a runbook, a
 // test fixture) read as a commit being RUN and denied it. Strip heredoc bodies first - keep
 // the opener and terminator so the command still parses, drop only the data between them.
-const HEREDOC_BODY = /(<<-?\s*(['"]?)([A-Za-z_]\w*)\2[^\n]*\n)[\s\S]*?(\n[ \t]*\3[ \t]*)(?=\n|$)/g;
+const HEREDOC_BODY = /(<<-?\s*\\?(['"]?)([A-Za-z_]\w*)\2[^\n]*\n)[\s\S]*?(\n[ \t]*\3[ \t]*)(?=\n|$)/g;
 const withoutHeredocBodies = (cmd) => String(cmd || "").replace(HEREDOC_BODY, "$1$4");
 
 // `receipts init` skipping the reachability interview. The interview is the ONLY source of
@@ -455,10 +455,10 @@ const NAMES_A_TEST_FILE = /\S+\.(?:m?js|cjs|ts|tsx|jsx|py|rb|go|rs|java|kt|kts|c
 // is built BEFORE the transcript is parsed, so parseTranscript keeps only the lines that name it.
 function fileMatcher(editedFile) {
   const base = basename(editedFile);
-  return base ? new RegExp(escapeRe(editedFile) + "|" + escapeRe(base)) : null;
+  return base ? new RegExp(escapeRe(editedFile) + "|(?:^|[^\\w.-])" + escapeRe(base) + "(?![\\w.-])") : null;
 }
 
-function g11LiveTripwire(events, editedFile) {
+function g11LiveTripwire(events, editedFile, fileRe) {
   if (!editedFile || !TEST_PATH.test(editedFile)) return null; // only guards edits to TEST files
   const base = basename(editedFile);
   let armed = false;
@@ -468,6 +468,7 @@ function g11LiveTripwire(events, editedFile) {
     // status line), so an unrelated FAIL elsewhere in a long log does not bind to this file.
     let fail = false, pass = false;
     for (const line of e.lines) {
+      if (fileRe && !fileRe.test(line)) continue;   // one parse for several files kept all their lines
       if (FAIL_TOKEN.test(line)) fail = true;
       else if (PASS_TOKEN.test(line)) pass = true;
     }
@@ -565,7 +566,8 @@ function shellTokens(src) {
 // (sed) or -e/-E (perl) supplied it; BSD sed carries the backup suffix as the next word
 // (`sed -i '' ...`, `sed -i .bak ...`).
 function inPlaceTargets(prog, args) {
-  const scriptFlag = prog === "sed" ? "ef" : "eE", valueFlag = prog === "sed" ? "" : "IMmxCdDl0V";
+  const scriptFlag = prog === "sed" ? "ef" : "eE", valueFlag = prog === "sed" ? "" : "IMmxdDV";
+  const digitsFlag = prog === "sed" ? "" : "0lC";   // perl -0777 / -l012 / -C7: digits, then more flags
   const operands = [];
   let inPlace = false, script = false, end = false;
   for (let k = 0; k < args.length; k++) {
@@ -581,6 +583,7 @@ function inPlaceTargets(prog, args) {
       const ch = a[p], last = p === a.length - 1;
       if (ch === "i") { inPlace = true; if (prog === "sed" && last && /^(?:\.[^/\s]*)?$/.test(args[k + 1] ?? "-")) k++; break; }
       if (scriptFlag.includes(ch)) { script = true; if (last) k++; break; }
+      if (digitsFlag.includes(ch)) { while (/\d/.test(a[p + 1] || "")) p++; continue; }
       if (valueFlag.includes(ch)) break;
     }
   }
@@ -637,7 +640,8 @@ function bashWrittenTestPaths(cmd, cwd) {
       const [prog = "", ...args] = words.slice(k);
       const name = basename(prog);
       const assigns = !prog ? words : /^(?:export|local|declare|readonly)$/.test(name) ? args : [];
-      for (const m of assigns.map((a) => /^([A-Za-z_]\w*)=([\s\S]*)$/.exec(a)).filter(Boolean)) vars[m[1]] = expandVars(m[2], vars);
+      // `X=$(...)` and `X=` leave X unknown (an empty value would turn "$X/" into the root).
+      for (const m of assigns.map((a) => /^([A-Za-z_]\w*)=([\s\S]*)$/.exec(a)).filter((m) => m && m[2])) vars[m[1]] = expandVars(m[2], vars);
       if (name === "cd") dir = args[0] && !/^[-~]/.test(args[0]) ? under(dir, expandVars(args[0], vars)) : "~";
       else if (/^(?:ba|z|da)?sh$/.test(name)) {
         const c = args.findIndex((a) => /^-[a-z]*c$/.test(a));
@@ -660,10 +664,25 @@ function bashWrittenTestPaths(cmd, cwd) {
     run();
   };
   visit(String(cmd || ""), "", {});
+  // A glob in the basename (`src/*.test.ts`) is the files it matches, as the shell expands it.
+  const expandGlob = (p) => {
+    const base = basename(p), dir = p.slice(0, p.length - base.length);
+    if (!/[*?]/.test(base)) return [p];
+    const re = new RegExp("^" + globToRe(base) + "$");
+    try { return fs.readdirSync(path.resolve(cwd || ".", dir || ".")).filter((f) => re.test(f)).map((f) => dir + f); } catch { return []; }
+  };
   const out = new Set();
-  for (const p of named) {
-    if (!p || NOT_SOURCE_PATH.test(p) || !TEST_PATH.test(p)) continue;
-    out.add(cwd && !/^~/.test(p) && !p.includes("$") ? path.resolve(cwd, p) : p);
+  for (const p of named.flatMap(expandGlob)) {
+    if (!p || /^~/.test(p) || NOT_SOURCE_PATH.test(p) || !TEST_PATH.test(p)) continue;
+    // A `$VAR` / `$(...)` part is unknowable: the rest counts only while it still names a directory
+    // (`$(git rev-parse --show-toplevel)/src/x.test.ts`), never by a bare basename (`"$T/"`).
+    let q = p;
+    if (q.includes("$")) { q = q.replace(/\$\([^)]*\)|\$\{?\w+\}?/g, "").replace(/^\/+/, ""); if (!q.includes("/")) continue; }
+    const abs = cwd ? path.resolve(cwd, q) : q;
+    // A relative path that climbs out of the session cwd (`../other-repo/`) is another project; an
+    // absolute one is named outright, as an edit tool's file_path is, and stays.
+    if (cwd && !path.isAbsolute(q) && /^\.\.(?:[\\/]|$)/.test(path.relative(cwd, abs))) continue;
+    out.add(abs);
   }
   return [...out];
 }
@@ -679,12 +698,15 @@ async function g11BashTripwire(command, cwd, cfg, tp, permissionMode) {
   if (mode === "off") return;
   if (ACK_TAG.test(command) || /test-removal\s*:/i.test(command)) return;
   if (!tp) return;
-  const testCmd = testCmdMatcher(cfg);
+  // ONE pass over the transcript for every file written (it can run to hundreds of MB); each
+  // file then reads only its own lines.
+  const fileRe = new RegExp(files.map(fileMatcher).filter(Boolean).map((r) => r.source).join("|"));
+  let events;
+  try { events = await parseTranscript(tp, { fileRe, testCmd: testCmdMatcher(cfg) }); } catch { return; }
+  if (!events) return;
   for (const file of files) {
-    let events, hit = null;
-    try { events = await parseTranscript(tp, { fileRe: fileMatcher(file), testCmd }); } catch { return; }
-    if (!events) return;
-    try { hit = g11LiveTripwire(events, file); } catch { return; }
+    let hit = null;
+    try { hit = g11LiveTripwire(events, file, fileMatcher(file)); } catch { return; }
     if (hit) { emit(mode, g11Reason(hit.editedFile)); return; }
   }
 }

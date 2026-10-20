@@ -42,17 +42,22 @@ const userTurn = (text = "please continue") => ({
 // Enforcement is OPT-IN: the tripwires act only where a receipts.config.json exists (project
 // walk-up or agent-home), so the driver writes a minimal project config by default and the
 // fixtures exercise exactly what a configured repo gets (generic defaults, nothing tuned). Pass
-// `projectConfig: null` for the zero-config case, `homeConfig` for the agent-home layer.
+// `projectConfig: null` for the zero-config case, `homeConfig` for the agent-home layer, `files` for
+// empty files the command's globs can match (relative to the session cwd).
 // The default MODE depends on whether a human can be prompted: `ask` outside CI, `deny` under it.
 // The driver pins CI=1 unless told otherwise, so the firing-condition tests below read as plain
 // denies whatever machine runs them; the mode tests pass `ci: null` to get the interactive default.
-function runPre(toolName, toolInput, transcriptEntries, { projectConfig = { version: 1 }, homeConfig, ci = "1", permissionMode } = {}) {
+function runPre(toolName, toolInput, transcriptEntries, { projectConfig = { version: 1 }, homeConfig, ci = "1", permissionMode, files = [] } = {}) {
   const td = fs.mkdtempSync(path.join(os.tmpdir(), "receipts-pre-"));
   const tp = path.join(td, "transcript.jsonl");
   fs.writeFileSync(tp, (transcriptEntries || []).map((e) => JSON.stringify(e)).join("\n") + "\n");
   const home = path.join(td, "home");
   fs.mkdirSync(home, { recursive: true });
   if (projectConfig) fs.writeFileSync(path.join(td, "receipts.config.json"), JSON.stringify(projectConfig));
+  for (const f of files) {
+    fs.mkdirSync(path.dirname(path.join(td, f)), { recursive: true });
+    fs.writeFileSync(path.join(td, f), "");
+  }
   if (homeConfig) {
     fs.mkdirSync(path.join(home, ".claude"), { recursive: true });
     fs.writeFileSync(path.join(home, ".claude", "receipts.config.json"), JSON.stringify(homeConfig));
@@ -504,6 +509,68 @@ test("g11_live off / warn apply to Bash writes exactly as to Edit", () => {
 
 test("a write to a failing test bundled with a commit still trips G11-live once the commit tripwire allows", () => {
   assert.match(denies(...bash("echo x >> src/foo.test.ts && git commit -am wip"), FAIL_FOO), /G11/);
+});
+
+// Review of #91: the first cut matched by basename alone, so a copy of the failing test into a
+// computed scratch dir, $HOME or a sibling repo was a "write to the failing test"; a NEW test whose
+// name ended in the failing one's name bound to it; a `<<\EOF` body was parsed as commands; a glob
+// and the bundled `perl -0pi` / `-lpi` slipped through.
+test("a target under a computed, unset or home dir, or a relative path out of the session cwd, is not the project (allow)", () => {
+  for (const cmd of [
+    "T=$(mktemp -d); cp src/foo.test.ts \"$T/\"",
+    "D=$(mktemp -d) && cd \"$D\" && cat > foo.test.ts <<'EOF'\nimport {x} from 'y'\nEOF",
+    "cd \"$(mktemp -d)\" && cat > foo.test.ts <<'EOF'\nx\nEOF",
+    "cp src/foo.test.ts \"$SCRATCH/\"",
+    "cp src/foo.test.ts ~/backup/",
+    "cp src/foo.test.ts ../other-repo/src/",
+  ]) assert.equal(runPre(...bash(cmd), FAIL_FOO), null, `expected "${cmd.split("\n")[0]}" to be allowed`);
+});
+
+test("a project path behind a variable or computed root still counts, and so does an absolute path (deny)", () => {
+  // The absolute case is how an agent in a worktree outside the session cwd writes; an edit tool's
+  // file_path is guarded wherever it points, and so is this.
+  for (const cmd of [
+    "cat >> \"$(git rev-parse --show-toplevel)/src/foo.test.ts\" <<'EOF'\nx\nEOF",
+    "cd \"$PROJ\" && sed -i 's/x/y/' src/foo.test.ts",
+    "F=src/foo.test.ts; sed -i '' 's/x/y/' \"$F\"",
+    "sed -i '' 's/x/y/' /work/other-worktree/src/foo.test.ts",
+  ]) {
+    const d = runPre(...bash(cmd), FAIL_FOO);
+    assert.equal(d && d.hookSpecificOutput.permissionDecision, "deny", `expected "${cmd.split("\n")[0]}" to trip G11-live`);
+  }
+});
+
+test("a test whose name is a suffix of the failing one's is a different file (allow), for Bash and Write alike", () => {
+  const FAIL_CU = [RUN, resultEntry("FAIL src/create-user.test.ts\n  expected 5 received 4")];
+  allows(...bash("cat > src/user.test.ts <<'EOF'\nit('x', () => {})\nEOF"), FAIL_CU);
+  allows(...bash("cp templates/blank.test.ts src/user.test.ts"), FAIL_CU);
+  allows("Write", { file_path: "src/user.test.ts", content: "x" }, FAIL_CU);
+  denies(...bash("cat >> src/create-user.test.ts <<'EOF'\nx\nEOF"), FAIL_CU);
+});
+
+test("a `<<\\EOF` heredoc body is data, like a quoted one (allow)", () => {
+  allows(...bash("cat <<\\EOF\nrun: echo x > src/foo.test.ts\nEOF"), FAIL_FOO);
+  // The heredoc matcher is shared: a commit written INTO a file is not a commit run.
+  allows(...bash("cat > notes.md <<\\EOF\ngit commit -m x\nEOF"), [PROD_EDIT]);
+});
+
+test("a glob in the written path is the files it matches: deny when one of them failed", () => {
+  const files = ["src/foo.test.ts", "src/bar.test.ts"];
+  denies(...bash("sed -i '' 's/toBe(5)/toBe(4)/' src/*.test.ts"), FAIL_FOO, { files });
+  denies(...bash("sed -i 's/== 5/== 4/' tests/test_*.py"),
+    [useEntry("Bash", { command: "pytest -q" }), resultEntry("FAILED tests/test_pay.py::test_total - assert 4 == 5")],
+    { files: ["tests/test_pay.py"] });
+  allows(...bash("sed -i '' 's/x/y/' src/b*.test.ts"), FAIL_FOO, { files });
+});
+
+test("perl flags bundled before -i still edit in place: -0pi, -lpi (deny)", () => {
+  denies(...bash("perl -0pi -e 's/toBe\\(5\\)/toBe(4)/' src/foo.test.ts"), FAIL_FOO);
+  denies(...bash("perl -lpi -e 's/x/y/' src/foo.test.ts"), FAIL_FOO);
+});
+
+test("several tests written at once share one transcript pass, and each binds only its own lines", () => {
+  assert.match(denies(...bash("tee src/a.test.ts src/b.test.ts src/foo.test.ts < /dev/null"), FAIL_FOO), /foo\.test\.ts/);
+  allows(...bash("tee src/a.test.ts src/b.test.ts < /dev/null"), [RUN, resultEntry("FAIL src/foo.test.ts\nPASS src/a.test.ts")]);
 });
 
 // ================================================================= Stop-hook refire DAMPING
