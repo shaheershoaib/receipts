@@ -462,6 +462,7 @@ test("every shell write form onto a failing test trips G11-live (deny)", () => {
     "F=src/foo.test.ts; sed -i '' 's/x/y/' \"$F\"",
     "cp /tmp/foo.test.ts src/",
     "{ echo x; } >> src/foo.test.ts",
+    "echo x >> src/foo\\.test.ts",
   ]) {
     const d = runPre(...bash(cmd), FAIL_FOO);
     assert.equal(d && d.hookSpecificOutput.permissionDecision, "deny", `expected "${cmd.split("\n")[0]}" to trip G11-live`);
