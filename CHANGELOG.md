@@ -2,6 +2,28 @@
 
 ## Unreleased
 
+## 0.9.4 - 2026-10-20
+
+### Fixed
+- **G11-live sees a test file written from the shell.** The referee tripwire only read
+  Edit/Write/MultiEdit; for Bash the hook only looked for `git commit`, so `cat >> foo.test.ts <<'EOF'`,
+  `sed -i`, `tee -a` or `cp`/`mv` onto the test rewrote a test a run had just shown FAILING with
+  nothing in the way (reported by Quinton). A Bash command's test-file writes now get the same check,
+  posture (`agent.tripwires.g11_live`) and reason as an edit: redirects (`>`, `>>`, `>|`, `&>`, `2>`,
+  here-strings and the heredoc opener), `tee [-a]`, `sed -i` / `perl -i`, `cp` / `mv` / `install`
+  destinations, `truncate` and `dd of=`, resolved through the command's own `cd` and earlier variable
+  assignments, and into `sh -c '...'`. Heredoc bodies and quoted arguments are data, so a fixture or
+  commit message that mentions `> foo.test.ts` writes nothing. The firing rule is unchanged: only a
+  file runner output showed failing, with no green run since, and appending tests to a passing file
+  is still allowed. The ack rides in the command (`RECEIPTS_ACK=...`, `RECEIPTS_TRIPWIRE=off`,
+  `--no-verify-receipts`, or a `test-removal:` note in the written content). A write bundled with a
+  `git commit` is checked once the commit tripwires allow it; their behavior is unchanged.
+  Known limits, deliberately not half-covered: interpreter one-liners (`python -c "open(...).write()"`,
+  `node -e`), shell-driven editors (`ex`, `vim -c`), `awk -i inplace`, `patch` and `git apply`,
+  `find -exec` / `xargs` (the file comes from elsewhere), `eval`, and removing, renaming or restoring
+  the test (`rm`, `git rm`, `mv <test> elsewhere`, `git checkout -- <test>`). A removed test is still
+  caught at the PR by the enforcer's G11 as a deleted test file; a rename or a restore is not.
+
 ## 0.9.3 - 2026-09-14
 
 ### Changed

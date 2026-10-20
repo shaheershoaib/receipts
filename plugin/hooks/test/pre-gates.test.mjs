@@ -406,6 +406,105 @@ test("an ack in the NEW content clears it: Edit new_string, Write content, Multi
   allows("MultiEdit", { file_path: "src/pay.test.js", edits: [{ old_string: "a", new_string: "b" }, { old_string: "c", new_string: "// test-removal: dead\nd" }] }, FAIL_PAY);
 });
 
+// ---- the same referee, written from the shell (reported 2026-10-20) -----------------------
+
+// G11-live only ever read Edit/Write/MultiEdit. The PreToolUse matcher includes Bash, but for Bash
+// the hook only looked for `git commit`, so `cat >> foo.test.ts <<'EOF'`, `sed -i`, `tee -a`,
+// `cp`/`mv` onto the test and friends rewrote a test a run had just shown FAILING with nothing
+// in the way. The firing rule is unchanged (runner output showed THIS file failing, no green
+// since); only the set of actions that count as editing the test grows.
+const FAIL_FOO = [RUN, resultEntry("FAIL src/foo.test.ts\n  expected 5 received 4")];
+const bash = (command) => ["Bash", { command }];
+const APPEND_FOO = bash("cat >> src/foo.test.ts <<'EOF'\nit('passes', () => expect(1).toBe(1));\nEOF");
+
+test("a heredoc append to a test a RUN showed failing trips G11-live: ask by default, deny under CI", () => {
+  const asked = asks(...APPEND_FOO, FAIL_FOO, { ci: null });
+  assert.match(asked, /G11/);
+  assert.match(asked, /foo\.test\.ts/, "names the written test file");
+  assert.match(denies(...APPEND_FOO, FAIL_FOO), /G11/);
+});
+
+test("a Bash write to a failing test carrying an explicit ack is allowed", () => {
+  allows(...bash("RECEIPTS_ACK='adds a regression only' " + APPEND_FOO[1].command), FAIL_FOO);
+  allows(...bash("cat >> src/foo.test.ts <<'EOF'\n// test-removal: the feature was deleted in #12\nEOF"), FAIL_FOO);
+  allows(...bash("RECEIPTS_TRIPWIRE=off sed -i '' 's/x/y/' src/foo.test.ts"), FAIL_FOO);
+});
+
+test("sed -i on a failing test trips G11-live; after a later green run it is allowed", () => {
+  const sed = bash("sed -i '' 's/toBe(5)/toBe(4)/' src/foo.test.ts");
+  assert.match(denies(...sed, FAIL_FOO), /G11/);
+  allows(...sed, [...FAIL_FOO, RUN, resultEntry("PASS src/foo.test.ts\n  4 passing")]);
+});
+
+test("every shell write form onto a failing test trips G11-live (deny)", () => {
+  for (const cmd of [
+    "printf 'x' | tee -a src/foo.test.ts",
+    "printf 'x' | tee src/foo.test.ts",
+    "cp fixtures/foo.golden.ts src/foo.test.ts",
+    "mv /var/folders/x/foo.ts src/foo.test.ts",
+    "install -m 644 gen/foo.ts src/foo.test.ts",
+    "echo 'expect(true).toBe(true)' > src/foo.test.ts",
+    "printf 'x' >| src/foo.test.ts",
+    "cat <<< 'x' >> src/foo.test.ts",
+    "npx tsc 2> src/foo.test.ts",
+    "npx tsc &> src/foo.test.ts",
+    "truncate -s 0 src/foo.test.ts",
+    "dd if=/dev/null of=src/foo.test.ts",
+    "sed -i 's/x/y/' src/foo.test.ts",
+    "sed -i.bak -e 's/x/y/' src/foo.test.ts",
+    "perl -pi -e 's/x/y/' src/foo.test.ts",
+    "perl -i -pe 's/x/y/' src/foo.test.ts",
+    "cat <<EOF > src/foo.test.ts\nx\nEOF",
+    "(cd src && cat >> foo.test.ts <<'EOF'\nx\nEOF\n)",
+    "cd src; sed -i '' 's/x/y/' foo.test.ts",
+    "bash -c \"echo x >> src/foo.test.ts\"",
+    "git status && echo x >> src/foo.test.ts",
+    "F=src/foo.test.ts; sed -i '' 's/x/y/' \"$F\"",
+    "cp /tmp/foo.test.ts src/",
+    "{ echo x; } >> src/foo.test.ts",
+  ]) {
+    const d = runPre(...bash(cmd), FAIL_FOO);
+    assert.equal(d && d.hookSpecificOutput.permissionDecision, "deny", `expected "${cmd.split("\n")[0]}" to trip G11-live`);
+    assert.match(d.hookSpecificOutput.permissionDecisionReason, /G11/);
+  }
+});
+
+test("a Bash write to a test that never failed is allowed (appending tests to a passing file)", () => {
+  allows(...bash("cat >> src/bar.test.ts <<'EOF'\nit('new case', () => {});\nEOF"), FAIL_FOO);
+});
+
+test("a heredoc BODY that mentions `> foo.test.ts`, written to a non-test file, is data (allow)", () => {
+  allows(...bash("cat > notes.md <<'EOF'\nrepro: echo x > src/foo.test.ts\nsed -i '' 's/a/b/' src/foo.test.ts\nEOF"), FAIL_FOO);
+});
+
+test("a test path inside a quoted argument is data, not a write (allow)", () => {
+  allows(...bash('echo "> src/foo.test.ts"'), FAIL_FOO);
+  allows(...bash('git commit -m "fix > src/foo.test.ts"'), FAIL_FOO);
+  allows(...bash("grep -n 'tee -a src/foo.test.ts' notes.md"), FAIL_FOO);
+  allows(...bash("sed -i '' 's/src\\/foo.test.ts/x/' notes.md"), FAIL_FOO);
+  allows(...bash("echo x # > src/foo.test.ts"), FAIL_FOO);
+});
+
+test("reading a failing test, or redirecting to a non-test file after it failed, is allowed", () => {
+  allows(...bash("echo x > src/foo.ts"), FAIL_FOO);
+  allows(...bash("cat src/foo.test.ts > /dev/null"), FAIL_FOO);
+  allows(...bash("cp src/foo.test.ts /tmp/foo.test.ts"), FAIL_FOO);
+  allows(...bash("npx jest src/foo.test.ts 2>&1 | tee jest.log"), FAIL_FOO);
+});
+
+test("no receipts config anywhere: a Bash write to a failing test is allowed (opt-in unchanged)", () => {
+  allows(...APPEND_FOO, FAIL_FOO, { projectConfig: null });
+});
+
+test("g11_live off / warn apply to Bash writes exactly as to Edit", () => {
+  allows(...APPEND_FOO, FAIL_FOO, { projectConfig: { version: 1, agent: { tripwires: { g11_live: "off" } } } });
+  assert.match(warns(...APPEND_FOO, FAIL_FOO, { projectConfig: { version: 1, agent: { tripwires: { g11_live: "warn" } } } }), /G11/);
+});
+
+test("a write to a failing test bundled with a commit still trips G11-live once the commit tripwire allows", () => {
+  assert.match(denies(...bash("echo x >> src/foo.test.ts && git commit -am wip"), FAIL_FOO), /G11/);
+});
+
 // ================================================================= Stop-hook refire DAMPING
 
 // Damping drives the REAL Stop hook across multiple invocations with a growing transcript and a

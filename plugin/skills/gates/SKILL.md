@@ -135,7 +135,8 @@ dontAsk / auto session, where nobody can be asked and the reason reaches the age
   or `receipts observe` run since. The project's own `verify.test_command` / `suite_command` and
   the common runners count as a run.
 - **G11-live referee** - editing a test that a test RUN just showed FAILING, with no green run
-  since. Only runner output arms it; a green re-run of the file or of the suite clears it.
+  since, through an edit tool or a Bash write (a redirect, `sed -i`, `tee`, `cp`/`mv`). Only
+  runner output arms it; a green re-run of the file or of the suite clears it.
 - **init unattended** - `receipts init --yes` without the interview's `--answers` (or the deprecated `--drive-*`),
   outside CI. This one runs before any config exists.
 
