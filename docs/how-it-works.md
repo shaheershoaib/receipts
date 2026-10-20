@@ -107,9 +107,9 @@ to opt in everywhere). A repo that never ran `receipts init` gets no behaviour c
   reachability questions only a human can answer), writes the config, checks it with `doctor`.
 - the **in-session tripwires** (`pre-gates.mjs`, a PreToolUse hook) fire AT the risky action:
   a `git commit` right after a production-source edit with no test / `receipts observe` run in
-  between (the project's own `verify.test_command` counts), an edit to a test file that a test
-  run just showed FAILING with no green run since (G11-live), and `receipts init --yes`
-  skipping the interview. Each guard's posture is `agent.tripwires.<name>`: `deny` blocks,
+  between (the project's own `verify.test_command` counts), an edit to a test file (an edit tool
+  or a Bash write) that a test run just showed FAILING with no green run since (G11-live), and
+  `receipts init --yes` skipping the interview. Each guard's posture is `agent.tripwires.<name>`: `deny` blocks,
   `ask` raises the user's permission prompt with the reason, `warn` lets the action through and
   tells the agent what it skipped, `off` disables. The default is `ask`, or `deny` under CI and in
   a bypassPermissions / dontAsk / auto session, where a prompt would reach nobody and a deny

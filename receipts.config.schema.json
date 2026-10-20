@@ -632,7 +632,7 @@
                 "warn",
                 "off"
               ],
-              "description": "The G11-live referee tripwire (Edit/Write/MultiEdit on a TEST file): editing a test that a test RUN just showed FAILING, with no green run since, is the 'shoot the referee' move - fix the code, not the test (G11). Only runner output (a tool_result of a test command) arms it, never prose; a later green run clears it. 'ask' (default in an interactive session) / 'deny' (default under CI and in bypassPermissions / dontAsk / auto) / 'warn' / 'off' as for commit_unverified. An edit whose NEW content carries a `test-removal: <why>` note or a `RECEIPTS_ACK` is the honest, reviewed way through.",
+              "description": "The G11-live referee tripwire (Edit/Write/MultiEdit on a TEST file, or a Bash command that writes one: a redirect, sed -i / perl -i, tee, cp / mv / install, truncate, dd of=): editing a test that a test RUN just showed FAILING, with no green run since, is the 'shoot the referee' move - fix the code, not the test (G11). Only runner output (a tool_result of a test command) arms it, never prose; a later green run clears it. 'ask' (default in an interactive session) / 'deny' (default under CI and in bypassPermissions / dontAsk / auto) / 'warn' / 'off' as for commit_unverified. An edit whose NEW content carries a `test-removal: <why>` note or a `RECEIPTS_ACK` (for a Bash write, anywhere in the command) is the honest, reviewed way through.",
               "default": "ask"
             },
             "test_command_patterns": {

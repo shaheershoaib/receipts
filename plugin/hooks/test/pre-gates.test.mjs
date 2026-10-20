@@ -42,17 +42,22 @@ const userTurn = (text = "please continue") => ({
 // Enforcement is OPT-IN: the tripwires act only where a receipts.config.json exists (project
 // walk-up or agent-home), so the driver writes a minimal project config by default and the
 // fixtures exercise exactly what a configured repo gets (generic defaults, nothing tuned). Pass
-// `projectConfig: null` for the zero-config case, `homeConfig` for the agent-home layer.
+// `projectConfig: null` for the zero-config case, `homeConfig` for the agent-home layer, `files` for
+// empty files the command's globs can match (relative to the session cwd).
 // The default MODE depends on whether a human can be prompted: `ask` outside CI, `deny` under it.
 // The driver pins CI=1 unless told otherwise, so the firing-condition tests below read as plain
 // denies whatever machine runs them; the mode tests pass `ci: null` to get the interactive default.
-function runPre(toolName, toolInput, transcriptEntries, { projectConfig = { version: 1 }, homeConfig, ci = "1", permissionMode } = {}) {
+function runPre(toolName, toolInput, transcriptEntries, { projectConfig = { version: 1 }, homeConfig, ci = "1", permissionMode, files = [] } = {}) {
   const td = fs.mkdtempSync(path.join(os.tmpdir(), "receipts-pre-"));
   const tp = path.join(td, "transcript.jsonl");
   fs.writeFileSync(tp, (transcriptEntries || []).map((e) => JSON.stringify(e)).join("\n") + "\n");
   const home = path.join(td, "home");
   fs.mkdirSync(home, { recursive: true });
   if (projectConfig) fs.writeFileSync(path.join(td, "receipts.config.json"), JSON.stringify(projectConfig));
+  for (const f of files) {
+    fs.mkdirSync(path.dirname(path.join(td, f)), { recursive: true });
+    fs.writeFileSync(path.join(td, f), "");
+  }
   if (homeConfig) {
     fs.mkdirSync(path.join(home, ".claude"), { recursive: true });
     fs.writeFileSync(path.join(home, ".claude", "receipts.config.json"), JSON.stringify(homeConfig));
@@ -404,6 +409,168 @@ test("an ack in the NEW content clears it: Edit new_string, Write content, Multi
   allows("Edit", { file_path: "src/pay.test.js", old_string: "a", new_string: "// RECEIPTS_ACK='dead feature #12'\nb" }, FAIL_PAY);
   allows("Write", { file_path: "src/pay.test.js", content: "// test-removal: replaced by pay.e2e.test.js" }, FAIL_PAY);
   allows("MultiEdit", { file_path: "src/pay.test.js", edits: [{ old_string: "a", new_string: "b" }, { old_string: "c", new_string: "// test-removal: dead\nd" }] }, FAIL_PAY);
+});
+
+// ---- the same referee, written from the shell (reported 2026-10-20) -----------------------
+
+// G11-live only ever read Edit/Write/MultiEdit. The PreToolUse matcher includes Bash, but for Bash
+// the hook only looked for `git commit`, so `cat >> foo.test.ts <<'EOF'`, `sed -i`, `tee -a`,
+// `cp`/`mv` onto the test and friends rewrote a test a run had just shown FAILING with nothing
+// in the way. The firing rule is unchanged (runner output showed THIS file failing, no green
+// since); only the set of actions that count as editing the test grows.
+const FAIL_FOO = [RUN, resultEntry("FAIL src/foo.test.ts\n  expected 5 received 4")];
+const bash = (command) => ["Bash", { command }];
+const APPEND_FOO = bash("cat >> src/foo.test.ts <<'EOF'\nit('passes', () => expect(1).toBe(1));\nEOF");
+
+test("a heredoc append to a test a RUN showed failing trips G11-live: ask by default, deny under CI", () => {
+  const asked = asks(...APPEND_FOO, FAIL_FOO, { ci: null });
+  assert.match(asked, /G11/);
+  assert.match(asked, /foo\.test\.ts/, "names the written test file");
+  assert.match(denies(...APPEND_FOO, FAIL_FOO), /G11/);
+});
+
+test("a Bash write to a failing test carrying an explicit ack is allowed", () => {
+  allows(...bash("RECEIPTS_ACK='adds a regression only' " + APPEND_FOO[1].command), FAIL_FOO);
+  allows(...bash("cat >> src/foo.test.ts <<'EOF'\n// test-removal: the feature was deleted in #12\nEOF"), FAIL_FOO);
+  allows(...bash("RECEIPTS_TRIPWIRE=off sed -i '' 's/x/y/' src/foo.test.ts"), FAIL_FOO);
+});
+
+test("sed -i on a failing test trips G11-live; after a later green run it is allowed", () => {
+  const sed = bash("sed -i '' 's/toBe(5)/toBe(4)/' src/foo.test.ts");
+  assert.match(denies(...sed, FAIL_FOO), /G11/);
+  allows(...sed, [...FAIL_FOO, RUN, resultEntry("PASS src/foo.test.ts\n  4 passing")]);
+});
+
+test("every shell write form onto a failing test trips G11-live (deny)", () => {
+  for (const cmd of [
+    "printf 'x' | tee -a src/foo.test.ts",
+    "printf 'x' | tee src/foo.test.ts",
+    "cp fixtures/foo.golden.ts src/foo.test.ts",
+    "mv /var/folders/x/foo.ts src/foo.test.ts",
+    "install -m 644 gen/foo.ts src/foo.test.ts",
+    "echo 'expect(true).toBe(true)' > src/foo.test.ts",
+    "printf 'x' >| src/foo.test.ts",
+    "cat <<< 'x' >> src/foo.test.ts",
+    "npx tsc 2> src/foo.test.ts",
+    "npx tsc &> src/foo.test.ts",
+    "truncate -s 0 src/foo.test.ts",
+    "dd if=/dev/null of=src/foo.test.ts",
+    "sed -i 's/x/y/' src/foo.test.ts",
+    "sed -i.bak -e 's/x/y/' src/foo.test.ts",
+    "perl -pi -e 's/x/y/' src/foo.test.ts",
+    "perl -i -pe 's/x/y/' src/foo.test.ts",
+    "cat <<EOF > src/foo.test.ts\nx\nEOF",
+    "(cd src && cat >> foo.test.ts <<'EOF'\nx\nEOF\n)",
+    "cd src; sed -i '' 's/x/y/' foo.test.ts",
+    "bash -c \"echo x >> src/foo.test.ts\"",
+    "git status && echo x >> src/foo.test.ts",
+    "F=src/foo.test.ts; sed -i '' 's/x/y/' \"$F\"",
+    "cp /tmp/foo.test.ts src/",
+    "{ echo x; } >> src/foo.test.ts",
+    "echo x >> src/foo\\.test.ts",
+  ]) {
+    const d = runPre(...bash(cmd), FAIL_FOO);
+    assert.equal(d && d.hookSpecificOutput.permissionDecision, "deny", `expected "${cmd.split("\n")[0]}" to trip G11-live`);
+    assert.match(d.hookSpecificOutput.permissionDecisionReason, /G11/);
+  }
+});
+
+test("a Bash write to a test that never failed is allowed (appending tests to a passing file)", () => {
+  allows(...bash("cat >> src/bar.test.ts <<'EOF'\nit('new case', () => {});\nEOF"), FAIL_FOO);
+});
+
+test("a heredoc BODY that mentions `> foo.test.ts`, written to a non-test file, is data (allow)", () => {
+  allows(...bash("cat > notes.md <<'EOF'\nrepro: echo x > src/foo.test.ts\nsed -i '' 's/a/b/' src/foo.test.ts\nEOF"), FAIL_FOO);
+});
+
+test("a test path inside a quoted argument is data, not a write (allow)", () => {
+  allows(...bash('echo "> src/foo.test.ts"'), FAIL_FOO);
+  allows(...bash('git commit -m "fix > src/foo.test.ts"'), FAIL_FOO);
+  allows(...bash("grep -n 'tee -a src/foo.test.ts' notes.md"), FAIL_FOO);
+  allows(...bash("sed -i '' 's/src\\/foo.test.ts/x/' notes.md"), FAIL_FOO);
+  allows(...bash("echo x # > src/foo.test.ts"), FAIL_FOO);
+});
+
+test("reading a failing test, or redirecting to a non-test file after it failed, is allowed", () => {
+  allows(...bash("echo x > src/foo.ts"), FAIL_FOO);
+  allows(...bash("cat src/foo.test.ts > /dev/null"), FAIL_FOO);
+  allows(...bash("cp src/foo.test.ts /tmp/foo.test.ts"), FAIL_FOO);
+  allows(...bash("npx jest src/foo.test.ts 2>&1 | tee jest.log"), FAIL_FOO);
+});
+
+test("no receipts config anywhere: a Bash write to a failing test is allowed (opt-in unchanged)", () => {
+  allows(...APPEND_FOO, FAIL_FOO, { projectConfig: null });
+});
+
+test("g11_live off / warn apply to Bash writes exactly as to Edit", () => {
+  allows(...APPEND_FOO, FAIL_FOO, { projectConfig: { version: 1, agent: { tripwires: { g11_live: "off" } } } });
+  assert.match(warns(...APPEND_FOO, FAIL_FOO, { projectConfig: { version: 1, agent: { tripwires: { g11_live: "warn" } } } }), /G11/);
+});
+
+test("a write to a failing test bundled with a commit still trips G11-live once the commit tripwire allows", () => {
+  assert.match(denies(...bash("echo x >> src/foo.test.ts && git commit -am wip"), FAIL_FOO), /G11/);
+});
+
+// Review of #91: the first cut matched by basename alone, so a copy of the failing test into a
+// computed scratch dir, $HOME or a sibling repo was a "write to the failing test"; a NEW test whose
+// name ended in the failing one's name bound to it; a `<<\EOF` body was parsed as commands; a glob
+// and the bundled `perl -0pi` / `-lpi` slipped through.
+test("a target under a computed, unset or home dir, or a relative path out of the session cwd, is not the project (allow)", () => {
+  for (const cmd of [
+    "T=$(mktemp -d); cp src/foo.test.ts \"$T/\"",
+    "D=$(mktemp -d) && cd \"$D\" && cat > foo.test.ts <<'EOF'\nimport {x} from 'y'\nEOF",
+    "cd \"$(mktemp -d)\" && cat > foo.test.ts <<'EOF'\nx\nEOF",
+    "cp src/foo.test.ts \"$SCRATCH/\"",
+    "cp src/foo.test.ts ~/backup/",
+    "cp src/foo.test.ts ../other-repo/src/",
+  ]) assert.equal(runPre(...bash(cmd), FAIL_FOO), null, `expected "${cmd.split("\n")[0]}" to be allowed`);
+});
+
+test("a project path behind a variable or computed root still counts, and so does an absolute path (deny)", () => {
+  // The absolute case is how an agent in a worktree outside the session cwd writes; an edit tool's
+  // file_path is guarded wherever it points, and so is this.
+  for (const cmd of [
+    "cat >> \"$(git rev-parse --show-toplevel)/src/foo.test.ts\" <<'EOF'\nx\nEOF",
+    "cd \"$PROJ\" && sed -i 's/x/y/' src/foo.test.ts",
+    "F=src/foo.test.ts; sed -i '' 's/x/y/' \"$F\"",
+    "sed -i '' 's/x/y/' /work/other-worktree/src/foo.test.ts",
+  ]) {
+    const d = runPre(...bash(cmd), FAIL_FOO);
+    assert.equal(d && d.hookSpecificOutput.permissionDecision, "deny", `expected "${cmd.split("\n")[0]}" to trip G11-live`);
+  }
+});
+
+test("a test whose name is a suffix of the failing one's is a different file (allow), for Bash and Write alike", () => {
+  const FAIL_CU = [RUN, resultEntry("FAIL src/create-user.test.ts\n  expected 5 received 4")];
+  allows(...bash("cat > src/user.test.ts <<'EOF'\nit('x', () => {})\nEOF"), FAIL_CU);
+  allows(...bash("cp templates/blank.test.ts src/user.test.ts"), FAIL_CU);
+  allows("Write", { file_path: "src/user.test.ts", content: "x" }, FAIL_CU);
+  denies(...bash("cat >> src/create-user.test.ts <<'EOF'\nx\nEOF"), FAIL_CU);
+});
+
+test("a `<<\\EOF` heredoc body is data, like a quoted one (allow)", () => {
+  allows(...bash("cat <<\\EOF\nrun: echo x > src/foo.test.ts\nEOF"), FAIL_FOO);
+  // The heredoc matcher is shared: a commit written INTO a file is not a commit run.
+  allows(...bash("cat > notes.md <<\\EOF\ngit commit -m x\nEOF"), [PROD_EDIT]);
+});
+
+test("a glob in the written path is the files it matches: deny when one of them failed", () => {
+  const files = ["src/foo.test.ts", "src/bar.test.ts"];
+  denies(...bash("sed -i '' 's/toBe(5)/toBe(4)/' src/*.test.ts"), FAIL_FOO, { files });
+  denies(...bash("sed -i 's/== 5/== 4/' tests/test_*.py"),
+    [useEntry("Bash", { command: "pytest -q" }), resultEntry("FAILED tests/test_pay.py::test_total - assert 4 == 5")],
+    { files: ["tests/test_pay.py"] });
+  allows(...bash("sed -i '' 's/x/y/' src/b*.test.ts"), FAIL_FOO, { files });
+});
+
+test("perl flags bundled before -i still edit in place: -0pi, -lpi (deny)", () => {
+  denies(...bash("perl -0pi -e 's/toBe\\(5\\)/toBe(4)/' src/foo.test.ts"), FAIL_FOO);
+  denies(...bash("perl -lpi -e 's/x/y/' src/foo.test.ts"), FAIL_FOO);
+});
+
+test("several tests written at once share one transcript pass, and each binds only its own lines", () => {
+  assert.match(denies(...bash("tee src/a.test.ts src/b.test.ts src/foo.test.ts < /dev/null"), FAIL_FOO), /foo\.test\.ts/);
+  allows(...bash("tee src/a.test.ts src/b.test.ts < /dev/null"), [RUN, resultEntry("FAIL src/foo.test.ts\nPASS src/a.test.ts")]);
 });
 
 // ================================================================= Stop-hook refire DAMPING

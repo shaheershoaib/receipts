@@ -24,8 +24,8 @@ the Gates before a PR is ever opened. This is the agent-side half of `receipts`
   turned out, so the memory grows (and captures failures, not just wins).
 - **`hooks/pre-gates.mjs`** - the in-session tripwires, at the risky action: a `git
   commit` with no test run since the last production edit, an edit to a test a run just
-  showed failing (G11-live), `receipts init --yes` skipping the interview, and the
-  opt-in render tripwire.
+  showed failing (G11-live; an edit tool or a Bash write), `receipts init --yes` skipping the
+  interview, and the opt-in render tripwire.
 - **`hooks/session-memory.mjs`** - memory that pushes: injects the repo's prior scars and
   its recorded way in (`agent.observe.reach`) at session start, and announces a plugin upgrade
   the config predates.

@@ -8,9 +8,10 @@
  *      production-source edit with NO test / receipt-ish command run in between is the
  *      classic "coded it, committed it, never ran it" move. Deny with a cheap, EXPLICIT
  *      escape (run the tests, or carry an honesty ack) - the ack is greppable, never silent.
- *   2. G11-LIVE referee integrity (Edit/Write/MultiEdit on a TEST file): editing a test that
- *      was just seen FAILING - with no intervening green - is the "shoot the referee" move
- *      G11 names (fix the code, not the test). Deny with the G11 mandate + the same ack escape.
+ *   2. G11-LIVE referee integrity (Edit/Write/MultiEdit on a TEST file, or a Bash command that
+ *      writes one: a redirect, `sed -i`, `tee`, `cp`/`mv`): editing a test that was just seen
+ *      FAILING - with no intervening green - is the "shoot the referee" move G11 names (fix the
+ *      code, not the test). Deny with the G11 mandate + the same ack escape.
  *
  * Detection is STRUCTURAL + ORDERED over the transcript (real tool_use / tool_result events,
  * command boundaries), the same discipline as stop-gates.mjs: a `git commit` inside a
@@ -60,7 +61,7 @@ const GIT_COMMIT = new RegExp(`${CMD_START}${ENV_PREFIX}git${GIT_OPTS}\\s+commit
 // starts after a newline, so a `git commit` written INTO a file (release notes, a runbook, a
 // test fixture) read as a commit being RUN and denied it. Strip heredoc bodies first - keep
 // the opener and terminator so the command still parses, drop only the data between them.
-const HEREDOC_BODY = /(<<-?\s*(['"]?)([A-Za-z_]\w*)\2[^\n]*\n)[\s\S]*?(\n[ \t]*\3[ \t]*)(?=\n|$)/g;
+const HEREDOC_BODY = /(<<-?\s*\\?(['"]?)([A-Za-z_]\w*)\2[^\n]*\n)[\s\S]*?(\n[ \t]*\3[ \t]*)(?=\n|$)/g;
 const withoutHeredocBodies = (cmd) => String(cmd || "").replace(HEREDOC_BODY, "$1$4");
 
 // `receipts init` skipping the reachability interview. The interview is the ONLY source of
@@ -454,10 +455,10 @@ const NAMES_A_TEST_FILE = /\S+\.(?:m?js|cjs|ts|tsx|jsx|py|rb|go|rs|java|kt|kts|c
 // is built BEFORE the transcript is parsed, so parseTranscript keeps only the lines that name it.
 function fileMatcher(editedFile) {
   const base = basename(editedFile);
-  return base ? new RegExp(escapeRe(editedFile) + "|" + escapeRe(base)) : null;
+  return base ? new RegExp(escapeRe(editedFile) + "|(?:^|[^\\w.-])" + escapeRe(base) + "(?![\\w.-])") : null;
 }
 
-function g11LiveTripwire(events, editedFile) {
+function g11LiveTripwire(events, editedFile, fileRe) {
   if (!editedFile || !TEST_PATH.test(editedFile)) return null; // only guards edits to TEST files
   const base = basename(editedFile);
   let armed = false;
@@ -467,6 +468,7 @@ function g11LiveTripwire(events, editedFile) {
     // status line), so an unrelated FAIL elsewhere in a long log does not bind to this file.
     let fail = false, pass = false;
     for (const line of e.lines) {
+      if (fileRe && !fileRe.test(line)) continue;   // one parse for several files kept all their lines
       if (FAIL_TOKEN.test(line)) fail = true;
       else if (PASS_TOKEN.test(line)) pass = true;
     }
@@ -507,6 +509,206 @@ function editCarriesAck(inp) {
   const bag = [sget(inp, "new_string"), sget(inp, "content"), ...edits.map((e) => (e && typeof e === "object" ? e.new_string : undefined))]
     .filter((s) => typeof s === "string").join("\n");
   return ACK_TAG.test(bag) || /test-removal\s*:/i.test(bag);
+}
+
+// ---- the same referee, written from the shell ------------------------------------------------
+//
+// G11-live read only the edit-family tools, so `cat >> foo.test.ts <<'EOF'`, `sed -i`, `tee -a`,
+// `cp`/`mv` onto the test and the rest rewrote a test a run had just shown failing with nothing
+// in the way (reported 2026-10-20). The firing rule is unchanged; only what counts as editing the
+// test grows. CONSERVATIVE like the rest of this file: heredoc bodies are stripped first and a
+// quoted argument is one word of data, so a fixture, an echo or a commit message that MENTIONS
+// `> foo.test.ts` writes nothing, and a quote left open is a parse we are unsure of (nothing).
+// Out of reach by design: interpreter one-liners (`python -c "open(...).write()"`, `node -e`) and
+// editors driven from the shell (`ex`, `vim -c`).
+
+// Words, redirect operators and separators, honouring quotes, backslashes and comments.
+function shellTokens(src) {
+  const out = [];
+  let w = null, i = 0;
+  const flush = () => { if (w !== null) out.push({ w }); w = null; };
+  while (i < src.length) {
+    const c = src[i], n = src[i + 1];
+    if (c === "'") {
+      const j = src.indexOf("'", i + 1);
+      if (j < 0) return [];
+      w = (w ?? "") + src.slice(i + 1, j); i = j + 1; continue;
+    }
+    if (c === '"') {
+      let j = i + 1, s = "";
+      for (; j < src.length && src[j] !== '"'; j++) s += src[j] === "\\" && /["\\$`]/.test(src[j + 1] || "") ? src[++j] : src[j];
+      if (j >= src.length) return [];
+      w = (w ?? "") + s; i = j + 1; continue;
+    }
+    if (c === "\\") { if (n !== "\n") w = (w ?? "") + (n ?? ""); i += 2; continue; }
+    if (c === "#" && w === null) { while (i < src.length && src[i] !== "\n") i++; continue; }
+    if (c === " " || c === "\t") { flush(); i++; continue; }
+    if (c === ">" || c === "<" || (c === "&" && n === ">")) {
+      if (w !== null && /^\d+$/.test(w)) w = null;     // the fd of `2>` / `1>>`
+      flush();
+      const op = src.slice(i).match(/^(?:&>>?|>>|>\||>&|>\(|>|<<<|<<-?|<>|<&|<\(|<)/)[0];
+      i += op.length;
+      out.push(op.endsWith("(") ? { sep: "(" } : { op }); // a process substitution runs a command
+      continue;
+    }
+    if ("\n;&|()`".includes(c) || (c === "$" && n === "(")) {
+      flush();
+      if (c === "$") i++;
+      out.push({ sep: c === "$" ? "(" : c }); i++; continue;
+    }
+    w = (w ?? "") + c; i++;
+  }
+  flush();
+  return out;
+}
+
+// sed -i / perl -i: the files after the script. The script is the first operand unless -e/-f
+// (sed) or -e/-E (perl) supplied it; BSD sed carries the backup suffix as the next word
+// (`sed -i '' ...`, `sed -i .bak ...`).
+function inPlaceTargets(prog, args) {
+  const scriptFlag = prog === "sed" ? "ef" : "eE", valueFlag = prog === "sed" ? "" : "IMmxdDV";
+  const digitsFlag = prog === "sed" ? "" : "0lC";   // perl -0777 / -l012 / -C7: digits, then more flags
+  const operands = [];
+  let inPlace = false, script = false, end = false;
+  for (let k = 0; k < args.length; k++) {
+    const a = args[k];
+    if (end || a === "-" || !a.startsWith("-")) { operands.push(a); continue; }
+    if (a === "--") { end = true; continue; }
+    if (a.startsWith("--")) {
+      if (a.startsWith("--in-place")) inPlace = true;
+      else if (/^--(?:expression|file)\b/.test(a)) { script = true; if (!a.includes("=")) k++; }
+      continue;
+    }
+    for (let p = 1; p < a.length; p++) {
+      const ch = a[p], last = p === a.length - 1;
+      if (ch === "i") { inPlace = true; if (prog === "sed" && last && /^(?:\.[^/\s]*)?$/.test(args[k + 1] ?? "-")) k++; break; }
+      if (scriptFlag.includes(ch)) { script = true; if (last) k++; break; }
+      if (digitsFlag.includes(ch)) { while (/\d/.test(a[p + 1] || "")) p++; continue; }
+      if (valueFlag.includes(ch)) break;
+    }
+  }
+  return inPlace ? operands.slice(script ? 0 : 1) : [];
+}
+
+// The files one simple command writes through its ARGUMENTS (its redirects are read by the
+// caller): an in-place sed/perl, tee, truncate, dd of=, and the destination of cp/mv/install.
+function argWriteTargets(name, args, isDir) {
+  const prog = name.replace(/^g(?=(?:sed|cp|mv|install|truncate)$)/, "");
+  if (prog === "dd") return args.filter((a) => a.startsWith("of=")).map((a) => a.slice(3));
+  if (prog === "sed" || prog === "perl") return inPlaceTargets(prog, args);
+  if (!/^(?:tee|truncate|cp|mv|install)$/.test(prog)) return [];
+  const takesValue = prog === "truncate" ? /^(?:-[sr]|--size|--reference)$/
+    : prog === "install" ? /^(?:-[Smog]|--suffix|--mode|--owner|--group)$/ : /^(?:-S|--suffix)$/;
+  const operands = [];
+  let dirArg = null, noDir = false, end = false;
+  for (let k = 0; k < args.length; k++) {
+    const a = args[k];
+    if (end || a === "-" || !a.startsWith("-")) operands.push(a);
+    else if (a === "--") end = true;
+    else if (a === "-t" || a === "--target-directory") dirArg = args[++k];
+    else if (a.startsWith("--target-directory=")) dirArg = a.slice(19);
+    else if (a === "-T" || a === "--no-target-directory") noDir = true;
+    else if (a === "-d" && prog === "install") return [];   // install -d creates directories
+    else if (takesValue.test(a)) k++;
+  }
+  if (prog === "tee" || prog === "truncate") return operands;
+  if (dirArg != null) return operands.map((s) => dirArg + "/" + basename(s));
+  if (operands.length < 2) return [];
+  const dest = operands.pop();
+  return !noDir && (dest.endsWith("/") || isDir(dest)) ? operands.map((s) => dest.replace(/\/+$/, "") + "/" + basename(s)) : [dest];
+}
+
+// Leading words that hand the rest of the command to another program.
+const SH_PREFIX = /^(?:[{}!]|if|then|else|elif|do|while|until|time|exec|nohup|command|builtin|sudo|env|nice)$/;
+
+// The TEST files a Bash command writes: redirect targets (`>`, `>>`, `>|`, `&>`, `2>`) and the
+// argument writers above, at command boundaries only, through a `cd` (a subshell's cd ends at its
+// paren), a variable assigned earlier in the command, and into `sh -c '...'`. A relative path
+// resolves against the session cwd, as an edit tool's absolute file_path would read; temp, device
+// and agent-config targets are not the project.
+function bashWrittenTestPaths(cmd, cwd) {
+  const named = [];
+  const under = (dir, p) => (!dir || ROOTED_PATH.test(p) ? p : dir.replace(/\/+$/, "") + "/" + p);
+  const visit = (text, dir, vars) => {
+    const stack = [];
+    let words = [], op = null;
+    const add = (p) => named.push(under(dir, expandVars(p, vars)));
+    const isDir = (p) => { try { return fs.statSync(path.resolve(cwd || ".", under(dir, p))).isDirectory(); } catch { return false; } };
+    const run = () => {
+      let k = 0;
+      while (k < words.length && (/^[A-Za-z_]\w*=/.test(words[k]) || SH_PREFIX.test(words[k]))) k++;
+      const [prog = "", ...args] = words.slice(k);
+      const name = basename(prog);
+      const assigns = !prog ? words : /^(?:export|local|declare|readonly)$/.test(name) ? args : [];
+      // `X=$(...)` and `X=` leave X unknown (an empty value would turn "$X/" into the root).
+      for (const m of assigns.map((a) => /^([A-Za-z_]\w*)=([\s\S]*)$/.exec(a)).filter((m) => m && m[2])) vars[m[1]] = expandVars(m[2], vars);
+      if (name === "cd") dir = args[0] && !/^[-~]/.test(args[0]) ? under(dir, expandVars(args[0], vars)) : "~";
+      else if (/^(?:ba|z|da)?sh$/.test(name)) {
+        const c = args.findIndex((a) => /^-[a-z]*c$/.test(a));
+        if (c >= 0 && args[c + 1] != null) visit(args[c + 1], dir, { ...vars });
+      } else argWriteTargets(name, args, isDir).forEach(add);
+      words = [];
+    };
+    for (const t of shellTokens(withoutHeredocBodies(text))) {
+      if (t.op) { op = t.op; continue; }
+      if (t.w !== undefined) {
+        if (!op) words.push(t.w);
+        else if (/^(?:>>?|>\||&>>?)$/.test(op) || (op === ">&" && !/^(?:\d+|-)$/.test(t.w))) add(t.w);
+        op = null;
+        continue;
+      }
+      run(); op = null;
+      if (t.sep === "(") stack.push(dir);
+      else if (t.sep === ")" && stack.length) dir = stack.pop();
+    }
+    run();
+  };
+  visit(String(cmd || ""), "", {});
+  // A glob in the basename (`src/*.test.ts`) is the files it matches, as the shell expands it.
+  const expandGlob = (p) => {
+    const base = basename(p), dir = p.slice(0, p.length - base.length);
+    if (!/[*?]/.test(base)) return [p];
+    const re = new RegExp("^" + globToRe(base) + "$");
+    try { return fs.readdirSync(path.resolve(cwd || ".", dir || ".")).filter((f) => re.test(f)).map((f) => dir + f); } catch { return []; }
+  };
+  const out = new Set();
+  for (const p of named.flatMap(expandGlob)) {
+    if (!p || /^~/.test(p) || NOT_SOURCE_PATH.test(p) || !TEST_PATH.test(p)) continue;
+    // A `$VAR` / `$(...)` part is unknowable: the rest counts only while it still names a directory
+    // (`$(git rev-parse --show-toplevel)/src/x.test.ts`), never by a bare basename (`"$T/"`).
+    let q = p;
+    if (q.includes("$")) { q = q.replace(/\$\([^)]*\)|\$\{?\w+\}?/g, "").replace(/^\/+/, ""); if (!q.includes("/")) continue; }
+    const abs = cwd ? path.resolve(cwd, q) : q;
+    // A relative path that climbs out of the session cwd (`../other-repo/`) is another project; an
+    // absolute one is named outright, as an edit tool's file_path is, and stays.
+    if (cwd && !path.isAbsolute(q) && /^\.\.(?:[\\/]|$)/.test(path.relative(cwd, abs))) continue;
+    out.add(abs);
+  }
+  return [...out];
+}
+
+// G11-live for a Bash command: the same check, posture and reason as an edit of each test file
+// the command writes. The ack rides in the command (RECEIPTS_ACK=..., or a `test-removal:` note in
+// the content it writes). Emits when it fires; otherwise returns quietly (allow).
+async function g11BashTripwire(command, cwd, cfg, tp, permissionMode) {
+  let files;
+  try { files = bashWrittenTestPaths(command, cwd); } catch { return; }
+  if (!files.length) return;                           // writes no test file -> allow
+  const mode = tripwireMode(cfg, "g11_live", defaultMode(permissionMode));
+  if (mode === "off") return;
+  if (ACK_TAG.test(command) || /test-removal\s*:/i.test(command)) return;
+  if (!tp) return;
+  // ONE pass over the transcript for every file written (it can run to hundreds of MB); each
+  // file then reads only its own lines.
+  const fileRe = new RegExp(files.map(fileMatcher).filter(Boolean).map((r) => r.source).join("|"));
+  let events;
+  try { events = await parseTranscript(tp, { fileRe, testCmd: testCmdMatcher(cfg) }); } catch { return; }
+  if (!events) return;
+  for (const file of files) {
+    let hit = null;
+    try { hit = g11LiveTripwire(events, file, fileMatcher(file)); } catch { return; }
+    if (hit) { emit(mode, g11Reason(hit.editedFile)); return; }
+  }
 }
 
 // The interview is the observation contract's residue - what only a human can answer. Relaying it is the agent's job.
@@ -576,10 +778,13 @@ async function main() {
       emit(initMode, initUnattendedReason()); return;
     }
     if (!found) return;                                // not opted in (no config anywhere) -> allow
-    if (!GIT_COMMIT.test(withoutHeredocBodies(command))) return;             // not a commit -> allow
+    // G11-live reaches a test file WRITTEN from the shell. It runs wherever the commit tripwires
+    // below decide nothing, so a write bundled with a commit is still seen.
+    const g11Bash = () => g11BashTripwire(command, payload.cwd, cfg, tp, permissionMode);
+    if (!GIT_COMMIT.test(withoutHeredocBodies(command))) return g11Bash();   // not a commit
     const commitMode = tripwireMode(cfg, "commit_unverified", defaultMode(permissionMode));
     const renderMode = tripwireMode(cfg, "render_unverified", "off");
-    if (commitMode === "off" && renderMode === "off") return;   // nothing to enforce
+    if (commitMode === "off" && renderMode === "off") return g11Bash();   // no commit tripwire on
     if (ACK_TAG.test(command)) return;                 // one explicit escape covers both -> allow
     if (!tp) return;                                   // no transcript -> fail safe (allow)
     let events;
@@ -598,10 +803,10 @@ async function main() {
       } catch { return; }
       if (rhit) { emit(renderMode, renderReason(rhit.editedFile)); return; }
     }
-    return;
+    return g11Bash();
   }
 
-  // ---- G11-live tripwire (Edit/Write/MultiEdit on a test file) --------------------------
+  // ---- G11-live tripwire (Edit/Write/MultiEdit on a test file; Bash writes: see above) ----
   if (isEditTool(toolName)) {
     if (!found) return;                                // not opted in (no config anywhere) -> allow
     const file = editedPath(toolInput);
