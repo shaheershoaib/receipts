@@ -308,9 +308,23 @@ const hasUnexpandedVar = (p) => { SHELL_VAR.lastIndex = 0; return SHELL_VAR.test
 // the common case), while a path with its own directory part keeps that token (`src/pay.js`).
 function bashWrittenProdPath(cmd) {
   const text = withoutHeredocBodies(cmd);
+  // ; & | and newlines end a segment only outside quotes, so `sed -i 's|a|b|' f` stays one
+  // command; a backslash escapes, and a comment's apostrophe opens no quote (shellTokens' rules).
+  const segs = [""];
+  for (let i = 0, q = ""; i < text.length; i++) {
+    let c = text[i];
+    if (c === "\\" && q !== "'") c += text[++i] ?? "";
+    else if (q) { if (c === q) q = ""; }
+    else if (c === "'" || c === '"') q = c;
+    else if (c === "#" && /(?:^|\s)$/.test(segs[segs.length - 1])) {
+      const end = text.indexOf("\n", i);
+      c = text.slice(i, end < 0 ? text.length : end); i += c.length - 1;
+    } else if (";&|\n".includes(c)) { segs.push(""); continue; }
+    segs[segs.length - 1] += c;
+  }
   let cwd = "";
   const vars = {};
-  for (const seg of text.split(/[;&|]|\n/)) {
+  for (const seg of segs) {
     const s = seg.trim();
     const asg = s.match(ASSIGNMENT);
     if (asg) { vars[asg[1]] = expandVars(asg[3] ?? asg[4], vars); continue; }
@@ -320,7 +334,12 @@ function bashWrittenProdPath(cmd) {
     let m;
     REDIRECT_TARGET.lastIndex = 0;
     while ((m = REDIRECT_TARGET.exec(s))) candidates.push(m[2]);
-    if (/^(?:\w+=\S+\s+)*sed\s+.*-i/.test(s)) candidates.push(s.split(/\s+/).pop());
+    // sed's files, by the flag parser G11-live uses: a "-i" inside a script or a file name
+    // (`sed -n '/photo-index/p' seed.ts`) is not the in-place flag.
+    const words = shellTokens(s).filter((t) => "w" in t).map((t) => t.w);
+    let lead = 0;
+    while (/^\w+=/.test(words[lead] ?? "")) lead++;
+    if (words[lead] === "sed") candidates.push(...inPlaceTargets("sed", words.slice(lead + 1)));
     const t = s.match(/^(?:\w+=\S+\s+)*tee\s+(?:-a\s+)?(["']?)([^\s"']+)\1/);
     if (t) candidates.push(t[2]);
     for (const raw of candidates) {
