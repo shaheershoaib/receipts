@@ -308,9 +308,23 @@ const hasUnexpandedVar = (p) => { SHELL_VAR.lastIndex = 0; return SHELL_VAR.test
 // the common case), while a path with its own directory part keeps that token (`src/pay.js`).
 function bashWrittenProdPath(cmd) {
   const text = withoutHeredocBodies(cmd);
+  // ; & | and newlines end a segment only outside quotes, so `sed -i 's|a|b|' f` stays one
+  // command; a backslash escapes, and a comment's apostrophe opens no quote (shellTokens' rules).
+  const segs = [""];
+  for (let i = 0, q = ""; i < text.length; i++) {
+    let c = text[i];
+    if (c === "\\" && q !== "'") c += text[++i] ?? "";
+    else if (q) { if (c === q) q = ""; }
+    else if (c === "'" || c === '"') q = c;
+    else if (c === "#" && /(?:^|\s)$/.test(segs[segs.length - 1])) {
+      const end = text.indexOf("\n", i);
+      c = text.slice(i, end < 0 ? text.length : end); i += c.length - 1;
+    } else if (";&|\n".includes(c)) { segs.push(""); continue; }
+    segs[segs.length - 1] += c;
+  }
   let cwd = "";
   const vars = {};
-  for (const seg of text.split(/[;&|]|\n/)) {
+  for (const seg of segs) {
     const s = seg.trim();
     const asg = s.match(ASSIGNMENT);
     if (asg) { vars[asg[1]] = expandVars(asg[3] ?? asg[4], vars); continue; }

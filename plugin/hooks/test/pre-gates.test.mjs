@@ -779,6 +779,7 @@ test("a sed that only READS is not an edit, whatever its script or file name hol
     "sed -n '/message-id/p' src/seed.js",
     "sed -n 1,40p src/seed-images.js",
     "sed -n -e '/-i/p' src/pay.js",
+    "sed -n 's|a-i|b|p' src/seed.js",
   ]) assert.equal(runPre(...COMMIT, [useEntry("Bash", { command: cmd })]), null, `expected "${cmd}" not to count as a production edit`);
 });
 
@@ -789,6 +790,8 @@ test("sed -i writes every file it names, in each flag form (deny)", () => {
     "sed -n -i '' -e 's/a/b/' src/pay.js",
     "LC_ALL=C sed --in-place 's/a/b/' src/pay.js",
     "sed -i 's/a/b/' src/pay.js 2>/dev/null",
+    "sed -i 's|a|b|' src/pay.js && echo done",
+    "echo it\\'s done; sed -i 's/a/b/' src/pay.js",
   ]) {
     const d = runPre(...COMMIT, [useEntry("Bash", { command: cmd })]);
     assert.equal(d && d.hookSpecificOutput.permissionDecision, "deny", `expected "${cmd}" to count as a production edit`);
@@ -813,6 +816,7 @@ test("a relative Bash write under a leading cd into a temp dir is scratch, not a
     "cd /tmp/work; echo x > out.js",
     "cd \"$TMPDIR/probe\" && printf 'x' | tee run.sh",
     "cd ~/.claude/hooks && sed -i 's/a/b/' gate.py",
+    "# don't keep this\ncd /tmp/work && echo x > out.js",
   ]) assert.equal(runPre(...COMMIT, [useEntry("Bash", { command: cmd })]), null, `expected "${cmd.split("\n")[0]}" not to count as a production edit`);
 });
 
