@@ -770,6 +770,32 @@ test("#73: a Bash write to a test, doc, scratch or device path is not a producti
   ]) assert.equal(runPre(...COMMIT, [useEntry("Bash", { command: cmd })]), null, `expected "${cmd.split("\n")[0]}" not to count as a production edit`);
 });
 
+// The commit check read any `sed` with "-i" ANYWHERE after it as `sed -i`, so a read whose script
+// or file name held "-i" (`/photo-index/`, `/message-id/`, `seed-images`) armed the tripwire and
+// blocked a verified commit (reported 2026-10-23). It now reads sed's flags as G11-live does.
+test("a sed that only READS is not an edit, whatever its script or file name holds (allow)", () => {
+  for (const cmd of [
+    "sed -n '/photo-index/,+20p' src/seed.js",
+    "sed -n '/message-id/p' src/seed.js",
+    "sed -n 1,40p src/seed-images.js",
+    "sed -n -e '/-i/p' src/pay.js",
+  ]) assert.equal(runPre(...COMMIT, [useEntry("Bash", { command: cmd })]), null, `expected "${cmd}" not to count as a production edit`);
+});
+
+test("sed -i writes every file it names, in each flag form (deny)", () => {
+  for (const cmd of [
+    "sed -i 's/a/b/' src/pay.js README.md",
+    "sed -i.bak -e 's/a/b/' src/pay.js",
+    "sed -n -i '' -e 's/a/b/' src/pay.js",
+    "LC_ALL=C sed --in-place 's/a/b/' src/pay.js",
+    "sed -i 's/a/b/' src/pay.js 2>/dev/null",
+  ]) {
+    const d = runPre(...COMMIT, [useEntry("Bash", { command: cmd })]);
+    assert.equal(d && d.hookSpecificOutput.permissionDecision, "deny", `expected "${cmd}" to count as a production edit`);
+    assert.match(d.hookSpecificOutput.permissionDecisionReason, /src\/pay\.js/, "names the written file");
+  }
+});
+
 test("#73: a heredoc BODY that contains a redirect is data, not a write (allow)", () => {
   allows(...COMMIT, [useEntry("Bash", { command: "cat > notes.md <<'EOF'\nrun: echo x > src/pay.js\nEOF" })]);
 });

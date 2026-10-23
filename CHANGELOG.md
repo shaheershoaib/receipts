@@ -2,6 +2,17 @@
 
 ## Unreleased
 
+## 0.9.5 - 2026-10-23
+
+### Fixed
+- **A `sed` that only reads no longer arms the commit tripwire.** The commit-without-verification
+  check read any `sed` with "-i" anywhere after it as `sed -i`, so a read whose script or file name
+  held those two characters (`sed -n '/photo-index/p' seed.ts`, `sed -n '/message-id/p'`, a file
+  named `seed-images.ts`) counted as a production edit and blocked a commit the tests had verified
+  (reported by Quinton). It now reads sed's flags with the parser G11-live already used, so only the
+  in-place flag counts (`-i`, `-i ''`, `-i.bak`, `--in-place`, with `-e`/`-f` scripts), and every
+  file an in-place sed names is a write, not only the last word of the command.
+
 ## 0.9.4 - 2026-10-20
 
 ### Fixed

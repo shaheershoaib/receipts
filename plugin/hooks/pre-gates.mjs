@@ -320,7 +320,12 @@ function bashWrittenProdPath(cmd) {
     let m;
     REDIRECT_TARGET.lastIndex = 0;
     while ((m = REDIRECT_TARGET.exec(s))) candidates.push(m[2]);
-    if (/^(?:\w+=\S+\s+)*sed\s+.*-i/.test(s)) candidates.push(s.split(/\s+/).pop());
+    // sed's files, by the flag parser G11-live uses: a "-i" inside a script or a file name
+    // (`sed -n '/photo-index/p' seed.ts`) is not the in-place flag.
+    const words = shellTokens(s).filter((t) => "w" in t).map((t) => t.w);
+    let lead = 0;
+    while (/^\w+=/.test(words[lead] ?? "")) lead++;
+    if (words[lead] === "sed") candidates.push(...inPlaceTargets("sed", words.slice(lead + 1)));
     const t = s.match(/^(?:\w+=\S+\s+)*tee\s+(?:-a\s+)?(["']?)([^\s"']+)\1/);
     if (t) candidates.push(t[2]);
     for (const raw of candidates) {
